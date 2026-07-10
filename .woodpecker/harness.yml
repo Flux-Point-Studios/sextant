@@ -1,0 +1,10 @@
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: harness
+    image: rust:1.93-bookworm
+    commands:
+      - rustup component add clippy rustfmt
+      - rustup target add wasm32-unknown-unknown
+      - bash scripts/harness.sh --full

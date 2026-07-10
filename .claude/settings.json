@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "fluxpoint": {
+      "source": { "source": "github", "repo": "flux-point-studios/claude-plugins" }
+    }
+  },
+  "enabledPlugins": {
+    "fluxpoint-loop@fluxpoint": true
+  }
+}
