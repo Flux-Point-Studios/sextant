@@ -30,7 +30,7 @@ needs a row in Evidence.
 - [ ] Diff carries no single-caller abstractions and no dead code
 
 ## Plan
-- [ ] Failing test: decode one preview header from a checked-in CBOR
+- [x] Failing test: decode one current-era header from a checked-in CBOR
       vector; assert slot, block number, issuer vkey
 - [ ] Vector harvester script: pull N headers from Dolos/Blockfrost into
       tests/vectors/ (vectors are inputs to verify, never trusted state)
@@ -63,18 +63,22 @@ needs a row in Evidence.
 | When (UTC) | Claim | Proof |
 |---|---|---|
 | 2026-07-10 20:17 UTC | Repo onboarded onto fluxpoint-loop; harness gates the DoD | `scripts/harness.sh --full` exits 0 — `cargo fmt --check`, `clippy -D warnings`, release build (lib+cdylib+staticlib), `cargo test` (1 passed), `wasm32-unknown-unknown` release build |
+| 2026-07-10 20:20 UTC | Woodpecker CI runs the harness on push | `ci/woodpecker/push/harness` success on `main` — https://ci.fluxpointstudios.com/repos/15/pipeline/1/1 |
+| 2026-07-10 20:54 UTC | Header decode slice: block_number/slot/issuer_vkey from a real Conway block, byte-identical to pallas on the same input | `cargo test --test header_decode` — `decodes_conway_header_fields` + `matches_pallas_on_the_same_bytes` both pass in `scripts/harness.sh --full` (exit 0); vector `tests/vectors/conway1.block`, expected block 1093546 / slot 22075282 / issuer `e856c8…b08c4a` |
+| 2026-07-10 21:09 UTC | Red-team BLOCK closed: adversarial CBOR can no longer force a wrong successful decode (array-count/era/prev_hash/trailing-byte defects) | Decoder now validates exact array counts, Praos era {6,7}, 32-byte prev_hash/issuer, full input consumption; 6 regression tests (`rejects_*`) + Babbage differential added; `scripts/harness.sh --full` exit 0, 9 tests pass |
+| 2026-07-10 21:16 UTC | Red-team re-attack: 4 findings verified closed, no panic/DoS; 2nd BLOCK (non-canonical era u16/u32/u64 = Sextant-Ok/pallas-Err) fixed | Era now required to be a canonical U8 token, matching pallas `block_era`; `rejects_non_canonical_era_encoding` asserts both Sextant and pallas reject the u64-widened Conway block; `scripts/harness.sh --full` exit 0, 10 tests pass |
 
 ## Notes for the next iteration
-Onboarding state (2026-07-10): fluxpoint-loop scaffold in place —
-scripts/harness.sh (Rust read-path stack: fmt, clippy -D warnings, release
-build, cargo test, wasm32 build), scripts/loop.sh, LOOP_PROMPT.md,
-.claude/settings.json. Public repo + Woodpecker pipeline
-(.woodpecker/harness.yml) wired; the CI harness check is the merge gate.
-Crate is still the cargo-init stub (`add()`) with no verifier code. Deps to
-add as the first slices land: a CBOR decoder + blake2/VRF/KES/ed25519
-primitives for header validation, and pallas as a differential
-dev-dependency (never in the verdict path). Harness ratchet points not yet
-gated: cbindgen C-header generation and the preview-net Live UTxO exercise
-— each turns on when its DoD slice ships. Attacking next: the first Plan
-slice — a failing test decoding one preview header CBOR vector, asserting
-slot, block number, issuer vkey.
+State (2026-07-10): slice 1 shipped — `src/header.rs` decodes
+block_number/slot/issuer_vkey from ledger `[era, block]` CBOR via minicbor
+on Sextant's own code path, differential-tested against pallas-traverse
+(dev-dependency only, never in the verdict path) on the mainnet Conway
+vector `tests/vectors/conway1.block`. Woodpecker runs the harness on
+push/PR (`ci/woodpecker/*/harness`); repo renamed to
+Flux-Point-Studios/sextant — if CI webhooks go quiet, Repair/re-sync repo
+15 in Woodpecker. Harness ratchet points not yet gated: cbindgen C-header
+generation and the preview-net Live UTxO exercise — each turns on when its
+DoD slice ships. Attacking next: the vector harvester script (pull N
+headers from Dolos/Blockfrost into tests/vectors/), which unblocks the
+≥20-vector differential requirement; then leader VRF verification on
+vector 1.
