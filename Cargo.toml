@@ -9,3 +9,8 @@ repository = "https://github.com/Flux-Point-Studios/sextant"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
+minicbor = "2.2.2"
+
+[dev-dependencies]
+hex = "0.4.3"
+pallas-traverse = "1.1.1"
