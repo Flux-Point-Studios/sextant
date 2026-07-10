@@ -1,10 +1,20 @@
 //! Slice 1 — decode real current-era (Praos) block headers, cross-checked
 //! against pallas as an independent oracle, plus adversarial regression tests:
 //! an untrusted byte provider must never coax a wrong *successful* decode.
+//!
+//! The pallas cross-check runs over the whole `tests/vectors/` set, so the
+//! DoD's ≥20-vector differential requirement is satisfied by dropping harvested
+//! vectors into that directory — each is decoded on Sextant's own path and must
+//! agree with pallas or the harness goes red (vectors are inputs to verify,
+//! never trusted state).
+
+use std::fs;
+use std::path::PathBuf;
 
 use sextant::header::{DecodeError, HeaderView};
 
-// Real mainnet blocks, ledger `[era, block]` CBOR (pallas golden vectors).
+// Named anchors for exact ground-truth assertions; the directory sweep below
+// also covers these files and any others harvested into tests/vectors/.
 const CONWAY1: &str = include_str!("vectors/conway1.block"); // era 7
 const BABBAGE1: &str = include_str!("vectors/babbage1.block"); // era 6
 
@@ -12,11 +22,16 @@ fn unhex(s: &str) -> Vec<u8> {
     hex::decode(s.trim()).expect("valid hex")
 }
 
+fn vectors_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
+}
+
 // ---- positive: correct decode, and parity with the pallas oracle ----------
 
 #[test]
 fn decodes_conway_header_fields() {
     let view = HeaderView::from_block_cbor(&unhex(CONWAY1)).expect("decode header");
+    assert_eq!(view.era, 7);
     assert_eq!(view.block_number, 1_093_546);
     assert_eq!(view.slot, 22_075_282);
     assert_eq!(
@@ -26,20 +41,60 @@ fn decodes_conway_header_fields() {
 }
 
 #[test]
-fn matches_pallas_on_the_same_bytes() {
-    for vector in [CONWAY1, BABBAGE1] {
-        let bytes = unhex(vector);
-        let mine = HeaderView::from_block_cbor(&bytes).expect("sextant decode");
-        let block = pallas_traverse::MultiEraBlock::decode(&bytes).expect("pallas decode");
+fn decodes_babbage_header_era() {
+    let bytes = unhex(BABBAGE1);
+    let view = HeaderView::from_block_cbor(&bytes).expect("decode babbage header");
+    assert_eq!(view.era, 6);
+    // Anchor block_number/slot to pallas rather than hard-coded literals so the
+    // era field is exercised without re-deriving values by hand.
+    let block = pallas_traverse::MultiEraBlock::decode(&bytes).expect("pallas decode");
+    let theirs = block.header();
+    assert_eq!(view.block_number, theirs.number());
+    assert_eq!(view.slot, theirs.slot());
+}
+
+/// Every vector in tests/vectors/ decodes on Sextant's own path and is
+/// byte-identical to pallas on block_number/slot/issuer_vkey. This is the
+/// scaling primitive behind the DoD's ≥20-vector differential requirement:
+/// harvested vectors are auto-checked here, and cross-era coverage is asserted.
+#[test]
+fn every_vector_matches_pallas_and_is_praos() {
+    let mut checked = 0usize;
+    let (mut saw_babbage, mut saw_conway) = (false, false);
+
+    for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("block") {
+            continue;
+        }
+        let bytes = unhex(&fs::read_to_string(&path).expect("read vector"));
+        let mine = HeaderView::from_block_cbor(&bytes)
+            .unwrap_or_else(|e| panic!("sextant rejected {}: {e:?}", path.display()));
+        let block = pallas_traverse::MultiEraBlock::decode(&bytes)
+            .unwrap_or_else(|e| panic!("pallas rejected {}: {e:?}", path.display()));
         let theirs = block.header();
-        assert_eq!(mine.block_number, theirs.number(), "block_number parity");
-        assert_eq!(mine.slot, theirs.slot(), "slot parity");
+
+        assert_eq!(mine.block_number, theirs.number(), "block_number in {}", path.display());
+        assert_eq!(mine.slot, theirs.slot(), "slot in {}", path.display());
         assert_eq!(
             Some(mine.issuer_vkey.as_slice()),
             theirs.issuer_vkey(),
-            "issuer_vkey parity",
+            "issuer_vkey in {}",
+            path.display(),
         );
+        match mine.era {
+            6 => saw_babbage = true,
+            7 => saw_conway = true,
+            e => panic!("non-Praos era {e} in {}", path.display()),
+        }
+        checked += 1;
     }
+
+    assert!(checked >= 2, "expected ≥2 golden vectors, found {checked}");
+    assert!(
+        saw_babbage && saw_conway,
+        "vector set must cover both Praos eras (babbage={saw_babbage}, conway={saw_conway})",
+    );
 }
 
 // ---- adversarial regressions (each closes a red-team finding) --------------
