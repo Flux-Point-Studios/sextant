@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "cardano-verifier-client"
+name = "sextant"
 version = "0.1.0"
