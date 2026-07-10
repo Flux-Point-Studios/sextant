@@ -1,4 +1,4 @@
-# LOOP: Embedded verifying Cardano client — Rust core, C-ABI/WASM read-path trust substrate
+# LOOP: Sextant — read-path verifying Cardano client (Rust core, C-ABI/WASM trust substrate)
 
 STATUS: ACTIVE
 
