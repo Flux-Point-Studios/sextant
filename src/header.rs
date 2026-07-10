@@ -60,6 +60,13 @@ impl HeaderView {
         let mut d = Decoder::new(bytes);
 
         expect_array(&mut d, 2)?; // [era, block]
+        // Match pallas's era probe exactly: the discriminator must be a U8
+        // token (canonical `0x00`-`0x17` or `0x18 XX`). minicbor's widening
+        // reader would also accept a u16/u32/u64-encoded era that pallas
+        // rejects — a differential-parse wedge — so reject the wider forms.
+        if d.datatype().map_err(|_| DecodeError::MalformedCbor)? != Type::U8 {
+            return Err(DecodeError::MalformedCbor);
+        }
         let era = d.u32().map_err(|_| DecodeError::MalformedCbor)?;
         if !matches!(era, 6 | 7) {
             return Err(DecodeError::UnsupportedEra(era));

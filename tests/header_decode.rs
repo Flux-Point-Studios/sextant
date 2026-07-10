@@ -126,6 +126,23 @@ fn rejects_trailing_bytes() {
     );
 }
 
+/// The era must be a canonical U8 token, matching pallas's `block_era` probe.
+/// A u64-widened era on the real Conway block is Ok in a naive widening reader
+/// but Err in pallas — reject it so the two stay byte-identical.
+#[test]
+fn rejects_non_canonical_era_encoding() {
+    let full = unhex(CONWAY1); // full[0]=0x82 outer, full[1]=0x07 era, full[2..]=block
+    let mut wedged = vec![0x82, 0x1b, 0, 0, 0, 0, 0, 0, 0, 0x07]; // era 7 as u64
+    wedged.extend_from_slice(&full[2..]);
+
+    assert_eq!(
+        HeaderView::from_block_cbor(&wedged),
+        Err(DecodeError::MalformedCbor),
+    );
+    // Parity with the oracle: pallas rejects the identical bytes too.
+    assert!(pallas_traverse::MultiEraBlock::decode(&wedged).is_err());
+}
+
 /// Truncated input decodes to an error, never a partial success or panic.
 #[test]
 fn rejects_truncated_input() {
