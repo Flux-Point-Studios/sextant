@@ -39,9 +39,11 @@ pallas-traverse = "1.1.1"
 # `key::ed25519` verify runs on cryptoxide (pure-Rust), not the dalek fork
 # Sextant's own path uses — so parity on the same (key, message, signature) is a
 # genuine cross-implementation check, satisfying the DoD's "byte-identical
-# verdicts to pallas". Already resolved transitively (pallas-traverse), so it
-# adds no new crate fetch.
-pallas-crypto = "1.1.1"
+# verdicts to pallas". The non-default `kes` feature adds pallas's independent
+# `Sum6Kes` verifier, the oracle for the body-signature differential; it pulls a
+# few mainstream dev-only transitives (serde_with/schemars/chrono) that stay out
+# of the trust-substrate lib's normal build (a dev-dependency only).
+pallas-crypto = { version = "1.1.1", features = ["kes"] }
 # Pure-Rust ECVRF advertised 100% cardano-node compatible, with its own
 # libsodium-port Elligator2 hash-to-curve (`fe25519`/`elligator2`) independent
 # of the dalek fork's — the differential oracle that cross-checks Sextant's
