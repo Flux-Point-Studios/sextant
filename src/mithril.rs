@@ -31,8 +31,15 @@
 //! is the one its predecessor authorized (unchanged within an epoch, or the
 //! `next_aggregate_verification_key` the predecessor committed one epoch earlier).
 //!
-//! The genesis Ed25519 anchor and the STM multi-signature verify — the roots this
-//! chain of trust terminates in and rides on — are the subsequent Mithril slices.
+//! [`verify_genesis`] terminates that chain of trust in its root. The oldest
+//! certificate is a *genesis* certificate, signed not by an STM multi-signature
+//! but by the network's genesis Ed25519 key over its `signed_message`. It verifies
+//! on Sextant's own Ed25519 path ([`crate::ed25519`]) under a pinned genesis
+//! verification key, after checking that `signed_message` binds the certificate's
+//! protocol message (and thus the genesis AVK the chain rises from).
+//!
+//! The STM multi-signature verify — the root each *standard* certificate rides on
+//! — is the subsequent Mithril slice.
 
 use std::collections::BTreeMap;
 
@@ -74,6 +81,13 @@ impl Certificate {
     /// Parse an aggregator certificate from its JSON bytes on Sextant's own path.
     pub fn from_json(bytes: &[u8]) -> Result<Certificate, serde_json::Error> {
         serde_json::from_slice(bytes)
+    }
+
+    /// Whether this is a *genesis* certificate — the chain's trust root, signed by
+    /// the network genesis key rather than an STM multi-signature. Mithril keys the
+    /// distinction on the presence of a genesis signature.
+    pub fn is_genesis(&self) -> bool {
+        !self.genesis_signature.is_empty()
     }
 
     /// Recompute the certificate's content hash (lowercase hex), byte-identical
@@ -208,6 +222,96 @@ pub fn verify_chain(certs: &[Certificate]) -> Result<VerifiedChain, ChainError> 
         tip_hash: certs[certs.len() - 1].hash.clone(),
         length: certs.len(),
     })
+}
+
+/// Why a genesis certificate failed to anchor the chain of trust. Untrusted
+/// aggregator bytes make every failure a recoverable outcome, never a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenesisError {
+    /// The certificate carries no genesis signature — it is a standard certificate,
+    /// not the chain's genesis root.
+    NotGenesis,
+    /// The `genesis_signature` field is not 64 bytes of hex.
+    MalformedSignature,
+    /// `signed_message` is not the hash of `protocol_message`: the signed content
+    /// does not bind this certificate's protocol message (and its genesis AVK).
+    MessageMismatch,
+    /// The Ed25519 genesis signature does not verify under the network genesis
+    /// verification key.
+    InvalidSignature,
+}
+
+impl core::fmt::Display for GenesisError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            GenesisError::NotGenesis => write!(f, "certificate is not a genesis certificate"),
+            GenesisError::MalformedSignature => {
+                write!(f, "genesis signature is not 64 bytes of hex")
+            }
+            GenesisError::MessageMismatch => {
+                write!(f, "signed_message does not bind the protocol message")
+            }
+            GenesisError::InvalidSignature => {
+                write!(f, "genesis signature does not verify under the genesis key")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GenesisError {}
+
+/// Verify a Mithril *genesis* certificate against the pinned per-network genesis
+/// verification key — the trust root the certificate chain terminates in.
+///
+/// A genesis certificate is signed not by an STM multi-signature but by the
+/// network's genesis Ed25519 key. Accepting it requires, on Sextant's own path:
+/// * the certificate is a genesis certificate (it carries a genesis signature);
+/// * its `signed_message` is the hash of its `protocol_message`, so the signature
+///   transitively commits to the genesis AVK the chain binds its first epoch to;
+/// * the 64-byte Ed25519 signature verifies under `genesis_vkey` over
+///   `signed_message.as_bytes()` — the ASCII hex of that protocol-message hash —
+///   via [`crate::ed25519::verify`] (libsodium-strict, matching mithril's
+///   `ed25519-dalek` `verify_strict`).
+///
+/// `genesis_vkey` is a caller-supplied trust root (pinned per network, reviewed
+/// out of band), never an aggregator verdict.
+pub fn verify_genesis(cert: &Certificate, genesis_vkey: &[u8; 32]) -> Result<(), GenesisError> {
+    if !cert.is_genesis() {
+        return Err(GenesisError::NotGenesis);
+    }
+    let sig = decode_hex_64(&cert.genesis_signature).ok_or(GenesisError::MalformedSignature)?;
+    if cert.signed_message != cert.protocol_message.compute_hash() {
+        return Err(GenesisError::MessageMismatch);
+    }
+    if !crate::ed25519::verify(genesis_vkey, cert.signed_message.as_bytes(), &sig) {
+        return Err(GenesisError::InvalidSignature);
+    }
+    Ok(())
+}
+
+/// Decode exactly 128 lowercase-or-uppercase hex chars into 64 bytes, or `None`
+/// on any wrong length or non-hex digit. Alloc-free; the untrusted wire string
+/// never forces an allocation before it is validated.
+fn decode_hex_64(hex: &str) -> Option<[u8; 64]> {
+    let bytes = hex.as_bytes();
+    if bytes.len() != 128 {
+        return None;
+    }
+    let mut out = [0u8; 64];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = (hex_val(bytes[2 * i])? << 4) | hex_val(bytes[2 * i + 1])?;
+    }
+    Some(out)
+}
+
+/// One hex digit's value, or `None` if the byte is not a hex digit.
+fn hex_val(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// What a certificate signs. Only the variants present in real preprod vectors

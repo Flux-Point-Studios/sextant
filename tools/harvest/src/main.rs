@@ -2,9 +2,11 @@
 //! `tests/vectors/`, so the differential harness has real, current-era headers
 //! to check Sextant's decoder against. Run manually — not wired into CI.
 //!
-//!   cargo run -p harvest [count]     # fetch `count` (default 24) block vectors
-//!   cargo run -p harvest eta0        # backfill epoch-nonce sidecars for them
-//!   cargo run -p harvest boundary    # fetch a run spanning the 299→300 turn
+//!   cargo run -p harvest [count]         # fetch `count` (default 24) block vectors
+//!   cargo run -p harvest eta0            # backfill epoch-nonce sidecars for them
+//!   cargo run -p harvest boundary        # fetch a run spanning the 299→300 turn
+//!   cargo run -p harvest mithril         # walk the cert chain tip→(12 hops)
+//!   cargo run -p harvest mithril-genesis # walk tip→genesis, pin the trust root
 //!
 //! Recent settled block points come from Koios preprod (keyless JSON); the raw
 //! `[era, block]` CBOR comes from the relay via the node-to-node BlockFetch
@@ -32,6 +34,13 @@ const MITHRIL_AGG: &str = "https://aggregator.release-preprod.api.mithril.networ
 /// Cap the tip→genesis walk so a long production chain can't harvest hundreds of
 /// vectors; enough hops to prove byte-exact hashing + `previous_hash` linking.
 const MITHRIL_HOPS: usize = 12;
+/// The `mithril-genesis` walk is ~1 cert/epoch back to the genesis certificate;
+/// release-preprod is a few hundred epochs deep. Bound it generously so a pruned
+/// chain fails loudly instead of looping.
+const GENESIS_MAX_HOPS: usize = 800;
+/// preprod (release-preprod) Mithril genesis verification key, published in the
+/// mithril repo. Fetched for provenance and pinned as a vector.
+const GENESIS_VKEY_URL: &str = "https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/release-preprod/genesis.vkey";
 /// Skip the newest few blocks — near the tip they can still roll back.
 const SETTLE_SKIP: usize = 8;
 
@@ -71,6 +80,7 @@ async fn main() -> Result<()> {
         Some("eta0") => backfill_eta0().await,
         Some("boundary") => fetch_boundary().await,
         Some("mithril") => fetch_mithril().await,
+        Some("mithril-genesis") => fetch_mithril_genesis().await,
         _ => fetch_blocks().await,
     }
 }
@@ -169,6 +179,132 @@ async fn fetch_mithril() -> Result<()> {
         out_dir.display()
     );
     Ok(())
+}
+
+/// Fetch the Mithril trust root: the network genesis verification key and the
+/// genesis certificate the chain terminates in. Walks tip→genesis via
+/// `previous_hash` (paying the ~1-cert/epoch cost once, here), then checks in
+/// only the genesis certificate (`mithril-genesis-cert.json`), its immediate
+/// child (`mithril-genesis-child.json`, whose `previous_hash` is the genesis
+/// content hash), and the raw genesis vkey (`mithril-genesis.vkey`) so the test
+/// can load the anchor offline. The bytes are input to verify, never trusted state.
+async fn fetch_mithril_genesis() -> Result<()> {
+    let out_dir = vectors_dir()?;
+    let client = reqwest::Client::new();
+
+    // 1. Genesis verification key (the pinned per-network trust root).
+    let vkey_text = client
+        .get(GENESIS_VKEY_URL)
+        .send()
+        .await
+        .context("fetch genesis vkey")?
+        .error_for_status()
+        .context("genesis vkey URL (path moved?)")?
+        .text()
+        .await
+        .context("genesis vkey body")?;
+    let vkey = parse_genesis_vkey(&vkey_text)?;
+    // Write the decoded 32-byte key as hex so the test loads it directly (the
+    // pinned trust root, human-reviewed in the PR against the mithril repo).
+    std::fs::write(out_dir.join("mithril-genesis.vkey"), hex::encode(vkey))
+        .context("write genesis vkey")?;
+    println!(
+        "genesis vkey ({} raw chars) -> 32-byte key {}",
+        vkey_text.trim().len(),
+        hex::encode(vkey),
+    );
+
+    // 2. Tip certificate hash (newest-first list).
+    let list: serde_json::Value = client
+        .get(format!("{MITHRIL_AGG}/certificates"))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .context("mithril certificates list")?
+        .error_for_status()?
+        .json()
+        .await
+        .context("mithril certificates json")?;
+    let mut hash = list
+        .get(0)
+        .and_then(|c| c.get("hash"))
+        .and_then(|h| h.as_str())
+        .context("aggregator returned no certificates")?
+        .to_string();
+
+    // 3. Walk tip→genesis, remembering the cert fetched just before genesis (its child).
+    let mut child_text: Option<String> = None;
+    for hop in 0..GENESIS_MAX_HOPS {
+        let text = client
+            .get(format!("{MITHRIL_AGG}/certificate/{hash}"))
+            .header("accept", "application/json")
+            .send()
+            .await
+            .with_context(|| format!("mithril certificate {hash}"))?
+            .error_for_status()
+            .with_context(|| format!("cert {hash} unavailable — chain pruned before genesis?"))?
+            .text()
+            .await
+            .with_context(|| format!("mithril certificate {hash} body"))?;
+        let cert: serde_json::Value =
+            serde_json::from_str(&text).with_context(|| format!("parse certificate {hash}"))?;
+        let self_hash = cert
+            .get("hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default();
+        ensure!(
+            self_hash == hash,
+            "aggregator returned {self_hash} for {hash}"
+        );
+        let epoch = cert.get("epoch").and_then(|e| e.as_u64()).unwrap_or(0);
+        let genesis_sig = cert
+            .get("genesis_signature")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default();
+
+        if !genesis_sig.is_empty() {
+            std::fs::write(out_dir.join("mithril-genesis-cert.json"), &text)
+                .context("write genesis cert vector")?;
+            println!("reached GENESIS at hop {hop}: {hash} (epoch {epoch})");
+            if let Some(child) = &child_text {
+                std::fs::write(out_dir.join("mithril-genesis-child.json"), child)
+                    .context("write genesis child vector")?;
+                println!("  wrote mithril-genesis-child.json (links to genesis by previous_hash)");
+            }
+            println!("harvested genesis anchor into {}", out_dir.display());
+            return Ok(());
+        }
+        if hop % 25 == 0 {
+            println!("  hop {hop}: epoch {epoch} ({hash})");
+        }
+        let prev = cert
+            .get("previous_hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default()
+            .to_string();
+        ensure!(
+            !prev.is_empty(),
+            "non-genesis cert {hash} has no previous_hash"
+        );
+        child_text = Some(text);
+        hash = prev;
+    }
+    anyhow::bail!("did not reach genesis within {GENESIS_MAX_HOPS} hops")
+}
+
+/// Decode a mithril genesis verification-key file to its 32-byte Ed25519 key.
+/// mithril encodes it as hex whose bytes are the ASCII of a JSON `[u8; 32]`
+/// array; defensively also accept the 32 raw key bytes hex-encoded directly.
+fn parse_genesis_vkey(text: &str) -> Result<[u8; 32]> {
+    let decoded = hex::decode(text.trim()).context("genesis vkey hex")?;
+    if decoded.len() == 32 {
+        return Ok(decoded.try_into().unwrap());
+    }
+    let arr: Vec<u8> = serde_json::from_slice(&decoded)
+        .context("genesis vkey is neither 32 raw bytes nor a JSON u8 array")?;
+    arr.as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("genesis vkey JSON array was {} bytes, want 32", arr.len()))
 }
 
 /// BlockFetch `count` recent settled preprod blocks off the relay and write
