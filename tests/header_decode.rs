@@ -182,6 +182,53 @@ fn rejects_bad_issuer_len() {
     );
 }
 
+/// The vrf_result field (a `[output(64), proof(80)]` array) must fail closed on
+/// every malformed shape: wrong inner arity, a non-bytes token, or an
+/// off-length output/proof — none may reshape into an attacker-chosen VRF cert.
+#[test]
+fn rejects_bad_vrf_result_shape() {
+    // Valid header_body up to (and including) vrf_vkey: [7,[[<10>, bn=0,
+    // slot=0, prev=null, issuer=0*32, vrf_vkey=0*32, <vrf_result...>]]].
+    let base = {
+        let mut s = String::from("820785828a0000f6");
+        s.push_str("5820");
+        s.push_str(&"00".repeat(32)); // issuer_vkey
+        s.push_str("5820");
+        s.push_str(&"00".repeat(32)); // vrf_vkey
+        s
+    };
+    let with = |tail: &str| unhex(&format!("{base}{tail}"));
+
+    // inner array of arity 1, not 2
+    let mut a = String::from("815840");
+    a.push_str(&"00".repeat(64));
+    assert_eq!(
+        HeaderView::from_block_cbor(&with(&a)),
+        Err(DecodeError::MalformedCbor),
+    );
+    // a uint where the 64-byte output is expected
+    assert_eq!(
+        HeaderView::from_block_cbor(&with("8200")),
+        Err(DecodeError::MalformedCbor),
+    );
+    // output one byte short (63)
+    let mut c = String::from("82583f");
+    c.push_str(&"00".repeat(63));
+    assert_eq!(
+        HeaderView::from_block_cbor(&with(&c)),
+        Err(DecodeError::BadHashLen(63)),
+    );
+    // valid 64-byte output, then an 79-byte proof (one short)
+    let mut d = String::from("825840");
+    d.push_str(&"00".repeat(64));
+    d.push_str("584f");
+    d.push_str(&"00".repeat(79));
+    assert_eq!(
+        HeaderView::from_block_cbor(&with(&d)),
+        Err(DecodeError::BadHashLen(79)),
+    );
+}
+
 /// Finding 4: trailing bytes after a valid block must be rejected.
 #[test]
 fn rejects_trailing_bytes() {
