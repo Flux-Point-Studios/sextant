@@ -27,18 +27,25 @@
 //! real on-chain signatures themselves (a threshold BLS signature no adversary can
 //! forge), not a second library.
 //!
-//! The full tip→genesis walk that composes all three verifiers is the subsequent
-//! Mithril slice.
+//! Part 5 (genesis-anchored walk): [`verify_chain_anchored`] composes all three —
+//! the segment's hash-linkage + AVK-binding + integrity (`verify_chain`), the root
+//! as the network genesis anchor (`verify_genesis`), and every rising certificate's
+//! STM multi-signature (`verify_standard`) — into one bytes-in/verdict-out verifier.
+//! A real preprod chain rooted in the epoch-196 re-genesis verifies end-to-end,
+//! naming the tip certificate hash; a broken link, substituted signer set, tampered
+//! multi-signature, or wrong genesis key anywhere in the walk rejects.
 #![cfg(feature = "mithril")]
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
 use sextant::mithril::{
-    Certificate, GenesisError, ProtocolMessagePartKey, StandardError, verify_chain, verify_genesis,
-    verify_standard,
+    AnchoredError, Certificate, ChainError, GenesisError, ProtocolMessagePartKey, StandardError,
+    verify_chain, verify_chain_anchored, verify_genesis, verify_standard,
 };
 
 fn vectors_dir() -> PathBuf {
@@ -400,4 +407,309 @@ fn tampered_standard_certificate_is_rejected() {
     let mut avk_bad = good.clone();
     avk_bad.aggregate_verification_key = "zzzz".to_string();
     assert_eq!(verify_standard(&avk_bad), Err(StandardError::MalformedAvk));
+}
+
+/// The real preprod tip certificate the genesis-anchored chain terminates under —
+/// the epoch-197 child of the epoch-196 re-genesis.
+const ANCHORED_TIP_HASH: &str = "fc979366ab86682b08901ad69c4de5c9cce503684fba038807d44c59f2d56b72";
+
+/// DoD line 4: a real preprod genesis-anchored certificate chain verifies
+/// end-to-end on Sextant's own path. `verify_chain_anchored` composes the three
+/// verifiers built across parts 2–4 into one bytes-in/verdict-out control flow:
+/// the segment's hash-linkage + AVK-binding + integrity ([`verify_chain`]), the
+/// root as the network genesis anchor ([`verify_genesis`]), and every rising
+/// certificate's STM multi-signature ([`verify_standard`]). The chain rooted in
+/// the epoch-196 re-genesis and rising to its epoch-197 child verifies; the
+/// returned endpoints name the genesis root and the tip.
+#[test]
+fn real_preprod_genesis_anchored_chain_verifies() {
+    let genesis = read_cert("mithril-genesis-cert.json");
+    let child = read_cert("mithril-genesis-child.json");
+    let segment = [genesis, child.clone()];
+
+    let verified =
+        verify_chain_anchored(&segment, &genesis_vkey()).expect("genesis-anchored chain verifies");
+
+    assert_eq!(
+        verified.root_hash, GENESIS_HASH,
+        "root is the genesis anchor"
+    );
+    assert_eq!(
+        verified.tip_hash, ANCHORED_TIP_HASH,
+        "tip is the epoch-197 child",
+    );
+    assert_eq!(verified.length, 2);
+    // The tip genuinely rises from the anchor: it is a standard certificate
+    // authorized by a real STM multi-signature, not the genesis key.
+    assert!(!child.is_genesis());
+    verify_standard(&child).expect("tip rides an STM multi-signature");
+}
+
+/// Recompute a certificate's committed hash so a targeted-field tamper stays
+/// self-consistent — forcing the *deeper* verifier (link / AVK-binding / STM),
+/// not the integrity guard, to be the one that rejects it.
+fn reseal(mut cert: Certificate) -> Certificate {
+    cert.hash = cert.compute_hash();
+    cert
+}
+
+/// A distinct real standard certificate whose AVK and multi-signature differ from
+/// `exclude` — a valid signer set / signature to substitute in negative tests.
+fn foreign_standard_cert(exclude: &Certificate) -> Certificate {
+    standard_certs()
+        .into_iter()
+        .find(|c| {
+            c.aggregate_verification_key != exclude.aggregate_verification_key
+                && c.multi_signature != exclude.multi_signature
+        })
+        .expect("a distinct standard certificate for substitution")
+}
+
+/// Every way the genesis-anchored walk can be forged is rejected, each with a
+/// distinct verdict pointing at the offending certificate. Self-consistent tampers
+/// (hash resealed) prove the *deeper* verifier catches what the integrity guard
+/// cannot — the whole point of composing all three.
+#[test]
+fn chain_anchored_rejects_forgeries() {
+    let genesis = read_cert("mithril-genesis-cert.json");
+    let child = read_cert("mithril-genesis-child.json");
+    let vkey = genesis_vkey();
+    let good = [genesis.clone(), child.clone()];
+    assert!(verify_chain_anchored(&good, &vkey).is_ok());
+
+    // Empty segment.
+    assert_eq!(
+        verify_chain_anchored(&[], &vkey),
+        Err(AnchoredError::Chain(ChainError::Empty)),
+    );
+
+    // Wrong genesis verification key → the anchor's Ed25519 signature rejects.
+    let mut wrong_vkey = vkey;
+    wrong_vkey[0] ^= 0x01;
+    assert_eq!(
+        verify_chain_anchored(&good, &wrong_vkey),
+        Err(AnchoredError::Genesis(GenesisError::InvalidSignature)),
+    );
+
+    // Root is a standard certificate, not the genesis anchor.
+    assert_eq!(
+        verify_chain_anchored(std::slice::from_ref(&child), &vkey),
+        Err(AnchoredError::Genesis(GenesisError::NotGenesis)),
+    );
+
+    // Broken link: the child points somewhere other than its genesis parent, even
+    // with a self-consistent hash.
+    let mut relinked = child.clone();
+    relinked.previous_hash = "00".repeat(32);
+    assert_eq!(
+        verify_chain_anchored(&[genesis.clone(), reseal(relinked)], &vkey),
+        Err(AnchoredError::Chain(ChainError::BrokenLink { index: 1 })),
+    );
+
+    // Naive field tamper (hash NOT resealed) is caught by the integrity guard
+    // first — this is what pins each certificate's k/m/phi_f to its committed hash.
+    let mut naive = child.clone();
+    naive.aggregate_verification_key = flip_first_nibble(&naive.aggregate_verification_key);
+    assert_eq!(
+        verify_chain_anchored(&[genesis.clone(), naive], &vkey),
+        Err(AnchoredError::Chain(ChainError::Hash { index: 1 })),
+    );
+
+    // Substituted signer set: a self-consistent child carrying a *different* valid
+    // AVK is not the one the genesis certificate committed → AVK-binding rejects.
+    let foreign = foreign_standard_cert(&child);
+    let mut swapped_avk = child.clone();
+    swapped_avk.aggregate_verification_key = foreign.aggregate_verification_key.clone();
+    assert_eq!(
+        verify_chain_anchored(&[genesis.clone(), reseal(swapped_avk)], &vkey),
+        Err(AnchoredError::Chain(ChainError::AvkBinding { index: 1 })),
+    );
+
+    // Tampered authority: a self-consistent child whose AVK still binds but whose
+    // multi-signature is a *different* real signature → rejected at the standard-cert
+    // layer, attributed to the certificate at its index. (A foreign signature is
+    // inconsistent with the child's committed stake, so the bounds guard catches it
+    // before the STM verify; either way it is an `AnchoredError::Standard`.)
+    let mut swapped_sig = child.clone();
+    swapped_sig.multi_signature = foreign.multi_signature.clone();
+    let verdict = verify_chain_anchored(&[genesis, reseal(swapped_sig)], &vkey);
+    assert!(
+        matches!(verdict, Err(AnchoredError::Standard { index: 1, .. })),
+        "swapped multi-signature must be rejected at the standard-cert layer, got {verdict:?}",
+    );
+}
+
+/// Hardening (part-4 red-team carry): `verify_standard` fails closed on degenerate
+/// protocol parameters. Standalone, a certificate's own `k`/`m`/`phi_f` are
+/// attacker-controlled; a `k=0` or `phi_f≥1` threshold would let a trivial
+/// multi-signature clear the bar (`phi_f == 1` makes every claimed lottery win, so
+/// one signer alone reaches the quorum). The guard rejects them before any curve
+/// work, independent of the chain-integrity check that also pins them to the
+/// committed hash.
+#[test]
+fn verify_standard_rejects_weak_parameters() {
+    let child = read_cert("mithril-genesis-child.json");
+    verify_standard(&child).expect("genuine parameters verify");
+
+    let mut k0 = child.clone();
+    k0.metadata.protocol_parameters.k = 0;
+    assert_eq!(verify_standard(&k0), Err(StandardError::WeakParameters));
+
+    let mut m0 = child.clone();
+    m0.metadata.protocol_parameters.m = 0;
+    assert_eq!(verify_standard(&m0), Err(StandardError::WeakParameters));
+
+    let mut phi_zero = child.clone();
+    phi_zero.metadata.protocol_parameters.phi_f = 0.0;
+    assert_eq!(
+        verify_standard(&phi_zero),
+        Err(StandardError::WeakParameters)
+    );
+
+    let mut phi_high = child.clone();
+    phi_high.metadata.protocol_parameters.phi_f = 1.5;
+    assert_eq!(
+        verify_standard(&phi_high),
+        Err(StandardError::WeakParameters)
+    );
+
+    let mut phi_nan = child.clone();
+    phi_nan.metadata.protocol_parameters.phi_f = f64::NAN;
+    assert_eq!(
+        verify_standard(&phi_nan),
+        Err(StandardError::WeakParameters)
+    );
+
+    // phi_f = 1.0 makes every claimed lottery win, so it is rejected as degenerate
+    // even though a higher phi_f would otherwise only ease the lottery — a lone
+    // signer must not be able to clear the quorum. (A hair below, phi_f < 1, is
+    // accepted; the genuine 0.65 verifies above.)
+    let mut phi_one = child;
+    phi_one.metadata.protocol_parameters.phi_f = 1.0;
+    assert_eq!(
+        verify_standard(&phi_one),
+        Err(StandardError::WeakParameters)
+    );
+}
+
+/// Decode an aggregator json-hex field back to its JSON string, for targeted
+/// hostile mutation.
+fn decode_hex_to_string(hex: &str) -> String {
+    String::from_utf8(hex::decode(hex).expect("hex")).expect("utf8 json")
+}
+
+/// Run `verify_standard` on a worker thread, returning its verdict only if it
+/// completes within `secs` — `None` on timeout. A hostile input that drove the STM
+/// verifier into unbounded work would time out here, turning a would-be hang into a
+/// clean assertion failure instead of a stuck test process.
+fn verify_standard_within(cert: Certificate, secs: u64) -> Option<Result<(), StandardError>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(verify_standard(&cert));
+    });
+    rx.recv_timeout(Duration::from_secs(secs)).ok()
+}
+
+/// Hardening (part-4 red-team carry): hostile STM serde inputs are rejected as
+/// clean, prompt `Err`s — never a panic, hang, or unbounded allocation.
+/// `verify_standard` is the untrusted-bytes deserialize entry point the chain walk
+/// exposes. Two of these — a signer claiming more stake than the total, and a
+/// `nr_leaves` near the u64 overflow — drive stock mithril-stm into unbounded work;
+/// [`guard_stm_bounds`](sextant::mithril) must fail them closed *before* the verify,
+/// which the bounded-time assertion (`Some(..)`) proves.
+#[test]
+fn verify_standard_rejects_hostile_stm_inputs() {
+    let child = read_cert("mithril-genesis-child.json");
+    verify_standard(&child).expect("baseline verifies");
+    let avk_json = decode_hex_to_string(&child.aggregate_verification_key);
+    let sig_json = decode_hex_to_string(&child.multi_signature);
+
+    // Truncated AVK JSON → deserialize fails cleanly.
+    let mut avk_trunc = child.clone();
+    avk_trunc.aggregate_verification_key = hex::encode(&avk_json.as_bytes()[..avk_json.len() - 6]);
+    assert_eq!(
+        verify_standard(&avk_trunc),
+        Err(StandardError::MalformedAvk)
+    );
+
+    // Odd-length AVK hex → not even bytes.
+    let mut avk_odd = child.clone();
+    avk_odd.aggregate_verification_key = "abc".to_string();
+    assert_eq!(verify_standard(&avk_odd), Err(StandardError::MalformedAvk));
+
+    // DoS: a total_stake below a signer's claimed stake makes the eligibility
+    // Taylor series never converge — the guard rejects it promptly, no hang.
+    let mut avk_stake = child.clone();
+    avk_stake.aggregate_verification_key = hex::encode(
+        avk_json
+            .replacen("\"total_stake\":52279233772202", "\"total_stake\":1", 1)
+            .as_bytes(),
+    );
+    assert_eq!(
+        verify_standard_within(avk_stake, 10),
+        Some(Err(StandardError::ImplausibleAvk)),
+    );
+
+    // DoS: nr_leaves near the u64 overflow makes the Merkle verify never terminate —
+    // the guard rejects it promptly, no hang.
+    let mut avk_huge = child.clone();
+    avk_huge.aggregate_verification_key = hex::encode(
+        avk_json
+            .replacen("\"nr_leaves\":26", "\"nr_leaves\":18446744073709551615", 1)
+            .as_bytes(),
+    );
+    assert_eq!(
+        verify_standard_within(avk_huge, 10),
+        Some(Err(StandardError::ImplausibleAvk)),
+    );
+
+    // Oversized blobs are capped on length before any decode — a memory DoS
+    // (mithril-stm's deserialize and the guard's `serde_json::Value` both allocate
+    // proportional to the input).
+    let mut avk_big = child.clone();
+    avk_big.aggregate_verification_key = "0".repeat((1 << 22) + 2);
+    assert_eq!(verify_standard(&avk_big), Err(StandardError::MalformedAvk));
+    let mut sig_big = child.clone();
+    sig_big.multi_signature = "0".repeat((1 << 22) + 2);
+    assert_eq!(
+        verify_standard(&sig_big),
+        Err(StandardError::MalformedSignature),
+    );
+
+    // DoS: an oversized `indexes` array — mithril-stm evaluates one lottery per
+    // index across all signatures *before* checking the count against k, so a
+    // signature with a huge indexes array must be rejected before the verify. The
+    // bounded-time assertion proves the guard fires, not the loop.
+    let idx_key = "\"indexes\":[";
+    let idx_start = sig_json.find(idx_key).expect("indexes array") + idx_key.len();
+    let idx_end = idx_start + sig_json[idx_start..].find(']').expect("indexes close");
+    let flood = vec!["0"; 400_000].join(",");
+    let hostile = format!("{}{flood}{}", &sig_json[..idx_start], &sig_json[idx_end..]);
+    let mut idx_flood = child.clone();
+    idx_flood.multi_signature = hex::encode(hostile.as_bytes());
+    assert_eq!(
+        verify_standard_within(idx_flood, 10),
+        Some(Err(StandardError::ImplausibleAvk)),
+    );
+
+    // Valid JSON, invalid BLS point: a corrupted signature curve point never
+    // deserializes to a valid signature.
+    let mut sig_point = child.clone();
+    sig_point.multi_signature = hex::encode(
+        sig_json
+            .replacen("[152,236,234,187", "[255,236,234,187", 1)
+            .as_bytes(),
+    );
+    assert_eq!(
+        verify_standard(&sig_point),
+        Err(StandardError::MalformedSignature),
+    );
+
+    // Truncated signature JSON → deserialize fails cleanly.
+    let mut sig_trunc = child;
+    sig_trunc.multi_signature = hex::encode(&sig_json.as_bytes()[..sig_json.len() - 6]);
+    assert_eq!(
+        verify_standard(&sig_trunc),
+        Err(StandardError::MalformedSignature),
+    );
 }
