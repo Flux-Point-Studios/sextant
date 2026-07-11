@@ -219,6 +219,9 @@ impl ProtocolMessage {
 /// error. A later slice extends this set with its own vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub enum ProtocolMessagePartKey {
+    /// Digest of the signed immutable-file snapshot.
+    #[serde(rename = "snapshot_digest")]
+    SnapshotDigest,
     /// Merkle root of the signed Cardano transactions.
     #[serde(rename = "cardano_transactions_merkle_root")]
     CardanoTransactionsMerkleRoot,
@@ -241,6 +244,7 @@ impl ProtocolMessagePartKey {
     /// `mithril-common`'s `Display`).
     fn as_str(&self) -> &'static str {
         match self {
+            ProtocolMessagePartKey::SnapshotDigest => "snapshot_digest",
             ProtocolMessagePartKey::CardanoTransactionsMerkleRoot => {
                 "cardano_transactions_merkle_root"
             }
@@ -352,6 +356,7 @@ mod tests {
     fn protocol_message_part_keys_are_canonical_and_ordered() {
         use ProtocolMessagePartKey::*;
         let declared = [
+            (SnapshotDigest, "snapshot_digest"),
             (
                 CardanoTransactionsMerkleRoot,
                 "cardano_transactions_merkle_root",
@@ -370,5 +375,84 @@ mod tests {
         for pair in declared.windows(2) {
             assert!(pair[0].0 < pair[1].0, "enum Ord must be declaration order");
         }
+    }
+
+    /// mithril-common's own `test_genesis_certificate_compute_hash` golden — the
+    /// one certificate shape absent from the harvested vectors (all standard).
+    /// Pins the genesis branch of [`Certificate::compute_hash`]: only the genesis
+    /// signature is bound; the signed entity type and multi-signature are not.
+    /// The fake AVK / genesis signature are mithril's own test doubles (verbatim,
+    /// split at the source line boundaries), so this is an independent oracle.
+    #[test]
+    fn certificate_genesis_hash_matches_mithril_golden() {
+        const AVK: &str = concat!(
+            "7b226d745f636f6d6d69746d656e74223a7b22726f6f74223a5b37332c37342c3232392c3235302c3132322c32",
+            "32362c38392c33372c3233312c3234352c3130362c3138332c3132372c332c39392c3137372c3231372c36352c3",
+            "135322c3133352c33322c36372c3232332c33352c3134312c35312c342c3132352c3230332c33382c3139362c32",
+            "31325d2c226e725f6c6561766573223a32342c22686173686572223a6e756c6c7d2c22746f74616c5f7374616b6",
+            "5223a35323337353137363336353838327d",
+        );
+        const GENESIS_SIG: &str = concat!(
+            "ebc0652ffe864970a2ba538eacf7d088e9840e3db883c96d13eb6c5b4c74cfc6e84932e4640ca9e3b5e3de2dd6",
+            "15247a88c011405cc7508736abcf99cae2b10b",
+        );
+
+        let initiated_at = DateTime::parse_from_rfc3339("2024-02-12T13:11:47.0123043Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let sealed_at = DateTime::parse_from_rfc3339("2024-02-12T13:13:27.0123043Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut message_parts = BTreeMap::new();
+        message_parts.insert(
+            ProtocolMessagePartKey::SnapshotDigest,
+            "snapshot-digest-123".to_string(),
+        );
+        message_parts.insert(
+            ProtocolMessagePartKey::NextAggregateVerificationKey,
+            AVK.to_string(),
+        );
+        let protocol_message = ProtocolMessage { message_parts };
+        // mithril derives signed_message = protocol_message.compute_hash().
+        let signed_message = protocol_message.compute_hash();
+
+        let cert = Certificate {
+            hash: String::new(),
+            previous_hash: "previous_hash".to_string(),
+            epoch: 10,
+            // Not bound by the genesis branch; the value is irrelevant to the hash.
+            signed_entity_type: SignedEntityType::MithrilStakeDistribution(10),
+            metadata: CertificateMetadata {
+                network: "testnet".to_string(),
+                protocol_version: "0.1.0".to_string(),
+                protocol_parameters: ProtocolParameters {
+                    k: 1000,
+                    m: 100,
+                    phi_f: 0.123,
+                },
+                initiated_at,
+                sealed_at,
+                signers: vec![
+                    Signer {
+                        party_id: "1".to_string(),
+                        stake: 10,
+                    },
+                    Signer {
+                        party_id: "2".to_string(),
+                        stake: 20,
+                    },
+                ],
+            },
+            protocol_message,
+            signed_message,
+            aggregate_verification_key: AVK.to_string(),
+            multi_signature: String::new(),
+            genesis_signature: GENESIS_SIG.to_string(),
+        };
+        assert_eq!(
+            cert.compute_hash(),
+            "6160fca853402c0ea89a0a9ceb5d97462ffd81c558c53feef01dcc0827f5bd19",
+        );
     }
 }
