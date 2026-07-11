@@ -1,19 +1,30 @@
-//! Leader-VRF output verification, differentially checked against the chain
-//! itself. Every Praos header commits a 64-byte VRF output (beta) that its
-//! producer computed with libsodium's `crypto_vrf_ietfdraft03`. Sextant
-//! recomputes beta from the 80-byte proof on its own code path
-//! (`vrf::proof_to_hash`) and it must equal the committed `vrf_output`
-//! byte-for-byte — so the oracle is the canonical producer (cardano-node),
-//! not pallas (whose 1.1.1 crate ships no VRF).
+//! Leader-VRF verification, differentially checked against the chain itself.
+//! Every Praos header commits a 64-byte VRF output (beta) and an 80-byte proof
+//! that its producer computed with libsodium's `crypto_vrf_ietfdraft03`.
 //!
-//! `proof_to_hash` is nonce-independent, so this covers every real vector with
-//! no epoch nonce. Binding the proof to the header's slot + epoch nonce (the
-//! full leader-eligibility verify) is the next slice.
+//! Two independent checks run on Sextant's own code path:
+//!
+//! * `vrf::proof_to_hash` recomputes beta from the proof; it must equal the
+//!   committed `vrf_output` byte-for-byte. Nonce-independent, so it covers
+//!   every real vector with no epoch nonce.
+//! * `vrf::verify_praos_leader` runs the full draft-03 equation, binding the
+//!   proof to the header's public key and `alpha = Blake2b256(BE64(slot)||eta0)`.
+//!   The 22 preprod vectors carry a `.eta0` sidecar (the epoch's active nonce,
+//!   from Koios), so a genuine leader proof must verify and a proof bound to a
+//!   different slot, nonce, or key must be rejected.
+//!
+//! pallas 1.1.1 ships no VRF, so the oracle is the canonical producer
+//! (cardano-node) that minted these blocks, cross-checked against
+//! `cardano-crypto`, whose Elligator2 hash-to-curve is an independent
+//! libsodium-port (its own `fe25519`/`elligator2`), not the dalek fork's — so
+//! the cross-check is meaningful on the error-prone hash-to-curve step even
+//! though both libraries share dalek for the group arithmetic.
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
+use cardano_crypto::vrf::VrfDraft03;
 use sextant::header::HeaderView;
 use sextant::vrf::{self, VrfError};
 
@@ -25,6 +36,51 @@ fn unhex(s: &str) -> Vec<u8> {
 
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
+}
+
+/// A real preprod leader proof and the epoch nonce it was cast under.
+struct LeaderCase {
+    slot: u64,
+    vkey: [u8; 32],
+    eta0: [u8; 32],
+    proof: [u8; 80],
+    output: [u8; 64],
+}
+
+/// Every preprod vector that has an `.eta0` sidecar, decoded into a leader case.
+fn leader_cases() -> Vec<LeaderCase> {
+    let mut cases = Vec::new();
+    for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if !name.starts_with("preprod-")
+            || path.extension().and_then(|e| e.to_str()) != Some("block")
+        {
+            continue;
+        }
+        let eta0_path = path.with_extension("eta0");
+        let Ok(eta0_hex) = fs::read_to_string(&eta0_path) else {
+            continue;
+        };
+        let view =
+            HeaderView::from_block_cbor(&unhex(&fs::read_to_string(&path).expect("read vector")))
+                .unwrap_or_else(|e| panic!("decode {}: {e:?}", path.display()));
+        let eta0: [u8; 32] = unhex(&eta0_hex).try_into().expect("eta0 is 32 bytes");
+        cases.push(LeaderCase {
+            slot: view.slot,
+            vkey: view.vrf_vkey,
+            eta0,
+            proof: view.vrf_proof,
+            output: view.vrf_output,
+        });
+    }
+    // Deterministic order — fs::read_dir order is unspecified and varies by
+    // platform, which must not change which case a test anchors on.
+    cases.sort_by_key(|c| c.slot);
+    cases
 }
 
 /// The header decoder surfaces the VRF fields at the exact bytes carried in a
@@ -93,7 +149,7 @@ fn tampered_gamma_breaks_output() {
     proof[0] ^= 0x01; // perturb the low byte of Gamma
     match vrf::proof_to_hash(&proof) {
         Ok(beta) => assert_ne!(beta, view.vrf_output),
-        Err(VrfError::InvalidGamma) => {}
+        Err(e) => assert_eq!(e, VrfError::InvalidGamma),
     }
 }
 
@@ -112,4 +168,141 @@ fn off_curve_gamma_is_rejected() {
         rejected,
         "expected some off-curve Gamma encoding to be rejected"
     );
+}
+
+/// The core slice: every real preprod leader proof verifies on Sextant's own
+/// draft-03 code path — binding public key + `Blake2b256(BE64(slot)||eta0)` —
+/// and yields exactly the output the producer committed. This is cardano-node
+/// ground truth: these blocks were minted and accepted by the live network.
+#[test]
+fn real_preprod_leader_proofs_verify() {
+    let cases = leader_cases();
+    assert!(
+        cases.len() >= 20,
+        "DoD requires ≥20 leader-verify vectors, found {}",
+        cases.len(),
+    );
+    for c in &cases {
+        let out = vrf::verify_praos_leader(&c.vkey, c.slot, &c.eta0, &c.proof)
+            .unwrap_or_else(|e| panic!("slot {} rejected a genuine leader proof: {e:?}", c.slot));
+        assert_eq!(
+            out, c.output,
+            "slot {}: verified output ≠ committed",
+            c.slot
+        );
+    }
+}
+
+/// Sextant's accept/reject verdict and certified output agree, on the same
+/// inputs, with `cardano-crypto`, whose Elligator2 hash-to-curve is an
+/// independent libsodium port (the error-prone step both must get right).
+#[test]
+fn verdict_matches_independent_oracle() {
+    for c in leader_cases() {
+        let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
+        let sextant = vrf::verify(&c.vkey, &alpha, &c.proof);
+        let oracle = VrfDraft03::verify(&c.vkey, &c.proof, &alpha);
+        assert_eq!(
+            sextant.is_ok(),
+            oracle.is_ok(),
+            "slot {}: verdict disagrees with oracle",
+            c.slot,
+        );
+        if let (Ok(a), Ok(b)) = (&sextant, &oracle) {
+            assert_eq!(a, b, "slot {}: output disagrees with oracle", c.slot);
+        }
+    }
+}
+
+/// A leader proof is bound to its inputs: perturbing the response scalar, the
+/// epoch nonce, the slot, or the public key each breaks verification. Sextant
+/// and the independent oracle both reject the tampered proof.
+#[test]
+fn tampered_leader_proof_is_rejected() {
+    let cases = leader_cases();
+    let c = &cases[0];
+    let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
+
+    let mut proof = c.proof;
+    proof[60] ^= 0x01; // perturb the response scalar s
+    assert_eq!(
+        vrf::verify(&c.vkey, &alpha, &proof),
+        Err(VrfError::VerificationFailed),
+    );
+    assert!(VrfDraft03::verify(&c.vkey, &proof, &alpha).is_err());
+
+    // Wrong epoch nonce → different alpha → rejected.
+    let mut eta0 = c.eta0;
+    eta0[0] ^= 0x01;
+    assert!(vrf::verify_praos_leader(&c.vkey, c.slot, &eta0, &c.proof).is_err());
+
+    // Wrong slot → different alpha → rejected.
+    assert!(vrf::verify_praos_leader(&c.vkey, c.slot ^ 1, &c.eta0, &c.proof).is_err());
+
+    // Another pool's public key cannot claim this proof. Consecutive preprod
+    // blocks can share a pool vkey, so pick a case whose vkey genuinely differs
+    // rather than assuming the next one does.
+    let other = cases
+        .iter()
+        .find(|o| o.vkey != c.vkey)
+        .expect("vector set must contain ≥2 distinct leader vkeys");
+    assert!(vrf::verify(&other.vkey, &alpha, &c.proof).is_err());
+}
+
+/// The Ed25519 group order L, little-endian.
+const GROUP_ORDER_LE: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+];
+
+/// Little-endian 32-byte addition (no final carry-out for the values used here).
+fn add_le(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut carry = 0u16;
+    for i in 0..32 {
+        let sum = a[i] as u16 + b[i] as u16 + carry;
+        out[i] = sum as u8;
+        carry = sum >> 8;
+    }
+    out
+}
+
+/// A non-canonical response scalar `s' = s + L` reduces to the same scalar and
+/// so satisfies the equation arithmetically, but Sextant rejects it — closing
+/// the malleability a plain `from_bytes_mod_order` would admit. This is checked
+/// directly (not via the oracle, which shares dalek's reducing decoder).
+#[test]
+fn non_canonical_scalar_is_rejected() {
+    let c = &leader_cases()[0];
+    let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
+
+    // Sanity: the genuine proof (canonical s < L) still verifies.
+    assert!(vrf::verify(&c.vkey, &alpha, &c.proof).is_ok());
+
+    let mut s = [0u8; 32];
+    s.copy_from_slice(&c.proof[48..80]);
+    let s_plus_l = add_le(&s, &GROUP_ORDER_LE); // s + L ≥ L, non-canonical
+    let mut proof = c.proof;
+    proof[48..80].copy_from_slice(&s_plus_l);
+
+    assert_eq!(
+        vrf::verify(&c.vkey, &alpha, &proof),
+        Err(VrfError::VerificationFailed),
+    );
+}
+
+/// A non-canonical point encoding (y-coordinate `≥ p`) is rejected even when it
+/// decodes to an on-curve point. `p` in little-endian encodes `y ≡ 0`, which is
+/// on-curve, but re-compresses to the canonical all-zero y, so `decode_point`
+/// (used for Gamma here) refuses it rather than accepting the malleated bytes.
+#[test]
+fn non_canonical_point_is_rejected() {
+    let mut p_le = [0xffu8; 32];
+    p_le[0] = 0xed;
+    p_le[31] = 0x7f; // p = 2^255 - 19
+
+    let view = HeaderView::from_block_cbor(&unhex(CONWAY1)).expect("decode header");
+    let mut proof = view.vrf_proof;
+    proof[..32].copy_from_slice(&p_le); // put a non-canonical y in Gamma
+    assert_eq!(vrf::proof_to_hash(&proof), Err(VrfError::InvalidGamma));
 }
