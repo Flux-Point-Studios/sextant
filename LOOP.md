@@ -169,6 +169,24 @@ needs a row in Evidence.
       epoch's signer set (one hop of the chain of trust). No new crate (reuses
       `ed25519`); Cargo.lock adds 0; mithril feature keeps it out of default+wasm.
       STM multi-sig verify + the full tip→genesis walk close the DoD line.
+- [x] Mithril STANDARD-cert STM multi-signature verify (DoD line 4, part 4 of N):
+      `src/mithril.rs::verify_standard(cert)` authorizes a *standard* certificate by
+      its stake-based threshold multi-signature. Sextant owns the wire path — hex→JSON
+      deserialize of `aggregate_verification_key`
+      (`AggregateVerificationKeyForConcatenation` → `AggregateVerificationKey::new`) and
+      `multi_signature` (`AggregateSignature`), `Parameters{m,k,phi_f}` assembly from the
+      cert metadata, and the `signed_message == protocol_message.compute_hash()` binding
+      (the shared guard, now factored and reused by `verify_genesis`) — and COMPOSES
+      `mithril-stm` 0.10.5 (`num-integer-backend`, off wasm) for the BLS aggregate /
+      lottery-eligibility / Merkle-batch verify over `signed_message.as_bytes()`, exactly
+      as `curve25519-dalek` is composed for the header VRF. All 12 real preprod standard
+      multi-signatures verify; wrong message / wrong AVK → `InvalidMultiSignature`, swapped
+      protocol message → `MessageMismatch`, genesis cert → `NotStandard`, malformed blobs →
+      `MalformedAvk`/`MalformedSignature`. mithril-stm is the sole STM implementation, so
+      the oracle is the real on-chain multi-signatures themselves (unforgeable threshold
+      BLS), not a second library. Feature-gated: `cargo tree -e normal` shows 0
+      blst/mithril-stm in default+wasm. The full tip→genesis walk (`verify_chain_anchored`)
+      composing genesis + AVK-binding + per-cert `verify_standard` is part 5 (closes DoD line 4).
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -231,10 +249,49 @@ needs a row in Evidence.
 | 2026-07-11 18:35 UTC | Part 2 (Mithril chain-linking + AVK binding) merged; independent red-team SHIP | PR #11 squash-merged (`a95cfd6`), CI green (pipeline 89). `src/mithril.rs::verify_chain` walks a cert segment recomputing each content hash and checking `previous_hash == parent.compute_hash()` (transitive: the integrity check runs per-cert first, so a parent lying about its own hash is caught before it can link — red-team proved → `Err(Hash{5})`), plus AVK binding (child AVK == parent's committed `next_aggregate_verification_key`). Non-vacuous negatives (broken link/reorder/splice/tamper/AVK-sub); feature-gate clean (0 blst in default+wasm); 50k mutations no panic. Genesis Ed25519 anchor + STM multi-sig are parts 3+4. Carried: link check could be `!= parent.compute_hash()` directly for a local (order-independent) guarantee |
 | 2026-07-11 19:35 UTC | Mithril GENESIS ANCHOR (DoD line 4, part 3): the real preprod genesis certificate (the trust root) verifies on Sextant's own libsodium-strict Ed25519 path under the pinned network genesis vkey; verdict byte-identical to pallas-crypto's independent cryptoxide backend | `cargo test --test mithril --all-features` — `real_preprod_genesis_certificate_verifies` (names hash `69bc3bdfff0bb134675396e83b301f43e763d576d4b85856f6b3cb806af7ad59`, epoch-196 re-genesis; asserts self-hash + empty `previous_hash` + `is_genesis`), `genesis_verdict_matches_independent_oracle` (Sextant `ed25519::verify` == `pallas_crypto` `PublicKey::verify` on genuine + 1-bit-flip), `tampered_genesis_certificate_is_rejected` (sig-flip/wrong-vkey → `InvalidSignature`, swapped protocol message → `MessageMismatch`, standard cert → `NotGenesis`, malformed hex → `MalformedSignature`), `genesis_anchors_its_child` (`verify_chain([genesis, child])` Ok, tip == child hash `fc979366…`). Message format empirically pinned (only `signed_message.as_bytes()` verifies, 32 raw bytes do not). `verify_genesis` composes existing `ed25519::verify` + `protocol_message.compute_hash()` binding; `tools/harvest mithril-genesis` walked tip→genesis (105 hops) to pin the anchor. `scripts/harness.sh --full` exit 0, 63 tests; Cargo.lock adds 0 crates (mithril feature keeps it out of default+wasm) |
 | 2026-07-11 19:50 UTC | Slice 11 (Mithril genesis anchor) merged to main with red-team SHIP | PR #12 squash-merged (`5eac799`), CI `ci/woodpecker/pr/harness` green (pipeline 94). `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM/LOW: the `signed_message == protocol_message.compute_hash()` guard pins the genuine protocol message (hence NextAVK) by SHA-256 second-preimage, so a detach/AVK-swap keeping the genuine signature is rejected `MessageMismatch`; Sextant's `ed25519::verify` ⊇ dalek `verify_strict` on every adversary-reachable encoding (the one gap — small-order-R — is keyholder-only, i.e. the genesis key itself), so no forged-cert false-accept; `decode_hex_64` guards `len!=128` before indexing and returns `MalformedSignature` on odd/non-hex/huge, zero panic/unwrap/unsafe in the production genesis path; a 1-bit-flipped vkey rejects (no self-authentication circularity); scope honest (STM multi-sig + full walk deferred, DoD line 4 UNCHECKED). 3 INFO carried: (1) optional small-order-R fixture to pin the divergence direction, (2) factor the shared `signed_message`↔`protocol_message` guard when part 4 lands, (3) confirm mithril-common's genesis-verify strictness. `scripts/harness.sh --full` exit 0 on merged main |
+| 2026-07-11 21:14 UTC | Mithril STANDARD-cert STM multi-signature verify (DoD line 4, part 4): all 12 real preprod standard certificates are authorized by a valid STM multi-signature verified on Sextant's own path; every tamper rejects with a distinct verdict | `cargo test --features mithril --test mithril` — `real_preprod_multi_signatures_verify` (12 standard certs; `verify_standard` composes hex→JSON AVK/sig deserialize + `Parameters{m,k,phi_f}` + the `signed_message==protocol_message.compute_hash()` binding + `mithril_stm::AggregateSignature::verify` over `signed_message.as_bytes()`), `multi_signature_binds_message_and_avk` (A's sig over B's message → `InvalidMultiSignature`; A's sig under B's AVK → `InvalidMultiSignature`), `tampered_standard_certificate_is_rejected` (genesis→`NotStandard`, swapped proto-msg→`MessageMismatch`, malformed hex→`MalformedSignature`/`MalformedAvk`). `mithril-stm` 0.10.5 (`num-integer-backend`) composed for the BLS/lottery/Merkle-batch check; `cargo tree -e normal` = 0 blst in default graph, present only under `--features mithril`. `scripts/harness.sh --full` exit 0 (fmt, clippy --all-features, release build, all tests incl. 10 mithril, wasm32 build). D = `MithrilMembershipDigest` (Blake2b-256 Merkle commitment); message format empirically pinned to `signed_message.as_bytes()` (the 12 real sigs verify only under it) |
 | 2026-07-11 20:10 UTC | Independent red-team of the autonomously-merged genesis anchor: VERDICT SHIP — trust root genuinely pinned | Fresh `fluxpoint-loop:red-team-reviewer` + operator 3× flaky-check: genesis vkey pinned from the OFFICIAL IOG repo (`7f497ca1…` `release-preprod/genesis.vkey`, NOT the aggregator) — real re-genesis cert (epoch 196) verifies only under it, not hollow; real strict Ed25519 (256 vkey bit-flips + tamper/non-genesis/malformed all reject, matches pallas); `signed_message` binds the genesis AVK; 30k fuzz no panic; honest scope. **Part 4 roadmap (from red-team): (a) STM multi-sig verify via mithril-stm (feature-gated, keeps blst off wasm); (b) `verify_chain_anchored(certs, vkey)` requiring `certs[0]` to be a verified genesis + each standard cert's STM multi-sig; (c) pin the genesis vkey as a lib constant, not just a test vector** |
 
 ## Notes for the next iteration
-State (2026-07-11): **Mithril GENESIS ANCHOR shipped** (DoD line 4, part 3 of N).
+State (2026-07-11): **Mithril STANDARD-cert STM multi-signature verify shipped**
+(DoD line 4, part 4 of N). `src/mithril.rs::verify_standard(cert)` authorizes a
+standard certificate by its STM (stake-based threshold multi-signature): it requires
+the cert be standard (has a `multi_signature`, not a genesis cert), that
+`signed_message == protocol_message.compute_hash()` (the **shared guard**, now factored
+onto `Certificate::signed_message_binds_protocol_message` and reused by `verify_genesis`),
+and that `mithril_stm::AggregateSignature::verify(signed_message.as_bytes(), &avk, &params)`
+succeeds. Sextant owns the wire path: hex→JSON deserialize of the AVK
+(`AggregateVerificationKeyForConcatenation<D>` → `AggregateVerificationKey::new`) and the
+multi-signature (`AggregateSignature<D>`), and `Parameters{m,k,phi_f}` assembly from
+`metadata.parameters`. `D = MithrilMembershipDigest` (Blake2b-256 Merkle commitment).
+The BLS aggregate / lottery / Merkle-batch check is the **composed** `mithril-stm` 0.10.5
+primitive (`num-integer-backend`, NEVER rug/snark), exactly as curve25519-dalek is composed
+for the header VRF. **mithril-stm is the sole STM implementation in existence**, so unlike
+VRF/KES/Ed25519 there is no independent second-impl oracle — the oracle is the 12 real
+on-chain multi-signatures themselves (a threshold BLS signature no adversary can forge),
+plus non-vacuous tamper rejection. **Feature-gated**: `cargo tree -e normal` shows 0
+blst/mithril-stm in the default+wasm graph; only `--features mithril` (host clippy/test)
+pulls blst. Cargo.lock added 17 crates (blst, num-bigint/integer/rational, rayon, etc.),
+all under the mithril feature. The message format was empirically pinned:
+`signed_message.as_bytes()` (ASCII hex) is what verifies, matching the genesis path.
+
+**Attacking next — DoD line 4, part 5: the full tip→genesis walk (`verify_chain_anchored`)
+that CLOSES the line.** Compose the three verifiers already built into one bytes-in/
+verdict-out control flow: given a certificate segment (tip→…→genesis) and the pinned
+genesis vkey, walk oldest→newest requiring `certs[0]` be a verified genesis
+(`verify_genesis`), each subsequent standard cert's STM multi-sig (`verify_standard`), and
+the hash-link + AVK-binding between adjacent certs (`verify_chain`'s logic). DoD line 4
+proof = a test that verifies a real preprod chain terminating in the genesis anchor and
+NAMES the tip certificate hash; negatives (a broken link / substituted AVK / tampered
+multi-sig / wrong genesis vkey anywhere in the walk) each reject. The harvester already
+proved the full walk is tractable (release-preprod re-genesis at epoch 196, 105 hops);
+part 5 can either (a) check in a longer contiguous segment via a new
+`tools/harvest mithril-chain <depth>` mode, or (b) compose over the existing 12 standard
+`mithril-cert-*.json` (epochs 290–300, already hash-linked) plus the genesis cert+child —
+decide in the slice. NOTE: the 12 standard vectors are one contiguous epoch-290→300 run
+but do NOT reach genesis; option (a) (a real tip→genesis segment) is the honest close.
+
+Prior state (2026-07-11): **Mithril GENESIS ANCHOR shipped** (DoD line 4, part 3 of N).
 `src/mithril.rs::verify_genesis(cert, &genesis_vkey)` verifies the chain's trust
 root: it requires the cert be a genesis cert (`is_genesis` = non-empty
 `genesis_signature`), that `signed_message == protocol_message.compute_hash()` (so
