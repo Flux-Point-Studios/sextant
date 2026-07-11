@@ -25,9 +25,14 @@
 //!   re-serialized). A standard certificate binds its signed entity type and
 //!   multi-signature; a genesis certificate binds only its genesis signature.
 //!
-//! Signature verification (genesis Ed25519 anchor, STM multi-signature, AVK
-//! binding, full tip→genesis walk) are the subsequent Mithril slices; this one
-//! is the hash-chain integrity primitive they all ride on.
+//! [`verify_chain`] composes those hashes into the chain of trust: it walks a
+//! segment oldest→newest, checking each certificate's integrity, its `previous_hash`
+//! linkage, and the **AVK binding** — each certificate's aggregate verification key
+//! is the one its predecessor authorized (unchanged within an epoch, or the
+//! `next_aggregate_verification_key` the predecessor committed one epoch earlier).
+//!
+//! The genesis Ed25519 anchor and the STM multi-signature verify — the roots this
+//! chain of trust terminates in and rides on — are the subsequent Mithril slices.
 
 use std::collections::BTreeMap;
 
@@ -92,6 +97,117 @@ impl Certificate {
         }
         hex_lower(hasher.finalize().as_slice())
     }
+}
+
+/// A hash-linked, AVK-bound certificate chain segment verified on Sextant's own
+/// path. Names the endpoints so a caller can anchor on the tip certificate hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedChain {
+    /// Content hash of the oldest certificate in the segment (its parent lies
+    /// outside the segment — where the genesis anchor slice will terminate).
+    pub root_hash: String,
+    /// Content hash of the newest certificate in the segment.
+    pub tip_hash: String,
+    /// Number of certificates verified.
+    pub length: usize,
+}
+
+/// Why a certificate-chain segment failed to verify. Each variant carries the
+/// 0-based index (oldest = 0) of the offending certificate. Untrusted aggregator
+/// bytes make every failure an ordinary recoverable outcome, never a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainError {
+    /// The segment held no certificates.
+    Empty,
+    /// The certificate at `index` does not hash to its committed `hash`.
+    Hash { index: usize },
+    /// The certificate at `index`'s `previous_hash` is not its predecessor's
+    /// content hash — the segment is reordered, has a gap, or was spliced.
+    BrokenLink { index: usize },
+    /// The certificate at `index`'s aggregate verification key is not the one its
+    /// predecessor authorized (same-epoch AVK, or the predecessor's committed
+    /// next-epoch AVK) — a substituted signer set.
+    AvkBinding { index: usize },
+}
+
+impl core::fmt::Display for ChainError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ChainError::Empty => write!(f, "certificate chain segment is empty"),
+            ChainError::Hash { index } => {
+                write!(
+                    f,
+                    "certificate {index}: recomputed hash does not match the committed hash"
+                )
+            }
+            ChainError::BrokenLink { index } => {
+                write!(
+                    f,
+                    "certificate {index}: previous_hash does not link to its predecessor"
+                )
+            }
+            ChainError::AvkBinding { index } => write!(
+                f,
+                "certificate {index}: aggregate verification key not authorized by its predecessor"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+/// Verify that `certs` — oldest first (`certs[0]` the segment root, the last its
+/// tip) — form a hash-linked, AVK-bound Mithril certificate chain on Sextant's
+/// own path. Returns the verified segment's endpoints, or the offending
+/// certificate's index on the first failure.
+///
+/// Three composed guarantees, none of them the aggregator's own verdict:
+/// * **integrity** — every certificate's [`Certificate::compute_hash`] equals its
+///   committed `hash`;
+/// * **linkage** — each certificate's `previous_hash` is its predecessor's content
+///   hash, so no certificate can be reordered, dropped, or spliced;
+/// * **AVK binding** — each certificate's aggregate verification key is the one its
+///   predecessor authorized: unchanged within an epoch, or the
+///   `next_aggregate_verification_key` the predecessor committed one epoch earlier.
+///
+/// The AVK binding is what stops a self-consistent forged child — one that links
+/// correctly but carries an attacker's signer set — from being accepted; it is
+/// the chain of trust the genesis anchor terminates and the multi-signature signs.
+pub fn verify_chain(certs: &[Certificate]) -> Result<VerifiedChain, ChainError> {
+    if certs.is_empty() {
+        return Err(ChainError::Empty);
+    }
+    for (index, cert) in certs.iter().enumerate() {
+        if cert.compute_hash() != cert.hash {
+            return Err(ChainError::Hash { index });
+        }
+        if index == 0 {
+            continue;
+        }
+        let parent = &certs[index - 1];
+        if cert.previous_hash != parent.hash {
+            return Err(ChainError::BrokenLink { index });
+        }
+        let authorized = if cert.epoch == parent.epoch {
+            cert.aggregate_verification_key == parent.aggregate_verification_key
+        } else if cert.epoch == parent.epoch + 1 {
+            parent
+                .protocol_message
+                .message_parts
+                .get(&ProtocolMessagePartKey::NextAggregateVerificationKey)
+                .is_some_and(|next| *next == cert.aggregate_verification_key)
+        } else {
+            false
+        };
+        if !authorized {
+            return Err(ChainError::AvkBinding { index });
+        }
+    }
+    Ok(VerifiedChain {
+        root_hash: certs[0].hash.clone(),
+        tip_hash: certs[certs.len() - 1].hash.clone(),
+        length: certs.len(),
+    })
 }
 
 /// What a certificate signs. Only the variants present in real preprod vectors
