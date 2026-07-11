@@ -15,6 +15,13 @@ resolver = "3"
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
+[features]
+# Mithril certificate-chain verification. OFF by default so the default lib and
+# the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
+# no mithril-stm/blst wasm C-toolchain need). The harness exercises it on the
+# host via `--all-features`; the wasm and plain release builds exclude it.
+mithril = ["dep:serde", "dep:serde_json", "dep:chrono"]
+
 [dependencies]
 # `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
 # bodies use it) while consuming the whole block; alloc is no_std-compatible.
@@ -31,6 +38,13 @@ curve25519-dalek = { package = "amaru-curve25519-dalek", version = "3.2.0", defa
 # on the RustCrypto digest 0.9 family the dalek fork's `hash_from_bytes` expects.
 sha2 = { version = "0.9", default-features = false }
 blake2 = { version = "0.9", default-features = false }
+# Mithril-feature-only: parse the aggregator's JSON certificate on Sextant's own
+# path and compute `initiated_at`/`sealed_at` timestamp nanoseconds byte-exactly
+# to mithril-common (which uses chrono). All three are optional and gated by the
+# `mithril` feature, so they never enter the default/wasm trust-substrate graph.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+chrono = { version = "0.4", default-features = false, features = ["serde", "alloc"], optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"

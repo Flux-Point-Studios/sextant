@@ -9,5 +9,7 @@ pub mod ed25519;
 mod hash;
 pub mod header;
 pub mod kes;
+#[cfg(feature = "mithril")]
+pub mod mithril;
 pub mod nonce;
 pub mod vrf;
