@@ -319,6 +319,13 @@ tests SURFACED REAL mithril-stm DoS vectors (a first red-team pass returned BLOC
    instead of hanging the suite. In a chain walk the AVK is additionally pinned by AVK-binding; the
    guard makes standalone `verify_standard` safe on fully-untrusted bytes.
 
+**Carried LOW (re-red-team, non-blocking):** `MAX_STM_BLOB_HEX = 4 MiB` has the thinnest
+headroom of the four DoS caps vs a large mainnet `CardanoTransactions` aggregate (~1–2 MB
+observed). It is fail-closed (a bigger genuine cert → `MalformedSignature`, never a
+false-accept/panic/hang), and the target here is preprod (kilobyte certs). When a mainnet cert
+harvest lands (same tooling as the block harvest, needs network), measure the largest genuine sig
+blob and raise the constant to a few × above it (8–16 MiB).
+
 **Attacking next — DoD line 5: UTxO verification for the read path (design slice first).**
 The DoD says: decide snapshot-anchored vs proof-based in a design slice, then implement, with a
 negative test proving a tampered UTxO claim is rejected. The Mithril chain of trust just closed
