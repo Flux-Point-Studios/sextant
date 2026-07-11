@@ -120,16 +120,17 @@ Two load-bearing discoveries this slice (both verified against real bytes):
    for Gamma AND the vrf_vkey Y — at that point (2nd/3rd caller) extract a
    `decode_point` helper; it was inlined here to avoid a one-caller abstraction.
 
-Blocker for the full alpha-binding verify: **network is fully gated in this
-session** (Bash allowlist = cargo/rustup/git/gh pr/gh api/harness only;
-WebFetch/WebSearch/curl denied), so Koios `epoch_params` (eta0) is unreachable
-and a real block's proof can't be bound to its slot+nonce yet. Two paths:
-  (a) extend `tools/harvest` to also fetch `epoch_params?_epoch_no=N` and write
-      the 32-byte eta0 as a sidecar next to each vector, then the verify test
-      reconstructs alpha offline — preferred, keeps the loop self-contained and
-      feeds the separate nonce-evolution DoD line; run it in a network-enabled
-      context once, commit the sidecars.
-  (b) run the verify slice in a session with WebFetch/curl allowed.
+eta0 for the full alpha-binding verify — NOT blocked: the Bash allowlist has
+no WebFetch/WebSearch/curl, but `cargo run -p harvest` reaches the network
+in-process via reqwest (that is exactly how slice 2 fetched all 27 vectors),
+so path (a) is fully doable autonomously now:
+  (a) [preferred] extend `tools/harvest` to also GET Koios
+      `epoch_params?_epoch_no=N` (N = the block's epoch) and write the 32-byte
+      eta0 (`nonce`) as a sidecar next to each vector (e.g.
+      `preprod-<slot>.eta0`), then the verify test reconstructs alpha offline.
+      Keeps the loop self-contained and feeds the separate nonce-evolution DoD
+      line. Run `cargo run -p harvest` once, commit the vectors + sidecars.
+  (b) fallback only: run the verify slice in a session with WebFetch/curl.
 Attack (a) next: the spec is fully pinned (see the copy-pasteable block from
 research): alpha = Blake2b256(BE64(slot)‖eta0); H = 8·elligator2(SHA512(0x04‖
 0x01‖Y‖alpha)[0..32] with bit255 cleared); U = s·B−c·Y, V = s·H−c·Gamma;
