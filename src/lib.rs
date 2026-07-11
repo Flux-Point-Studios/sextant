@@ -5,6 +5,7 @@
 
 mod curve;
 pub mod ed25519;
+mod hash;
 pub mod header;
 pub mod kes;
 pub mod vrf;

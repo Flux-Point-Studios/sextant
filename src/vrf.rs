@@ -145,15 +145,10 @@ pub fn verify_praos_leader(
 /// commits to; exposed so a consumer (or a differential test) can reconstruct
 /// it for the same slot and epoch nonce.
 pub fn praos_vrf_input(slot: u64, eta0: &[u8; 32]) -> [u8; 32] {
-    use blake2::VarBlake2b;
-    use blake2::digest::{Update, VariableOutput};
-
-    let mut h = VarBlake2b::new(32).expect("32 is a valid Blake2b output length");
-    h.update(slot.to_be_bytes());
-    h.update(eta0);
-    let mut out = [0u8; 32];
-    h.finalize_variable(|res| out.copy_from_slice(res));
-    out
+    let mut input = [0u8; 40];
+    input[..8].copy_from_slice(&slot.to_be_bytes());
+    input[8..].copy_from_slice(eta0);
+    crate::hash::blake2b256(&input)
 }
 
 /// `hash_to_curve(Y, alpha) = 8 · Elligator2( SHA-512(0x04 || 0x01 || Y || alpha)[..32] )`.
