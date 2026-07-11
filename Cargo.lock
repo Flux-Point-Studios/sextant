@@ -1235,6 +1235,7 @@ dependencies = [
  "cardano-crypto",
  "hex",
  "minicbor 2.2.2",
+ "pallas-crypto",
  "pallas-traverse",
  "sha2 0.9.9",
 ]

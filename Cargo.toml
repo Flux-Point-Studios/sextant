@@ -35,6 +35,13 @@ blake2 = { version = "0.9", default-features = false }
 [dev-dependencies]
 hex = "0.4.3"
 pallas-traverse = "1.1.1"
+# Independent Ed25519 oracle for the operational-certificate differential: its
+# `key::ed25519` verify runs on cryptoxide (pure-Rust), not the dalek fork
+# Sextant's own path uses — so parity on the same (key, message, signature) is a
+# genuine cross-implementation check, satisfying the DoD's "byte-identical
+# verdicts to pallas". Already resolved transitively (pallas-traverse), so it
+# adds no new crate fetch.
+pallas-crypto = "1.1.1"
 # Pure-Rust ECVRF advertised 100% cardano-node compatible, with its own
 # libsodium-port Elligator2 hash-to-curve (`fe25519`/`elligator2`) independent
 # of the dalek fork's — the differential oracle that cross-checks Sextant's

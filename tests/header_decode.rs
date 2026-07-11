@@ -229,6 +229,57 @@ fn rejects_bad_vrf_result_shape() {
     );
 }
 
+/// The operational certificate (header_body index 8, `[hot_vkey(32), seq,
+/// kes_period, sigma(64)]`) must fail closed on every malformed shape: wrong
+/// arity, a non-bytes key, or an off-length signature — none may reshape into
+/// an attacker-chosen certificate the KES/opcert verifier then trusts.
+#[test]
+fn rejects_bad_opcert_shape() {
+    // Valid header_body idx 0-7, then the operational_cert (idx 8) as the tail.
+    let base = {
+        let mut s = String::from("820785828a0000f6"); // [7,[[<10>, bn=0, slot=0, prev=null,
+        s.push_str("5820");
+        s.push_str(&"00".repeat(32)); // issuer_vkey
+        s.push_str("5820");
+        s.push_str(&"00".repeat(32)); // vrf_vkey
+        s.push_str("825840");
+        s.push_str(&"00".repeat(64)); // vrf_output
+        s.push_str("5850");
+        s.push_str(&"00".repeat(80)); // vrf_proof
+        s.push_str("00"); // block_body_size = 0
+        s.push_str("5820");
+        s.push_str(&"00".repeat(32)); // block_body_hash
+        s
+    };
+    let with = |tail: &str| unhex(&format!("{base}{tail}"));
+
+    // opcert arity 3, not 4
+    let mut a = String::from("835820");
+    a.push_str(&"00".repeat(32)); // hot_vkey
+    a.push_str("0000"); // seq, kes_period — sigma missing
+    assert_eq!(
+        HeaderView::from_block_cbor(&with(&a)),
+        Err(DecodeError::MalformedCbor),
+    );
+
+    // hot_vkey a uint where a 32-byte key is required
+    assert_eq!(
+        HeaderView::from_block_cbor(&with("8400000000")),
+        Err(DecodeError::MalformedCbor),
+    );
+
+    // valid hot_vkey/seq/period, then sigma one byte short (63)
+    let mut c = String::from("845820");
+    c.push_str(&"00".repeat(32)); // hot_vkey
+    c.push_str("0000"); // seq = 0, kes_period = 0
+    c.push_str("583f");
+    c.push_str(&"00".repeat(63)); // sigma: 63 bytes (one short)
+    assert_eq!(
+        HeaderView::from_block_cbor(&with(&c)),
+        Err(DecodeError::BadHashLen(63)),
+    );
+}
+
 /// Finding 4: trailing bytes after a valid block must be rejected.
 #[test]
 fn rejects_trailing_bytes() {
