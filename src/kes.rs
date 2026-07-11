@@ -4,9 +4,12 @@
 //! A header's operational certificate binds an ephemeral hot KES key to the
 //! pool's registered cold key: the cold key (the header's `issuer_vkey`)
 //! Ed25519-signs `hot_vkey ‖ BE64(sequence_number) ‖ BE64(kes_period)`, matching
-//! cardano-ledger's `OCertSignable`. Verifying it proves a header was produced
-//! under a real pool's authority — a spoofed header cannot borrow another
-//! pool's identity without its cold key.
+//! cardano-ledger's `OCertSignable`. Verifying it proves the pool's cold key
+//! authorized this hot KES key — the cold→hot delegation only. It does not by
+//! itself prove the block body was signed with that key; the header's KES
+//! body-signature (a later slice) closes that. A spoofed header can copy a
+//! genuine opcert, but without the hot KES secret it cannot produce the body
+//! signature that this opcert's hot key must then verify.
 
 use crate::ed25519;
 use crate::header::OpCert;
