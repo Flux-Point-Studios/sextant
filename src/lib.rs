@@ -4,3 +4,4 @@
 //! Byte providers supply input; Sextant never trusts them for a verdict.
 
 pub mod header;
+pub mod vrf;
