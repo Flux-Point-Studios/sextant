@@ -163,7 +163,24 @@ schema so a Conway-body-labeled-Babbage block cannot pass full validation.
 KES + operational-certificate verification (Plan item 5 — the second half of
 DoD line 2). pallas-crypto 1.1.1 ships a `kes` feature usable as the
 differential oracle here (unlike VRF, which it lacks). Branch from the merged
-`main` (slice 4 is in). The prior slice-4 CI blocker (Woodpecker runner could
-not fetch the new obscure crates) is resolved — pipeline 40 is green on the
-merged deps; if a future slice adds more obscure crates and CI fails fast on
-fetch again, the fix is on the runner (crates.io egress / mirror), not the code.
+`main` (slice 4 is in).
+
+Concrete shape (two independent checks per header):
+1. Operational certificate: the pool's COLD key (`issuer_vkey`, header_body
+   idx 3) Ed25519-signs `hot_kes_vkey ‖ BE64(sequence_number) ‖ BE64(kes_period)`.
+   The opcert lives at header_body idx 8 = `[hot_vkey(32), seq(uint),
+   kes_period(uint), sigma(64)]`. Ed25519 verify is already available (amaru
+   dalek fork).
+2. KES signature: `body_signature` (header idx 1) is a Cardano `Sum6Kes`
+   signature (binary Merkle sum of Ed25519, depth 6 = 64 periods) over the
+   header_body bytes, at period `slot_kes_period = (slot - opcert.kes_period·..)`
+   — get the exact period math from pallas-crypto/cardano-node.
+PREFER implementing Sum6Kes verification on the EXISTING substrate (amaru
+dalek Ed25519 + blake2, both already deps) over adding another obscure KES
+crate — keeps the trust substrate minimal (Constraint) and avoids the slice-4
+CI dep-fetch pain. Differentially check the verdict against pallas-crypto's
+`kes` on the same header bytes; anchor on the 27 real vectors.
+
+The slice-4 CI blocker (runner couldn't fetch obscure crates) is resolved —
+pipeline 40 green; if CI fails-fast on fetch again, the fix is the runner
+(crates.io egress / mirror), not the code.
