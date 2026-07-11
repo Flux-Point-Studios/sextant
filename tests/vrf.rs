@@ -191,7 +191,8 @@ fn real_preprod_leader_proofs_verify() {
 }
 
 /// Sextant's accept/reject verdict and certified output agree, on the same
-/// inputs, with an independent non-dalek reimplementation (`cardano-crypto`).
+/// inputs, with `cardano-crypto`, whose Elligator2 hash-to-curve is an
+/// independent libsodium port (the error-prone step both must get right).
 #[test]
 fn verdict_matches_independent_oracle() {
     for c in leader_cases() {
