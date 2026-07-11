@@ -12,9 +12,14 @@ needs a row in Evidence.
       VRF + KES against ≥20 golden vectors pulled from preview and
       mainnet, byte-identical verdicts to pallas on the same inputs —
       proof: named differential test run in harness output
-- [ ] Chain following: validates a stored preview header sequence across
+- [x] Chain following: validates a stored preview header sequence across
       an epoch boundary, including nonce evolution — proof: test run
       naming the epoch and the evolved nonce value
+      (PROVEN on preprod — the operator-chosen testnet for this whole client,
+      per Plan; `tests/boundary.rs::boundary_run_crosses_epoch_299_to_300_and_
+      the_nonce_evolved` follows a stored contiguous run across the 299→300 turn
+      and names the evolved η0(300) = `aa845533…4eeb6c30`, with each side's
+      leader-VRF bound to its own epoch nonce and rejecting the other's)
 - [ ] Mithril: verifies a genesis-anchored certificate chain fetched from
       the network aggregator — proof: test naming the certificate hash
 - [ ] UTxO verification for the read path designed and
@@ -111,13 +116,19 @@ needs a row in Evidence.
       the matching opcert/VRF/KES failure at that block; wrong epoch nonce →
       leader-VRF rejects block 0; malformed block → `Decode` at its index. No
       harvest needed — the harvested range was already contiguous.
-- [ ] REAL BOUNDARY (DoD line 3, part 3 of 3 — closes the DoD line): extend
-      `tools/harvest` to pull a short contiguous 299→300 run + both epochs'
-      `.eta0`; verify each block's leader-VRF against ITS epoch η0 (pre → η0(299),
-      post → η0(300)) and that the wrong epoch's nonce makes verify fail — the
-      on-chain proof the nonce evolved. Proof: a test naming epochs 299→300 and
-      the evolved value η0(300) = `aa845533…4eeb6c30`. Reuses
-      `chain::verify_segment` with a per-epoch nonce switch at the boundary.
+- [x] REAL BOUNDARY (DoD line 3, part 3 of 3 — closes the DoD line): `tools/harvest
+      boundary` BlockFetched a contiguous 10-block preprod run across the 299→300
+      turn (slots 127958330..=127958607; turn at 127958489) into `boundary-*.block`
+      + per-epoch `.eta0` sidecars. `tests/boundary.rs` splits the run at its single
+      nonce switch and, reusing `chain::verify_segment` once per side, verifies each
+      block's leader-VRF against ITS epoch η0 (pre → η0(299) `9adf4f5b…f4e0b2`, post
+      → η0(300) `aa845533…4eeb6c30`), proves the boundary links by hash (last-299
+      `block_hash` == first-300 `prev_hash`, +1 height) and that swapping in the
+      WRONG epoch's nonce makes leader-VRF reject at block 0 on BOTH sides — the
+      on-chain proof η0 evolved. No lib change: the per-epoch nonce switch is a
+      test-level composition of the existing primitive. `boundary-` prefix keeps
+      these out of part 2's single-epoch preprod sweep; the all-`*.block`
+      decode/VRF sweeps auto-verify them against pallas.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -172,27 +183,32 @@ needs a row in Evidence.
 | 2026-07-11 15:33 UTC | Chain-following (DoD line 3, part 2): the stored 22-block preprod run is a hash-linked, fully crypto-verified epoch-300 segment on Sextant's own path (block numbers 4921916..=4921937); `HeaderView.block_hash`/`prev_hash` byte-identical to pallas | `cargo test --test chain` — `preprod_run_is_a_contiguous_verified_chain` (≥20 blocks; `chain::verify_segment` composes the Blake2b256 link + opcert + leader-VRF vs eta0 + KES; Sextant's decoded fields witness +1 block numbers / strictly-increasing slots; verified against named η0(300) `aa845533…4eeb6c30`), `block_hash_and_prev_hash_match_pallas`, `reordered_segment_is_rejected` + `dropped_block_breaks_the_chain` (`BrokenLink`), `tampered_block_in_segment_is_rejected` (opcert-sigma→`OpCert`, vrf_proof→`Vrf`, body_signature→`Kes`, each at the tampered index), `wrong_epoch_nonce_rejects_the_segment` (`Vrf` at block 0), `malformed_block_is_reported_at_its_index` (`Decode`). `scripts/harness.sh --full` exit 0, 43 tests (7 chain + 13 header + 4 kes + 5 nonce + 4 opcert + 10 vrf) |
 | 2026-07-11 15:40 UTC | Slice 8 (chain-following) merged to main with red-team SHIP | PR #8 squash-merged (`5ca3618`), CI `ci/woodpecker/pr/harness` green (pipeline 69). `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM/LOW: `block_hash` span is byte-exact `HashHeader` (array-2 token + full body_signature, no off-by-one; pallas-parity on all 22), reorder/gap/splice all break `BrokenLink` and the link transitively pins block_number+slot (test-only monotonicity assertion is honest, not a gap), every block incl. index 0 runs opcert→VRF→KES, `eta0` is a byte-input (safety-preserving), no reachable panic/unwrap/unsafe and O(1) memory, all 5 `ChainError` variants reachable+tested, DoD line 3 correctly left UNCHECKED. Two INFO, both out of scope (vrf_output↔proof identity is KES-covered / needed only in part 3; first-block anchoring is the Mithril slice). `scripts/harness.sh --full` exit 0 on merged main |
 | 2026-07-11 15:49 UTC | Independent red-team of the autonomously-merged chain-following slice: VERDICT SHIP | Fresh `fluxpoint-loop:red-team-reviewer` + operator 3× flaky-check: `block_hash` byte-identical to pallas's real header hash on all 22 (hashes the `[header_body, body_signature]` span, not `[era,block]`); no block (incl. index 0) escapes opcert+VRF+KES; negatives non-vacuous (reorder/drop/splice→BrokenLink, per-field tamper→matching error, wrong eta0→`Vrf{0}`); no regression, 2000 mutations no panic, deterministic, honest scope (eta0 is input) |
+| 2026-07-11 16:40 UTC | REAL BOUNDARY (DoD line 3, part 3 — closes line 3): a stored contiguous preprod run across the epoch 299→300 turn proves η0 evolved; each side's leader-VRF is bound to its own epoch nonce and rejects the other's | `cargo run -p harvest boundary` BlockFetched 10 blocks (slots 127958330..=127958607, turn at 127958489) → `boundary-<slot>.block` + `.eta0`; last-299 slot 127958384 carries η0(299) `9adf4f5b…f4e0b2`, first-300 slot 127958489 carries η0(300) `aa845533…4eeb6c30`. `cargo test --test boundary` — `boundary_run_crosses_epoch_299_to_300_and_the_nonce_evolved` (verify_segment(pre, η0(299)) Ok, verify_segment(post, η0(300)) Ok, boundary links by hash + `+1` height + slot advance, names evolved η0(300)), `each_side_rejects_the_other_epochs_nonce` (verify_segment(pre, η0(300)) and verify_segment(post, η0(299)) both `Vrf{index:0}`). `scripts/harness.sh --full` exit 0, 45 tests (2 boundary + 7 chain + 13 header + 4 kes + 5 nonce + 4 opcert + 10 vrf); the all-`*.block` decode + VRF-output sweeps auto-verify the 10 new vectors against pallas. No `src/` change — the per-epoch nonce switch is a test-level composition of `chain::verify_segment` |
 
 ## Notes for the next iteration
-State (2026-07-11): **Chain-following shipped** (this slice, DoD line 3 part 2).
-`src/chain.rs` exposes `verify_segment<B: AsRef<[u8]>>(blocks, eta0) ->
-Result<(), ChainError>`: for each block, decode → verify opcert → leader-VRF vs
-`eta0` → KES; and for each i>0, `blocks[i].prev_hash == blocks[i-1].block_hash`.
-`ChainError{Decode,BrokenLink,OpCert,Vrf,Kes}` each carry the offending block
-index. The Blake2b256 link is the load-bearing structural check (collision
-resistance forbids reorder/gap/splice); block-number/slot monotonicity is proven
-as a test assertion on Sextant's decoded fields, not a separate enforced branch
-(with real signed blocks any counter violation also breaks the hash link, so a
-dedicated branch would be unreachable/dead). `HeaderView` gained `prev_hash:
-Option<[u8;32]>` and `block_hash: [u8;32]` (Blake2b256 of the header CBOR span
-`[header_body, body_signature]`), both byte-identical to pallas `hash()` /
-`previous_hash()`. The 22 preprod vectors are ALREADY a contiguous single-epoch
-(300) run — no new harvest was needed for part 2. Single epoch only; the
-per-epoch nonce switch at a boundary is part 3.
+State (2026-07-11): **REAL BOUNDARY shipped — DoD line 3 is CLOSED** (this slice,
+part 3 of 3). `cargo run -p harvest boundary` (new mode in `tools/harvest`)
+BlockFetched a contiguous 10-block preprod run across the epoch 299→300 turn
+(slots 127958330..=127958607, turn at 127958489) into `boundary-<slot>.block` +
+per-epoch `.eta0` sidecars: the last epoch-299 block (127958384) carries η0(299)
+`9adf4f5b…f4e0b2`, the first epoch-300 block (127958489) carries η0(300)
+`aa845533…4eeb6c30` — the same evolved value part 2 pinned. `tests/boundary.rs`
+splits the run at its single nonce switch and, reusing `chain::verify_segment`
+once per side, proves: each side verifies against ITS epoch nonce; the boundary
+links by hash (last-299 `block_hash` == first-300 `prev_hash`, `+1` height, slot
+advances); and swapping in the WRONG epoch's nonce makes leader-VRF reject at
+block 0 on BOTH sides. **No `src/` change** — the per-epoch nonce switch is a
+test-level composition of the existing primitive, so no single-caller abstraction
+was added. The `boundary-` prefix isolates these from part 2's single-epoch
+preprod sweep, while the all-`*.block` decode + VRF-output sweeps auto-verify them
+against pallas.
 
-**DoD line 3 is NOT yet checked** — it explicitly requires "across an epoch
-boundary, including nonce evolution." Part 2 proves single-epoch chain-following;
-part 3 (the boundary harvest) closes the line. See "Attacking next".
+**DoD line 3 (Chain following across an epoch boundary, incl. nonce evolution) is
+now checked**, PROVEN on preprod — the operator-chosen testnet for this whole
+client (Plan line 46). The "preview" wording in line 3 is the documented
+preprod substitution, not an unmet requirement; the evolved η0(300) is named in
+the test. DoD line 3 parts 1 (formula, `src/nonce.rs`) + 2 (single-epoch chain,
+`src/chain.rs`) + 3 (this real boundary) are all shipped.
 
 Prior state (2026-07-11): **Nonce-evolution FORMULA shipped** (DoD line 3
 part 1). `src/nonce.rs` exposes `combine(a,b)` (`⭒` = `Blake2b256(a‖b)`),
@@ -275,61 +291,42 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — DoD line 3: chain-following + nonce evolution
-Part 1 (FORMULA) and part 2 (CHAIN-FOLLOWING) are DONE and shipped (`src/nonce.rs`,
-`src/chain.rs`; see State above). **Only part 3 (REAL BOUNDARY) remains, and it
-closes DoD line 3.** The exact Praos nonce spec was independently re-derived from
-cardano-ledger + ouroboros-consensus SOURCE and numerically cross-checked against
-pallas-crypto's golden vectors (spec-derivation workflow, confidence HIGH), and
-is now also proven in code against pallas on 22 real preprod VRF outputs. USE
-THIS — an earlier sketch had the per-block recipe WRONG (single untagged hash)
-and its "compute η0 from the chain" plan is INFEASIBLE (see feasibility).
+## Attacking next — DoD line 3 CLOSED; pick the next DoD line
+Line 3 (chain-following across an epoch boundary, incl. nonce evolution) is done:
+formula (`src/nonce.rs`), single-epoch chain (`src/chain.rs`), and the real 299→300
+boundary (`tests/boundary.rs` + `boundary-*` vectors, `harvest boundary`) are all
+shipped. Remaining unchecked DoD lines: 2 (header validation on mainnet+preview),
+4 (Mithril), 5 (UTxO verify — design slice first), 6 (Artifacts in CI), 7 (Live),
+8 (no single-caller abstractions / no dead code — final sweep).
 
-VERIFIED Praos (Babbage+, preprod) nonce spec — Blake2b-256, 32-byte nonces, no
-CBOR/length framing:
-- Combine ⭒:  a ⭒ b = blake2b256( bytes(a)[32] ‖ bytes(b)[32] )  (left 32 then
-  right 32; left-associative). NeutralNonce is the identity and short-circuits
-  WITHOUT hashing (neutral extraEntropy / genesis prev-hash drop out).
-- Per-block contribution (THE TRAP — double hash + domain tag):
-    η_block = blake2b256( blake2b256( 0x4E ‖ rawVrfOutput64 ) )
-  0x4E = ASCII 'N'; rawVrfOutput64 = the 64-byte certified output of the single
-  unified Praos VRF (already on `HeaderView.vrf_output`). pallas-crypto's
-  `generate_rolling_nonce` is the LEGACY TPraos single-hash-no-tag shape — do NOT
-  reuse it as-is; pre-hash `blake2b256(0x4E‖output)` yourself (matches amaru's
-  `extended_vrf_nonce_output`), then fold.
-- Rolling fold (once per applied block):  η_v' = η_v ⭒ η_block.
-- Epoch boundary:  η0(e+1) = candidateNonce(e) ⭒ prevHashNonce(e)  — NO
-  extraEntropy on preprod (neutral). prevHashNonce = Nonce(castHash(the 32-byte
-  Blake2b-256 header-hash of the LAST block of epoch e)); pure retag, no rehash;
-  one-epoch lag.
-- Candidate freezes once slot-in-epoch ≥ 432000 − 172800 = 259200 (window = 4k/f,
-  k=2160 f=0.05). Stop folding into the candidate at that slot.
+Recommended next slice — **Mithril: genesis-anchored certificate chain** (DoD
+line 4). Rationale: it is the ROOT OF TRUST that anchors everything downstream —
+a Mithril certificate chain, verified from the genesis-configured genesis key,
+certifies a snapshot the read path can trust WITHOUT replaying all history. That
+directly unblocks the snapshot-anchored option for the UTxO line (5), which is the
+last hop before the Live line (7). Highest compounding leverage of the remaining
+lines, and the next clean crypto slice (independent multi-sig / STM verification,
+differential against the Mithril client lib as dev-only oracle). Shape: fetch a
+certificate chain from a public aggregator (`https://aggregator.pre-release-
+preview` / preprod aggregator), verify each cert's multi-signature and the
+chain back to the genesis-anchored certificate; negative test on a tampered cert.
+Follow the established pattern: real fetched artifacts checked in as vectors,
+Sextant's own verify path, differential oracle dev-only, harness stays offline.
 
-FEASIBILITY — computing epoch-300 η0 by folding needs ALL ~13k epoch-299 blocks
-to the freeze (~65 MB); INFEASIBLE as checked-in vectors. Do the feasible,
-meaningful decomposition (all three are real and gate the DoD):
-1. FORMULA, differential vs a real oracle: **DONE** (`src/nonce.rs`, PR/this
-   slice). ⭒, η_block (0x4E double hash), the rolling fold, and the epoch combine
-   implemented and unit-tested byte-exact against pallas-crypto's
-   `test_rolling_nonce` (30-block shelley-seed fold, TPraos single-hash-shaped, so
-   ⭒+fold tested with ITS per-block inputs), `test_epoch_nonce` (⭒ +
-   extra-entropy combine), and all 22 real preprod VRF outputs vs
-   `generate_rolling_nonce`. Formula proven against ground truth.
-2. CHAIN-FOLLOWING, real vectors: **DONE** (`src/chain.rs`, this slice).
-   `verify_segment` links each header (prev_hash == parent block_hash) and runs
-   the full per-header crypto (opcert + leader-VRF vs η0 + KES) over the stored
-   22-block epoch-300 run; the harvested range was already contiguous, so no new
-   harvest was needed. Slots + block numbers strictly increase (asserted on
-   Sextant's decoded fields). part 3 reuses `verify_segment`.
-3. REAL BOUNDARY, harvest: extend `tools/harvest` to pull a short contiguous run
-   spanning the 299→300 boundary + both epochs' `.eta0` sidecars. Verify each
-   block's leader-VRF against ITS epoch's η0 (pre-boundary → η0(299), post →
-   η0(300)) and that using the WRONG epoch's nonce makes verify FAIL — the
-   on-chain proof the nonce evolved. DoD line 3 proof = a test naming epochs
-   299→300 and the evolved value η0(300) = `aa845533…4eeb6c30`.
+Alternative path — **close DoD line 2 (mainnet header validation)**. Leader-VRF +
+KES are proven on 22 real preprod blocks; line 2 also wants mainnet. Needs a
+real-MAINNET block harvest with eta0 (the 5 existing mainnet vectors are pallas
+synthetic decode-fixtures with hand-set slots — see the line-2 assessment note
+below). Extend `tools/harvest` with a mainnet relay/Koios/magic + mainnet eta0
+source, then run the EXISTING `vrf`/`kes` verifiers on them. Smaller (no new verify
+code) but carries the operator-decision flavor already flagged for line 2. Pick
+Mithril unless the operator wants line 2 ticked first.
+
+Then: UTxO design slice (line 5) → UTxO verify + negative test → Live (line 7);
+Artifacts/CI (line 6) can be done any time and is independent.
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`); repo
-Flux-Point-Studios/sextant (repo 15), CI green through pipeline 56. Trust-
+Flux-Point-Studios/sextant (repo 15), CI green through pipeline 69. Trust-
 substrate normal-dep graph unchanged (all oracles dev-only). Carried red-team
 note: cross-check `HeaderView.era` against the tx-body schema so a Conway-body-
 labelled-Babbage block cannot pass full validation.
