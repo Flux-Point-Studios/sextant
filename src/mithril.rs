@@ -38,14 +38,30 @@
 //! verification key, after checking that `signed_message` binds the certificate's
 //! protocol message (and thus the genesis AVK the chain rises from).
 //!
-//! The STM multi-signature verify — the root each *standard* certificate rides on
-//! — is the subsequent Mithril slice.
+//! [`verify_standard`] verifies the other root: every *standard* certificate is
+//! authorized by an STM (stake-based threshold multi-signature) over its
+//! `signed_message` under its own aggregate verification key. The BLS
+//! aggregate / lottery-eligibility / Merkle-batch check is the composed
+//! [`mithril_stm`] primitive; the wire deserialize, parameter assembly, and
+//! message binding are Sextant's own path. The full tip→genesis walk that
+//! composes all three (`verify_genesis`, `verify_chain`, `verify_standard`) is
+//! the subsequent Mithril slice.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use mithril_stm::{
+    AggregateSignature, AggregateVerificationKey, AggregateVerificationKeyForConcatenation,
+    MithrilMembershipDigest, Parameters,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+/// The membership digest mithril uses on its release networks — a Blake2b-256
+/// Merkle commitment over the registered signer keys. It is the `D` type
+/// parameter every STM structure ([`AggregateSignature`],
+/// [`AggregateVerificationKey`], [`Parameters`]) is generic over.
+type StmDigest = MithrilMembershipDigest;
 
 /// A Mithril certificate as served by the aggregator (`GET /certificate/{hash}`).
 /// Only the fields that feed [`Certificate::compute_hash`] (plus the chain-link
@@ -88,6 +104,14 @@ impl Certificate {
     /// distinction on the presence of a genesis signature.
     pub fn is_genesis(&self) -> bool {
         !self.genesis_signature.is_empty()
+    }
+
+    /// Whether `signed_message` is the hash of `protocol_message`. This is the
+    /// binding that makes a signature over `signed_message` transitively commit to
+    /// the protocol message — and thus to the certificate's next-epoch AVK. Both
+    /// the genesis and standard verifiers require it before trusting a signature.
+    fn signed_message_binds_protocol_message(&self) -> bool {
+        self.signed_message == self.protocol_message.compute_hash()
     }
 
     /// Recompute the certificate's content hash (lowercase hex), byte-identical
@@ -280,13 +304,120 @@ pub fn verify_genesis(cert: &Certificate, genesis_vkey: &[u8; 32]) -> Result<(),
         return Err(GenesisError::NotGenesis);
     }
     let sig = decode_hex_64(&cert.genesis_signature).ok_or(GenesisError::MalformedSignature)?;
-    if cert.signed_message != cert.protocol_message.compute_hash() {
+    if !cert.signed_message_binds_protocol_message() {
         return Err(GenesisError::MessageMismatch);
     }
     if !crate::ed25519::verify(genesis_vkey, cert.signed_message.as_bytes(), &sig) {
         return Err(GenesisError::InvalidSignature);
     }
     Ok(())
+}
+
+/// Why a standard certificate failed to verify. Untrusted aggregator bytes make
+/// every failure a recoverable outcome, never a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StandardError {
+    /// The certificate is not a standard certificate — it carries no STM
+    /// multi-signature (it is a genesis certificate, or malformed).
+    NotStandard,
+    /// `signed_message` is not the hash of `protocol_message`: the signed content
+    /// does not bind this certificate's protocol message (and its AVK).
+    MessageMismatch,
+    /// The `aggregate_verification_key` field is not hex-encoded STM AVK JSON.
+    MalformedAvk,
+    /// The `multi_signature` field is not hex-encoded STM signature JSON.
+    MalformedSignature,
+    /// The STM multi-signature does not verify under the certificate's aggregate
+    /// verification key, message, and protocol parameters.
+    InvalidMultiSignature,
+}
+
+impl core::fmt::Display for StandardError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            StandardError::NotStandard => write!(f, "certificate carries no STM multi-signature"),
+            StandardError::MessageMismatch => {
+                write!(f, "signed_message does not bind the protocol message")
+            }
+            StandardError::MalformedAvk => {
+                write!(f, "aggregate verification key is not valid STM AVK JSON")
+            }
+            StandardError::MalformedSignature => {
+                write!(f, "multi_signature is not valid STM signature JSON")
+            }
+            StandardError::InvalidMultiSignature => {
+                write!(f, "STM multi-signature does not verify")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StandardError {}
+
+/// Verify a Mithril *standard* certificate's STM multi-signature — the authority
+/// every non-genesis certificate rides on — on Sextant's own path.
+///
+/// A standard certificate is authorized not by the genesis key but by a
+/// stake-based threshold multi-signature (STM): enough of the epoch's registered
+/// signers, weighted by stake and each winning enough Praos-style lotteries,
+/// jointly signed its `signed_message`. Accepting it requires:
+/// * the certificate is a standard certificate (it carries a multi-signature);
+/// * its `signed_message` is the hash of its `protocol_message`, so the signature
+///   transitively commits to the certificate's next-epoch AVK (the chain link);
+/// * the STM multi-signature verifies over `signed_message.as_bytes()` under the
+///   certificate's own `aggregate_verification_key` and the protocol parameters in
+///   its metadata.
+///
+/// The wire deserialize, parameter assembly, and message binding are Sextant's own
+/// code; the BLS aggregate / lottery-eligibility / Merkle-batch check is the
+/// composed [`mithril_stm`] primitive (as EC arithmetic is composed for the header
+/// VRF). This proves the certificate is *self*-authorized; that its AVK is the one
+/// its predecessor committed is [`verify_chain`]'s AVK binding, and that the chain
+/// terminates in the genesis root is [`verify_genesis`]'s — the full chain of
+/// trust is those three composed.
+pub fn verify_standard(cert: &Certificate) -> Result<(), StandardError> {
+    if cert.is_genesis() || cert.multi_signature.is_empty() {
+        return Err(StandardError::NotStandard);
+    }
+    if !cert.signed_message_binds_protocol_message() {
+        return Err(StandardError::MessageMismatch);
+    }
+
+    let avk_json =
+        decode_hex(&cert.aggregate_verification_key).ok_or(StandardError::MalformedAvk)?;
+    let concat_avk: AggregateVerificationKeyForConcatenation<StmDigest> =
+        serde_json::from_slice(&avk_json).map_err(|_| StandardError::MalformedAvk)?;
+    let avk = AggregateVerificationKey::new(concat_avk);
+
+    let sig_json = decode_hex(&cert.multi_signature).ok_or(StandardError::MalformedSignature)?;
+    let multi_sig: AggregateSignature<StmDigest> =
+        serde_json::from_slice(&sig_json).map_err(|_| StandardError::MalformedSignature)?;
+
+    let p = &cert.metadata.protocol_parameters;
+    let params = Parameters {
+        m: p.m,
+        k: p.k,
+        phi_f: p.phi_f,
+    };
+
+    multi_sig
+        .verify(cert.signed_message.as_bytes(), &avk, &params)
+        .map_err(|_| StandardError::InvalidMultiSignature)
+}
+
+/// Decode an even-length hex string — the aggregator's json-hex encoding of the
+/// AVK and multi-signature — into its bytes, or `None` on an odd length or a
+/// non-hex digit. The length-bounded input never forces an unbounded allocation.
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    let bytes = hex.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        out.push((hex_val(pair[0])? << 4) | hex_val(pair[1])?);
+    }
+    Some(out)
 }
 
 /// Decode exactly 128 lowercase-or-uppercase hex chars into 64 bytes, or `None`

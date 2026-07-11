@@ -20,7 +20,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
 # no mithril-stm/blst wasm C-toolchain need). The harness exercises it on the
 # host via `--all-features`; the wasm and plain release builds exclude it.
-mithril = ["dep:serde", "dep:serde_json", "dep:chrono"]
+mithril = ["dep:serde", "dep:serde_json", "dep:chrono", "dep:mithril-stm"]
 
 [dependencies]
 # `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
@@ -45,6 +45,14 @@ blake2 = { version = "0.9", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 chrono = { version = "0.4", default-features = false, features = ["serde", "alloc"], optional = true }
+# Mithril-feature-only: the STM (stake-based threshold multi-signature) verify
+# primitive that authorizes every *standard* certificate. Composed for the BLS
+# aggregate/lottery/Merkle-batch verify only (as curve25519-dalek is composed for
+# EC arithmetic); Sextant owns the orchestration — wire deserialize, parameter
+# assembly, signed-message and AVK-chain binding — in src/mithril.rs. Rides blst
+# `portable`; `num-integer-backend` avoids GMP (`rug`), which would break wasm —
+# and the whole thing stays behind the `mithril` feature, out of default+wasm.
+mithril-stm = { version = "0.10.5", default-features = false, features = ["num-integer-backend"], optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"
