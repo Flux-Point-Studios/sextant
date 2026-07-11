@@ -29,6 +29,14 @@ pub struct HeaderView {
     pub era: u8,
     pub block_number: u64,
     pub slot: u64,
+    /// The parent block's header hash (`block_hash` of the predecessor), or
+    /// `None` for the genesis block whose parent is absent. A chain follower
+    /// checks this against the previous header's [`HeaderView::block_hash`].
+    pub prev_hash: Option<[u8; 32]>,
+    /// This header's own Blake2b-256 hash over its CBOR (`[header_body,
+    /// body_signature]`) — the value the next block's `prev_hash` references,
+    /// matching cardano-node's `HashHeader`.
+    pub block_hash: [u8; 32],
     /// The pool's cold verification key. It signs the operational certificate,
     /// so `kes::verify_opcert(&issuer_vkey, &opcert)` authenticates the header's
     /// hot KES key against the pool's registered identity.
@@ -119,6 +127,9 @@ impl HeaderView {
         }
 
         expect_array(&mut d, BLOCK_LEN)?; // block
+        // The block hash is Blake2b256 over the header CBOR (`[header_body,
+        // body_signature]`); record its span from the opening array token.
+        let header_start = d.position();
         expect_array(&mut d, 2)?; // header: [header_body, body_signature]
         // The KES-signed message is the raw CBOR of header_body; record the span
         // from the opening array token through the last consumed element.
@@ -127,7 +138,7 @@ impl HeaderView {
 
         let block_number = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
         let slot = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
-        read_optional_hash32(&mut d)?; // prev_hash: 32-byte hash or genesis null
+        let prev_hash = read_optional_hash32(&mut d)?; // 32-byte parent hash or genesis null
         let issuer_vkey = read_bytes_exact::<32>(&mut d)?;
         let vrf_vkey = read_bytes_exact::<32>(&mut d)?;
         expect_array(&mut d, 2)?; // vrf_result = [vrf_output, vrf_proof]
@@ -141,6 +152,8 @@ impl HeaderView {
 
         // header array index 1: the Sum6-KES body signature over header_body.
         let body_signature = read_bytes_exact::<KES_SIGNATURE_LEN>(&mut d)?;
+        // The header CBOR is now fully consumed; hash it for the chain link.
+        let block_hash = crate::hash::blake2b256(&bytes[header_start..d.position()]);
 
         // Consume the remainder so trailing or malformed bytes anywhere in the
         // input are rejected, not silently ignored.
@@ -155,6 +168,8 @@ impl HeaderView {
             era: era as u8, // validated to 6 | 7 above
             block_number,
             slot,
+            prev_hash,
+            block_hash,
             issuer_vkey,
             vrf_vkey,
             vrf_output,
@@ -205,16 +220,17 @@ fn read_opcert(d: &mut Decoder<'_>) -> Result<OpCert, DecodeError> {
 }
 
 /// Read a 32-byte prev_hash, or `null` for the genesis block's absent parent.
-fn read_optional_hash32(d: &mut Decoder<'_>) -> Result<(), DecodeError> {
+fn read_optional_hash32(d: &mut Decoder<'_>) -> Result<Option<[u8; 32]>, DecodeError> {
     match d.datatype().map_err(|_| DecodeError::MalformedCbor)? {
-        Type::Null => d.skip().map_err(|_| DecodeError::MalformedCbor),
+        Type::Null => {
+            d.skip().map_err(|_| DecodeError::MalformedCbor)?;
+            Ok(None)
+        }
         Type::Bytes => {
             let b = d.bytes().map_err(|_| DecodeError::MalformedCbor)?;
-            if b.len() == 32 {
-                Ok(())
-            } else {
-                Err(DecodeError::BadHashLen(b.len()))
-            }
+            b.try_into()
+                .map(Some)
+                .map_err(|_| DecodeError::BadHashLen(b.len()))
         }
         _ => Err(DecodeError::MalformedCbor),
     }
