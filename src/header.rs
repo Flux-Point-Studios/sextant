@@ -11,9 +11,9 @@ use minicbor::data::Type;
 
 /// header_body element count for the Praos header (Babbage, Conway).
 const PRAOS_HEADER_BODY_LEN: u64 = 10;
-/// header_body fields read by name before the remainder is skipped:
-/// block_number, slot, prev_hash, issuer_vkey, vrf_vkey, vrf_result.
-const HEADER_BODY_FIELDS_READ: u64 = 6;
+/// operational_cert (header_body index 8) element count: `[hot_vkey,
+/// sequence_number, kes_period, sigma]`.
+const OPCERT_LEN: u64 = 4;
 /// block = [header, tx_bodies, tx_witness_sets, auxiliary_data, invalid_txs].
 const BLOCK_LEN: u64 = 5;
 
@@ -26,6 +26,9 @@ pub struct HeaderView {
     pub era: u8,
     pub block_number: u64,
     pub slot: u64,
+    /// The pool's cold verification key. It signs the operational certificate,
+    /// so `kes::verify_opcert(&issuer_vkey, &opcert)` authenticates the header's
+    /// hot KES key against the pool's registered identity.
     pub issuer_vkey: [u8; 32],
     /// Praos leader-election VRF public key (compressed Edwards point).
     pub vrf_vkey: [u8; 32],
@@ -34,6 +37,26 @@ pub struct HeaderView {
     pub vrf_output: [u8; 64],
     /// The 80-byte ECVRF proof pi = Gamma(32) || c(16) || s(32).
     pub vrf_proof: [u8; 80],
+    /// The operational certificate (header_body index 8) binding the hot KES
+    /// key to the cold `issuer_vkey`.
+    pub opcert: OpCert,
+}
+
+/// A Praos header's operational certificate (header_body index 8): the pool's
+/// ephemeral hot KES verification key, the certificate sequence number, the KES
+/// period it was issued at, and the cold key's Ed25519 signature over them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpCert {
+    /// Hot KES verification key (the Sum6-KES Merkle root).
+    pub hot_vkey: [u8; 32],
+    /// Monotonic certificate counter; a re-issued cert increments it.
+    pub sequence_number: u64,
+    /// KES period the certificate was issued at (`c0`); the header's own KES
+    /// period offset is measured from this.
+    pub kes_period: u64,
+    /// The cold key's Ed25519 signature over
+    /// `hot_vkey ‖ BE64(sequence_number) ‖ BE64(kes_period)`.
+    pub sigma: [u8; 64],
 }
 
 /// Why a header failed to decode. Byte providers are untrusted, so every
@@ -96,12 +119,13 @@ impl HeaderView {
         expect_array(&mut d, 2)?; // vrf_result = [vrf_output, vrf_proof]
         let vrf_output = read_bytes_exact::<64>(&mut d)?;
         let vrf_proof = read_bytes_exact::<80>(&mut d)?;
+        d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 6: block_body_size
+        d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 7: block_body_hash
+        let opcert = read_opcert(&mut d)?; // idx 8: operational_cert
+        d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 9: protocol_version
 
         // Consume the remainder so trailing or malformed bytes anywhere in the
         // input are rejected, not silently ignored.
-        for _ in 0..(PRAOS_HEADER_BODY_LEN - HEADER_BODY_FIELDS_READ) {
-            d.skip().map_err(|_| DecodeError::MalformedCbor)?; // rest of header_body
-        }
         d.skip().map_err(|_| DecodeError::MalformedCbor)?; // body_signature
         for _ in 0..(BLOCK_LEN - 1) {
             d.skip().map_err(|_| DecodeError::MalformedCbor)?; // rest of block
@@ -118,6 +142,7 @@ impl HeaderView {
             vrf_vkey,
             vrf_output,
             vrf_proof,
+            opcert,
         })
     }
 }
@@ -140,6 +165,24 @@ fn read_bytes_exact<const N: usize>(d: &mut Decoder<'_>) -> Result<[u8; N], Deco
     }
     let b = d.bytes().map_err(|_| DecodeError::MalformedCbor)?;
     b.try_into().map_err(|_| DecodeError::BadHashLen(b.len()))
+}
+
+/// Read the operational certificate at header_body index 8:
+/// `[hot_vkey(32), sequence_number: uint, kes_period: uint, sigma(64)]`. The
+/// exact 4-element shape and fixed key/signature widths are enforced so a
+/// reshaped certificate cannot smuggle attacker-chosen fields past the decoder.
+fn read_opcert(d: &mut Decoder<'_>) -> Result<OpCert, DecodeError> {
+    expect_array(d, OPCERT_LEN)?;
+    let hot_vkey = read_bytes_exact::<32>(d)?;
+    let sequence_number = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
+    let kes_period = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
+    let sigma = read_bytes_exact::<64>(d)?;
+    Ok(OpCert {
+        hot_vkey,
+        sequence_number,
+        kes_period,
+        sigma,
+    })
 }
 
 /// Read a 32-byte prev_hash, or `null` for the genesis block's absent parent.
