@@ -39,10 +39,11 @@ needs a row in Evidence.
       primitive for the ≥20-vector requirement (harvested vectors are
       auto-verified here or the harness goes red; vectors are inputs to
       verify, never trusted state)
-- [ ] Vector harvester + live pull: fetch ≥20 preview+mainnet headers from
-      Dolos/Blockfrost into tests/vectors/ (needs network egress + provider
-      key — run in the sandboxed loop env). The harness above is the
-      acceptance gate for whatever it writes.
+- [x] Vector harvester + live pull: `tools/harvest` (workspace member) pulls
+      recent preprod block CBOR off a public relay (pallas-network N2N
+      BlockFetch; points from Koios) into tests/vectors/. 22 preprod (era 7)
+      + 5 mainnet golden (era 6/7) = 27 vectors, each byte-identical to pallas
+      via the sweep. Note: preprod, not preview, per operator choice.
 - [ ] Failing test: leader VRF verification on vector 1; implement;
       differential-check against pallas
 - [ ] KES + operational certificate verification, same pattern
@@ -77,52 +78,35 @@ needs a row in Evidence.
 | 2026-07-10 21:09 UTC | Red-team BLOCK closed: adversarial CBOR can no longer force a wrong successful decode (array-count/era/prev_hash/trailing-byte defects) | Decoder now validates exact array counts, Praos era {6,7}, 32-byte prev_hash/issuer, full input consumption; 6 regression tests (`rejects_*`) + Babbage differential added; `scripts/harness.sh --full` exit 0, 9 tests pass |
 | 2026-07-10 21:16 UTC | Red-team re-attack: 4 findings verified closed, no panic/DoS; 2nd BLOCK (non-canonical era u16/u32/u64 = Sextant-Ok/pallas-Err) fixed | Era now required to be a canonical U8 token, matching pallas `block_era`; `rejects_non_canonical_era_encoding` asserts both Sextant and pallas reject the u64-widened Conway block; `scripts/harness.sh --full` exit 0, 10 tests pass |
 | 2026-07-10 21:22 UTC | Slice 1 merged to main with red-team SHIP; 362,161 both-accept fuzz cases, 0 field mismatches vs pallas | PR #1 squash-merged (`ae942a3`), CI `ci/woodpecker/pr/harness` green (pipeline 8), red-team `VERDICT: SHIP`; `scripts/harness.sh --full` exit 0 on merged main |
-| 2026-07-10 23:15 UTC | Vector-set differential harness: every `tests/vectors/*.block` decoded on Sextant's path is byte-identical to pallas on block_number/slot/issuer_vkey; validated era surfaced on `HeaderView`; cross-era coverage asserted (≥1 Babbage era-6 + ≥1 Conway era-7, ≥2 vectors) — the ≥20-vector requirement is now drop-in | `tests/header_decode.rs::every_vector_matches_pallas_and_is_praos` (dir sweep, panics red if either decoder rejects or fields disagree) + `decodes_conway_header_fields` (era==7) + `decodes_babbage_header_era` (era==6); vector leading bytes confirm the `[era]` token (`8206…`=Babbage, `8207…`=Conway). Verified by the Stop-hook `scripts/harness.sh --full` DoD gate (fmt / clippy -D warnings / release build / cargo test / wasm32); direct `cargo` is permission-gated this session, so the gate is the verifying oracle |
-| 2026-07-10 23:20 UTC | Red-team of the iter-2 diff: `VERDICT: SHIP`. `era as u8` provably lossless (u32 gated to {6,7} before the sole `HeaderView` constructor); sweep can't false-green below the two `include_str!`-pinned cross-era anchors; no `rejects_*` coverage lost; fs access confined to the compile-time manifest dir | `fluxpoint-loop:red-team-reviewer` run — 2 findings, both LOW/non-blocking: (1) non-`.block` files are silently skipped by the sweep → the future ≥20 gate must assert on the verified `checked` count, not raw file count; (2) symlink/empty/dir `x.block` fails closed (RED), safe direction. Folded into the harvest handoff below |
+| 2026-07-11 00:10 UTC | Vector-set differential harness + `HeaderView.era` (salvaged from the loop iteration, verified here by running the harness): every `tests/vectors/*.block` is decoded on Sextant's own path and is byte-identical to pallas on block_number/slot/issuer_vkey; the validated Praos era is surfaced on `HeaderView.era`; cross-era coverage asserted | `tests/header_decode.rs::every_vector_matches_pallas_and_is_praos` + `decodes_conway_header_fields` (era 7) + `decodes_babbage_header_era` (era 6); `scripts/harness.sh --full` exit 0 |
+| 2026-07-11 00:30 UTC | Harvester delivered 27 real vectors (≥20 DoD floor) and the decoder handles real Conway tx CBOR | `tools/harvest` (workspace member) BlockFetched 22 preprod blocks off relay `preprod-node.play.dev.cardano.org:3001` via pallas-network N2N (points from Koios); +5 mainnet golden vectors from pallas. Fixed nested-indefinite-CBOR skip by enabling minicbor `alloc`. Sweep verifies all 27 byte-identical to pallas at `checked >= 20`; `scripts/harness.sh --full` exit 0, 11 tests |
 
 ## Notes for the next iteration
-State (2026-07-10, iter 2): the differential check now sweeps the whole
-`tests/vectors/` set — every `*.block` is decoded on Sextant's path and must
-agree with pallas on block_number/slot/issuer_vkey, so ≥20 vectors is a
-drop-in (add files, they're auto-verified or the harness goes red). The
-validated Praos era is surfaced on `HeaderView.era` (u8, ∈{6,7}); anchored
-by `decodes_conway_header_fields` (era 7) and `decodes_babbage_header_era`
-(era 6). Still only 2 vectors present, both mainnet — the ≥20 preview+mainnet
-box is NOT checked.
+State (2026-07-11): harvester slice done. `tools/harvest` (workspace member,
+isolated from the lib's build) BlockFetches recent preprod block CBOR off a
+public relay via pallas-network N2N (block points from Koios preprod) into
+tests/vectors/. 27 vectors now — 22 preprod (era 7) + 5 mainnet golden (era
+6/7) — each byte-identical to pallas via the
+`every_vector_matches_pallas_and_is_praos` sweep at the `checked >= 20` DoD
+floor. The decoder gained the minicbor `alloc` feature so full-block
+consumption can skip real Conway tx bodies (nested indefinite CBOR), and
+`HeaderView.era` surfaces the validated Praos era. Regenerate/extend the set
+with `cargo run -p harvest [count]`. Preprod, not preview, per operator
+choice — the DoD's "preview and mainnet" is met as preprod + mainnet.
 
-ENVIRONMENT BLOCKER (this session): the loop agent can Read/Edit files and
-run read-only git, but `cargo`, the harness, `gh`, network egress, and
-mutating git (branch/commit) are all permission-gated. So this iteration
-could not: run `--full` itself (the Stop-hook DoD gate is the verifying
-oracle), fetch vectors from the network, or open/merge a PR. Edits are left
-in the working tree for the outer `scripts/loop.sh` to snapshot to a
-`loop/iter-*` branch and promote via PR + CI. If you are that
-egress-enabled run, commit these edits and open the PR.
-
-Attacking next (needs the egress-enabled loop env — cargo + a Blockfrost
-project id or a reachable Dolos):
-  1. Write `scripts/harvest.sh` (curl `/blocks/{hash}/cbor` for Blockfrost,
-     extract `.cbor`; or fetch raw hex from Dolos) → write
-     `tests/vectors/<block_number>.block`. Then run `cargo test --test
-     header_decode` — `every_vector_matches_pallas_and_is_praos` is the
-     acceptance gate (a wrong `[era,block]` shape is rejected). Pull ≥20
-     across preview + mainnet to close the ≥20-vector DoD box. When you add
-     the `checked >= 20` assertion, gate on the verified `checked` count, not
-     on the raw file count in the dir — a mis-named vector (wrong extension)
-     is silently skipped by the sweep and must not inflate the ≥20 claim
-     (red-team LOW #1). Name a preview vector so the set spans both networks.
-  2. Then leader VRF verification on vector 1; differential-check vs pallas.
-Alt path if Blockfrost's cbor endpoint does not return the `[era,block]`
-wrapper pallas expects: pull raw blocks from a Dolos node's n2c
-`BlockFetch`/chainsync (already `[era,block]`-wrapped), or from a
-`cardano-cli`/mithril snapshot, and hex-encode those.
+The autonomous loop can't ship in headless mode (git/gh/cargo are
+permission-gated under acceptEdits), so this slice was finished inline. A
+scoped Bash allowlist in .claude/settings.json to run future self-contained
+slices via the loop remains open (deferred).
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`);
 repo is Flux-Point-Studios/sextant — if CI webhooks go quiet, Repair/re-sync
 repo 15 in Woodpecker. Ratchet points not yet gated: cbindgen C-header
-generation and the preview-net Live UTxO exercise — each turns on when its
-DoD slice ships.
+generation and the preview-net Live UTxO exercise.
 
 Carried from red-team (for when body/VRF validation lands): now that
 `HeaderView.era` is available, cross-check it against the transaction-body
 schema so a Conway-body-labeled-Babbage block cannot pass full validation.
+
+Attacking next: leader VRF verification on a harvested vector — implement on
+Sextant's own path and differential-check the verdict against pallas.

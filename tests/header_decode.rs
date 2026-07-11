@@ -15,8 +15,8 @@ use sextant::header::{DecodeError, HeaderView};
 
 // Named anchors for exact ground-truth assertions; the directory sweep below
 // also covers these files and any others harvested into tests/vectors/.
-const CONWAY1: &str = include_str!("vectors/conway1.block"); // era 7
-const BABBAGE1: &str = include_str!("vectors/babbage1.block"); // era 6
+const CONWAY1: &str = include_str!("vectors/mainnet-conway1.block"); // era 7
+const BABBAGE1: &str = include_str!("vectors/mainnet-babbage1.block"); // era 6
 
 fn unhex(s: &str) -> Vec<u8> {
     hex::decode(s.trim()).expect("valid hex")
@@ -74,7 +74,12 @@ fn every_vector_matches_pallas_and_is_praos() {
             .unwrap_or_else(|e| panic!("pallas rejected {}: {e:?}", path.display()));
         let theirs = block.header();
 
-        assert_eq!(mine.block_number, theirs.number(), "block_number in {}", path.display());
+        assert_eq!(
+            mine.block_number,
+            theirs.number(),
+            "block_number in {}",
+            path.display()
+        );
         assert_eq!(mine.slot, theirs.slot(), "slot in {}", path.display());
         assert_eq!(
             Some(mine.issuer_vkey.as_slice()),
@@ -90,7 +95,10 @@ fn every_vector_matches_pallas_and_is_praos() {
         checked += 1;
     }
 
-    assert!(checked >= 2, "expected ≥2 golden vectors, found {checked}");
+    assert!(
+        checked >= 20,
+        "DoD requires ≥20 verified vectors, found {checked}"
+    );
     assert!(
         saw_babbage && saw_conway,
         "vector set must cover both Praos eras (babbage={saw_babbage}, conway={saw_conway})",
