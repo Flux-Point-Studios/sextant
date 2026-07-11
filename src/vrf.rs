@@ -23,10 +23,12 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
+use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::VartimeMultiscalarMul;
 use sha2::{Digest, Sha512};
+
+use crate::curve::decode_point;
 
 /// draft-03 suite string for ECVRF-ED25519-SHA512-Elligator2.
 const SUITE: u8 = 0x04;
@@ -195,16 +197,4 @@ fn gamma_to_hash(gamma: &EdwardsPoint) -> [u8; 64] {
     let mut out = [0u8; 64];
     out.copy_from_slice(&hash);
     out
-}
-
-/// Decode a compressed Edwards point, returning `None` for off-curve or
-/// non-canonical encodings. libsodium's `ge25519_is_canonical` rejects a
-/// y-coordinate `≥ p`, but dalek's `decompress` silently accepts it, so we
-/// enforce canonicity by requiring the point to re-compress to the exact input
-/// bytes. A canonical producer never emits a non-canonical encoding, so this
-/// only ever rejects adversarial bytes, never a real block.
-fn decode_point(bytes: &[u8]) -> Option<EdwardsPoint> {
-    let compressed = CompressedEdwardsY::from_slice(bytes);
-    let point = compressed.decompress()?;
-    (point.compress() == compressed).then_some(point)
 }
