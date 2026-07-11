@@ -204,44 +204,55 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next
-The next unchecked substantive DoD line is **line 3: chain following across an
-epoch boundary, including nonce evolution.** This is the highest-leverage next
-slice: computing eta0 from the chain makes the whole leader-VRF path oracle-free
-(the eta0 trust note above), and it is the prerequisite that lets a real-mainnet
-harvest carry its own eta0 — which is what a fully honest DoD-line-2 "from
-mainnet" tick needs. Recommended primary. Concrete shape (confirm exact hashing
-against a real vector before gating — it is self-authenticating, see below):
-- Per-block nonce contribution: `η_block = Blake2b256(outputVRF)` where
-  `outputVRF` is the block's 64-byte certified VRF output (Praos, Babbage+, one
-  VRF per block). Rolling candidate nonce evolves `η_c' = Blake2b256(η_c ‖
-  η_block)` (cardano-ledger `⋆` / `evolveNonce`); genesis seed is the Shelley
-  genesis `extraEntropy`/initial η.
-- Epoch η0: frozen at the randomness-stability window (`3k/f` slots into the
-  epoch, `RandomnessStabilisationWindow`), combined with the previous epoch's
-  last-block-header-hash nonce (η_ph) and extra entropy: `η0(e+1) = η_c(stab) ⋆
-  η_ph ⋆ extraEntropy`. Confirm the exact combine order against ledger.
-- **Self-authenticating oracle (no new trusted input):** harvest a preprod
-  header sequence spanning the 299→300 boundary and evolve the nonce forward; the
-  computed epoch-300 η0 must equal the `preprod-<slot>.eta0` sidecars already in
-  the tree (Koios epoch-300 nonce `aa845533…4eeb6c30`). DoD line 3's proof is "a
-  test naming the epoch and the evolved nonce value" — that equality is it.
-- Harvest tooling exists (`tools/harvest`, pallas-network N2N BlockFetch, points
-  from Koios); extend it to pull a contiguous boundary-spanning run.
+## Attacking next — DoD line 3: chain-following + nonce evolution
+The exact Praos nonce spec was independently re-derived from cardano-ledger +
+ouroboros-consensus SOURCE and numerically cross-checked against pallas-crypto's
+golden vectors (spec-derivation workflow, confidence HIGH). USE THIS — an earlier
+sketch had the per-block recipe WRONG (single untagged hash) and its "compute η0
+from the chain" plan is INFEASIBLE (see feasibility).
 
-Smaller alternative if appetite is low this iteration — **DoD line 6 artifacts
-(cbindgen C-header in CI).** The wasm32 build is already gated by the harness;
-the missing half is generating the C header via cbindgen + publishing the static
-lib in CI. Well-scoped, unlocks the C-ABI consumer, and is a named ratchet point.
-Third option — **close DoD line 2 honestly** by harvesting real mainnet blocks
-(with eta0) so leader-VRF + KES run on a mainnet set, not just preprod.
+VERIFIED Praos (Babbage+, preprod) nonce spec — Blake2b-256, 32-byte nonces, no
+CBOR/length framing:
+- Combine ⭒:  a ⭒ b = blake2b256( bytes(a)[32] ‖ bytes(b)[32] )  (left 32 then
+  right 32; left-associative). NeutralNonce is the identity and short-circuits
+  WITHOUT hashing (neutral extraEntropy / genesis prev-hash drop out).
+- Per-block contribution (THE TRAP — double hash + domain tag):
+    η_block = blake2b256( blake2b256( 0x4E ‖ rawVrfOutput64 ) )
+  0x4E = ASCII 'N'; rawVrfOutput64 = the 64-byte certified output of the single
+  unified Praos VRF (already on `HeaderView.vrf_output`). pallas-crypto's
+  `generate_rolling_nonce` is the LEGACY TPraos single-hash-no-tag shape — do NOT
+  reuse it as-is; pre-hash `blake2b256(0x4E‖output)` yourself (matches amaru's
+  `extended_vrf_nonce_output`), then fold.
+- Rolling fold (once per applied block):  η_v' = η_v ⭒ η_block.
+- Epoch boundary:  η0(e+1) = candidateNonce(e) ⭒ prevHashNonce(e)  — NO
+  extraEntropy on preprod (neutral). prevHashNonce = Nonce(castHash(the 32-byte
+  Blake2b-256 header-hash of the LAST block of epoch e)); pure retag, no rehash;
+  one-epoch lag.
+- Candidate freezes once slot-in-epoch ≥ 432000 − 172800 = 259200 (window = 4k/f,
+  k=2160 f=0.05). Stop folding into the candidate at that slot.
 
-Branch from merged `main` after this PR lands. Recommendation: attack nonce
-evolution (line 3) — it compounds the VRF path and unblocks the mainnet tick.
+FEASIBILITY — computing epoch-300 η0 by folding needs ALL ~13k epoch-299 blocks
+to the freeze (~65 MB); INFEASIBLE as checked-in vectors. Do the feasible,
+meaningful decomposition (all three are real and gate the DoD):
+1. FORMULA, differential vs a real oracle: implement ⭒, η_block (0x4E double
+   hash), the rolling fold, and the epoch combine in `src/nonce.rs`; unit-test
+   byte-exact against pallas-crypto's `test_rolling_nonce` (30-block fold from the
+   shelley-genesis seed — it is TPraos single-hash-shaped, so test your ⭒+fold
+   with ITS per-block inputs) and `test_epoch_nonce` (the ⭒ + extra-entropy
+   combine). Proves the formula against ground truth.
+2. CHAIN-FOLLOWING, real vectors: verify the stored consecutive preprod sequence
+   links — each header's prev_hash == blake2b256(previous header bytes) — slots
+   and block numbers strictly increase, and each header's full crypto (leader-VRF
+   vs its epoch η0 + KES + opcert) verifies.
+3. REAL BOUNDARY, harvest: extend `tools/harvest` to pull a short contiguous run
+   spanning the 299→300 boundary + both epochs' `.eta0` sidecars. Verify each
+   block's leader-VRF against ITS epoch's η0 (pre-boundary → η0(299), post →
+   η0(300)) and that using the WRONG epoch's nonce makes verify FAIL — the
+   on-chain proof the nonce evolved. DoD line 3 proof = a test naming epochs
+   299→300 and the evolved value η0(300) = `aa845533…4eeb6c30`.
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`); repo
-is Flux-Point-Studios/sextant (repo 15). CI green through pipeline 48. The KES
-slice added no crate to the trust-substrate normal graph (the `pallas-crypto
-kes` feature is dev-only; `cargo tree --edges normal` unchanged). Carried from an
-earlier red-team: once full body validation lands, cross-check `HeaderView.era`
-against the tx-body schema so a Conway-body-labeled-Babbage block cannot pass.
+Flux-Point-Studios/sextant (repo 15), CI green through pipeline 56. Trust-
+substrate normal-dep graph unchanged (all oracles dev-only). Carried red-team
+note: cross-check `HeaderView.era` against the tx-body schema so a Conway-body-
+labelled-Babbage block cannot pass full validation.
