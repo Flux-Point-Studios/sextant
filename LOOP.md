@@ -44,9 +44,21 @@ needs a row in Evidence.
       BlockFetch; points from Koios) into tests/vectors/. 22 preprod (era 7)
       + 5 mainnet golden (era 6/7) = 27 vectors, each byte-identical to pallas
       via the sweep. Note: preprod, not preview, per operator choice.
-- [ ] Failing test: leader VRF verification on vector 1; implement;
-      differential-check against pallas
-- [ ] KES + operational certificate verification, same pattern
+- [x] VRF output verification: extract vrf_vkey + vrf_result (output/proof)
+      from the header and recompute the 64-byte VRF output (beta) via
+      draft-03 `proof_to_hash` (SHA512 over 8·Gamma, on cryptoxide's
+      curve25519) on Sextant's own path — byte-identical to every one of the
+      27 real vectors' on-chain output. Nonce-independent, so no epoch nonce
+      needed. Oracle is the canonical libsodium producer (cardano-node), not
+      pallas: pallas-crypto 1.1.1 (latest published) ships no VRF module.
+- [ ] Full leader-VRF verify: `hash_to_curve` (Elligator2) + challenge +
+      equation, binding the proof to `alpha = Blake2b256(slot_be8 || eta0)`;
+      accept a real vector (eta0 = Koios `epoch_params?_epoch_no=N`, N = the
+      block's epoch) and reject a tampered proof. Needs network for eta0 —
+      extend `tools/harvest` to capture the epoch nonce as a sidecar, or run
+      in a network-enabled context.
+- [ ] KES + operational-certificate verification, same differential pattern
+      (pallas-crypto has a `kes` feature usable as the oracle here)
 - [ ] <derive the next slice from the Definition of Done, one at a time>
 
 ## Constraints
@@ -82,33 +94,51 @@ needs a row in Evidence.
 | 2026-07-11 00:30 UTC | Harvester delivered 27 real vectors (≥20 DoD floor) and the decoder handles real Conway tx CBOR | `tools/harvest` (workspace member) BlockFetched 22 preprod blocks off relay `preprod-node.play.dev.cardano.org:3001` via pallas-network N2N (points from Koios); +5 mainnet golden vectors from pallas. Fixed nested-indefinite-CBOR skip by enabling minicbor `alloc`. Sweep verifies all 27 byte-identical to pallas; `scripts/harness.sh --full` exit 0, 11 tests |
 | 2026-07-11 00:42 UTC | Red-team of the harvester slice: VERDICT SHIP — no DoS from `alloc`, no wrong-Ok, no Sextant/pallas divergence | `fluxpoint-loop:red-team-reviewer`: alloc-skip memory is O(N)-bounded (1M fuzz no panic/hang; deep-indefinite O(1); huge length-prefix → Err, no pre-alloc); all 27 vectors byte-identical to pallas incl. era; sweep fails closed on degenerate files. One LOW (counted files, not distinct blocks) hardened here — sweep now counts distinct block contents (`distinct.len() >= 20`) |
 | 2026-07-11 00:45 UTC | Slice 2 (harvester + 27-vector differential decode) merged to main | PR #2 squash-merged (`d533e1e`), CI `ci/woodpecker/pr/harness` green (pipeline 16), red-team `VERDICT: SHIP`; `scripts/harness.sh --full` exit 0 on merged main |
+| 2026-07-11 01:40 UTC | VRF output verification: Sextant recomputes each header's 64-byte VRF output (beta) from its 80-byte proof on its own draft-03 code path and it is byte-identical to the on-chain output the producer committed, across all 27 real vectors | `cargo test --test vrf` — `every_vector_output_equals_proof_to_hash` (≥20 distinct blocks), `proof_to_hash_matches_onchain_output_conway1` (anchor: beta == `af9ff8…d25e5e`), `decodes_conway_vrf_fields`, `tampered_gamma_breaks_output`, `off_curve_gamma_is_rejected` all pass in `scripts/harness.sh --full` (exit 0, 16 tests). `beta = SHA512(0x04‖0x03‖enc(8·Gamma))` on cryptoxide curve25519; oracle is the canonical libsodium producer (pallas-crypto 1.1.1 has no VRF). Found + corrected cryptoxide's negated-decode (`Ge::from_bytes` returns −P) |
 
 ## Notes for the next iteration
-State (2026-07-11): harvester slice done. `tools/harvest` (workspace member,
-isolated from the lib's build) BlockFetches recent preprod block CBOR off a
-public relay via pallas-network N2N (block points from Koios preprod) into
-tests/vectors/. 27 vectors now — 22 preprod (era 7) + 5 mainnet golden (era
-6/7) — each byte-identical to pallas via the
-`every_vector_matches_pallas_and_is_praos` sweep at the `checked >= 20` DoD
-floor. The decoder gained the minicbor `alloc` feature so full-block
-consumption can skip real Conway tx bodies (nested indefinite CBOR), and
-`HeaderView.era` surfaces the validated Praos era. Regenerate/extend the set
-with `cargo run -p harvest [count]`. Preprod, not preview, per operator
-choice — the DoD's "preview and mainnet" is met as preprod + mainnet.
+State (2026-07-11): VRF **output** verification shipped. `HeaderView` now
+surfaces `vrf_vkey` (idx 4), `vrf_output` (64) and `vrf_proof` (80) from
+`vrf_result` (idx 5). `src/vrf.rs::proof_to_hash` recomputes beta =
+`SHA512(0x04‖0x03‖enc(8·Gamma))` on cryptoxide's curve25519 (added as a
+`default-features=false, ["curve25519","sha2"]` dep — pure-Rust, no_std, the
+same substrate pallas is built on), byte-identical to all 27 real vectors'
+on-chain output. This is nonce-independent, so no epoch nonce was needed.
 
-The autonomous loop can't ship in headless mode (git/gh/cargo are
-permission-gated under acceptEdits), so this slice was finished inline. A
-scoped Bash allowlist in .claude/settings.json to run future self-contained
-slices via the loop remains open (deferred).
+Two load-bearing discoveries this slice (both verified against real bytes):
+1. **pallas-crypto 1.1.1 (latest published) ships NO VRF module** — features
+   are ed25519-dalek/kes/rand/…, no `vrf`. So the DoD's "byte-identical
+   verdicts to pallas" for VRF is not satisfiable at the pinned version; the
+   oracle used is the canonical libsodium producer (the block's own committed
+   output), which is strictly stronger. pallas-crypto DOES have a `kes`
+   feature — use it as the oracle for the KES slice.
+2. **cryptoxide `Ge::from_bytes` returns −P** (ref10 negated-decode, what
+   Ed25519 verify wants). VRF needs the true point, so proof_to_hash negates
+   it back (`&Ge::ZERO - &neg.to_cached()`). The full verify must do the same
+   for Gamma AND the vrf_vkey Y — at that point (2nd/3rd caller) extract a
+   `decode_point` helper; it was inlined here to avoid a one-caller abstraction.
+
+Blocker for the full alpha-binding verify: **network is fully gated in this
+session** (Bash allowlist = cargo/rustup/git/gh pr/gh api/harness only;
+WebFetch/WebSearch/curl denied), so Koios `epoch_params` (eta0) is unreachable
+and a real block's proof can't be bound to its slot+nonce yet. Two paths:
+  (a) extend `tools/harvest` to also fetch `epoch_params?_epoch_no=N` and write
+      the 32-byte eta0 as a sidecar next to each vector, then the verify test
+      reconstructs alpha offline — preferred, keeps the loop self-contained and
+      feeds the separate nonce-evolution DoD line; run it in a network-enabled
+      context once, commit the sidecars.
+  (b) run the verify slice in a session with WebFetch/curl allowed.
+Attack (a) next: the spec is fully pinned (see the copy-pasteable block from
+research): alpha = Blake2b256(BE64(slot)‖eta0); H = 8·elligator2(SHA512(0x04‖
+0x01‖Y‖alpha)[0..32] with bit255 cleared); U = s·B−c·Y, V = s·H−c·Gamma;
+c' = SHA512(0x04‖0x02‖H‖Gamma‖U‖V)[0..16]; accept iff c'==c. Elligator2 (the
+one hard part) has no cryptoxide helper — port from IOG libsodium/Amaru.
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`);
 repo is Flux-Point-Studios/sextant — if CI webhooks go quiet, Repair/re-sync
 repo 15 in Woodpecker. Ratchet points not yet gated: cbindgen C-header
 generation and the preview-net Live UTxO exercise.
 
-Carried from red-team (for when body/VRF validation lands): now that
+Carried from red-team (for when the full body/VRF validation lands): now that
 `HeaderView.era` is available, cross-check it against the transaction-body
 schema so a Conway-body-labeled-Babbage block cannot pass full validation.
-
-Attacking next: leader VRF verification on a harvested vector — implement on
-Sextant's own path and differential-check the verdict against pallas.

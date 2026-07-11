@@ -941,6 +941,7 @@ dependencies = [
 name = "sextant"
 version = "0.1.0"
 dependencies = [
+ "cryptoxide",
  "hex",
  "minicbor 2.2.2",
  "pallas-traverse",

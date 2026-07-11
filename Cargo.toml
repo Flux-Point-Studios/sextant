@@ -19,6 +19,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
 # bodies use it) while consuming the whole block; alloc is no_std-compatible.
 minicbor = { version = "2.2.2", features = ["alloc"] }
+# Pure-Rust, no_std curve25519 + SHA-512 for ECVRF (draft-03) verification —
+# the same crypto substrate pallas is built on. Only the primitives Sextant's
+# own VRF code path composes; the ECVRF logic itself lives in src/vrf.rs.
+cryptoxide = { version = "0.4.4", default-features = false, features = ["curve25519", "sha2"] }
 
 [dev-dependencies]
 hex = "0.4.3"

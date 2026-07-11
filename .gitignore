@@ -1,3 +1,4 @@
 /target
+/.scratch
 .claude/fluxpoint-loop/
 .claude/settings.local.json

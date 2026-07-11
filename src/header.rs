@@ -12,8 +12,8 @@ use minicbor::data::Type;
 /// header_body element count for the Praos header (Babbage, Conway).
 const PRAOS_HEADER_BODY_LEN: u64 = 10;
 /// header_body fields read by name before the remainder is skipped:
-/// block_number, slot, prev_hash, issuer_vkey.
-const HEADER_BODY_FIELDS_READ: u64 = 4;
+/// block_number, slot, prev_hash, issuer_vkey, vrf_vkey, vrf_result.
+const HEADER_BODY_FIELDS_READ: u64 = 6;
 /// block = [header, tx_bodies, tx_witness_sets, auxiliary_data, invalid_txs].
 const BLOCK_LEN: u64 = 5;
 
@@ -27,6 +27,13 @@ pub struct HeaderView {
     pub block_number: u64,
     pub slot: u64,
     pub issuer_vkey: [u8; 32],
+    /// Praos leader-election VRF public key (compressed Edwards point).
+    pub vrf_vkey: [u8; 32],
+    /// The 64-byte certified VRF output (beta) the block producer committed;
+    /// `vrf::proof_to_hash(vrf_proof)` must reproduce it byte-for-byte.
+    pub vrf_output: [u8; 64],
+    /// The 80-byte ECVRF proof pi = Gamma(32) || c(16) || s(32).
+    pub vrf_proof: [u8; 80],
 }
 
 /// Why a header failed to decode. Byte providers are untrusted, so every
@@ -38,7 +45,8 @@ pub enum DecodeError {
     MalformedCbor,
     /// Era discriminator is not a supported Praos era (Babbage or Conway).
     UnsupportedEra(u32),
-    /// A 32-byte hash field (prev_hash or issuer_vkey) had the wrong length.
+    /// A fixed-width byte field (prev_hash, a 32-byte key, or a VRF
+    /// certificate element) had the wrong length.
     BadHashLen(usize),
     /// A valid header was followed by unconsumed trailing bytes.
     TrailingBytes,
@@ -83,7 +91,11 @@ impl HeaderView {
         let block_number = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
         let slot = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
         read_optional_hash32(&mut d)?; // prev_hash: 32-byte hash or genesis null
-        let issuer_vkey = read_hash32(&mut d)?;
+        let issuer_vkey = read_bytes_exact::<32>(&mut d)?;
+        let vrf_vkey = read_bytes_exact::<32>(&mut d)?;
+        expect_array(&mut d, 2)?; // vrf_result = [vrf_output, vrf_proof]
+        let vrf_output = read_bytes_exact::<64>(&mut d)?;
+        let vrf_proof = read_bytes_exact::<80>(&mut d)?;
 
         // Consume the remainder so trailing or malformed bytes anywhere in the
         // input are rejected, not silently ignored.
@@ -103,6 +115,9 @@ impl HeaderView {
             block_number,
             slot,
             issuer_vkey,
+            vrf_vkey,
+            vrf_output,
+            vrf_proof,
         })
     }
 }
@@ -116,8 +131,10 @@ fn expect_array(d: &mut Decoder<'_>, want: u64) -> Result<(), DecodeError> {
     }
 }
 
-/// Read a definite 32-byte string.
-fn read_hash32(d: &mut Decoder<'_>) -> Result<[u8; 32], DecodeError> {
+/// Read a definite byte string of exactly `N` bytes, rejecting any other
+/// length or a non-bytes token. Used for the header's fixed-width fields:
+/// the 32-byte keys and the 64/80-byte VRF certificate elements.
+fn read_bytes_exact<const N: usize>(d: &mut Decoder<'_>) -> Result<[u8; N], DecodeError> {
     if d.datatype().map_err(|_| DecodeError::MalformedCbor)? != Type::Bytes {
         return Err(DecodeError::MalformedCbor);
     }
