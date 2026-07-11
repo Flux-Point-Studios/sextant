@@ -51,12 +51,15 @@ needs a row in Evidence.
       27 real vectors' on-chain output. Nonce-independent, so no epoch nonce
       needed. Oracle is the canonical libsodium producer (cardano-node), not
       pallas: pallas-crypto 1.1.1 (latest published) ships no VRF module.
-- [ ] Full leader-VRF verify: `hash_to_curve` (Elligator2) + challenge +
+- [x] Full leader-VRF verify: `hash_to_curve` (Elligator2) + challenge +
       equation, binding the proof to `alpha = Blake2b256(slot_be8 || eta0)`;
       accept a real vector (eta0 = Koios `epoch_params?_epoch_no=N`, N = the
-      block's epoch) and reject a tampered proof. Needs network for eta0 —
-      extend `tools/harvest` to capture the epoch nonce as a sidecar, or run
-      in a network-enabled context.
+      block's epoch) and reject a tampered proof. Done: eta0 backfilled as
+      `.eta0` sidecars via `cargo run -p harvest eta0`; `vrf::verify` composes
+      Amaru's elligator-fixed `curve25519-dalek` fork on Sextant's own draft-03
+      orchestration; all 22 real preprod proofs verify, verdict cross-checked
+      against the independent non-dalek `cardano-crypto` oracle, tampered
+      slot/nonce/key/scalar all rejected.
 - [ ] KES + operational-certificate verification, same differential pattern
       (pallas-crypto has a `kes` feature usable as the oracle here)
 - [ ] <derive the next slice from the Definition of Done, one at a time>
@@ -97,45 +100,53 @@ needs a row in Evidence.
 | 2026-07-11 01:40 UTC | VRF output verification: Sextant recomputes each header's 64-byte VRF output (beta) from its 80-byte proof on its own draft-03 code path and it is byte-identical to the on-chain output the producer committed, across all 27 real vectors | `cargo test --test vrf` — `every_vector_output_equals_proof_to_hash` (≥20 distinct blocks), `proof_to_hash_matches_onchain_output_conway1` (anchor: beta == `af9ff8…d25e5e`), `decodes_conway_vrf_fields`, `tampered_gamma_breaks_output`, `off_curve_gamma_is_rejected` all pass in `scripts/harness.sh --full` (exit 0, 16 tests). `beta = SHA512(0x04‖0x03‖enc(8·Gamma))` on cryptoxide curve25519; oracle is the canonical libsodium producer (pallas-crypto 1.1.1 has no VRF). Found + corrected cryptoxide's negated-decode (`Ge::from_bytes` returns −P) |
 | 2026-07-11 01:55 UTC | Red-team of the VRF slice: VERDICT SHIP — no wrong verdict, no panic on untrusted bytes, no overclaim; the one actionable LOW (no dedicated negative test for a malformed `vrf_result`) closed here | `fluxpoint-loop:red-team-reviewer`: proof_to_hash matches libsodium incl. the −P negate; decoder fails closed (`expect_array(2)` + `read_bytes_exact::<N>`, skip 10−6=4); slice honestly scoped (output-only, full alpha-binding verify deferred). Added `rejects_bad_vrf_result_shape` (wrong arity / non-bytes / 63-byte output / 79-byte proof → `MalformedCbor`/`BadHashLen`); `scripts/harness.sh --full` exit 0, 17 tests |
 | 2026-07-11 01:58 UTC | Independent red-team of the autonomously-merged VRF slice: VERDICT SHIP (confirms the loop's self-review; first fully-autonomous merge, externally verified) | Fresh `fluxpoint-loop:red-team-reviewer` pass: `proof_to_hash` byte-exact to libsodium — the −P negate is load-bearing (no-negate → different beta, so the 27-vector test genuinely constrains it); no overclaim (output-only, zero internal callers mistaking it for verify); no panic across 1M random proofs + 400k end-to-end mutations; `cryptoxide` a correctly-scoped prod dep (`--edges normal` = curve25519/sha2 only, pallas dev-only, wasm no_std builds). Informational: the full-verify slice must expose the eligibility verdict behind a distinct `verify`-style API |
+| 2026-07-11 04:40 UTC | eta0 sidecars backfilled for all 22 preprod vectors (epoch 300 active nonce, Koios), no vector churn | `cargo run -p harvest eta0` — new `harvest eta0` mode decodes each `preprod-*.block` with pallas, resolves its epoch via Koios `block_info`, fetches `epoch_params?_epoch_no=300&select=nonce`, writes `preprod-<slot>.eta0` (eta0 `aa845533…4eeb6c30`). 22 sidecars written |
+| 2026-07-11 04:40 UTC | Full leader-VRF verify on Sextant's own draft-03 code path: 22 real preprod leader proofs accept and yield the committed output, verdict byte-identical to an independent non-dalek oracle; tampered slot/nonce/key/scalar all reject | `cargo test --test vrf` — `real_preprod_leader_proofs_verify` (≥20 cases, `verify_praos_leader` binds `alpha = Blake2b256(BE64(slot)‖eta0)`), `verdict_matches_independent_oracle` (vs `cardano-crypto` `VrfDraft03::verify` on the same alpha), `tampered_leader_proof_is_rejected`; hash-to-curve = Amaru's elligator-sign-fixed `curve25519-dalek` fork, ECVRF orchestration is Sextant's own. All 8 vrf + 12 header tests green in `scripts/harness.sh --full` (exit 0) |
+| 2026-07-11 04:40 UTC | Substrate migrated cryptoxide → Amaru `curve25519-dalek` fork; `proof_to_hash` regression-free on all 27 vectors; wasm32 artifact still builds | `scripts/harness.sh --full` exit 0 — `proof_to_hash` now `gamma.mul_by_cofactor()` on the fork (drops cryptoxide's −P negate hack), `every_vector_output_equals_proof_to_hash` still byte-identical; `cargo build --release --target wasm32-unknown-unknown` green with the dalek fork (`default-features=false, ["u64_backend","alloc"]`) + sha2 0.9 + blake2 0.9 |
 
 ## Notes for the next iteration
-State (2026-07-11): VRF **output** verification shipped. `HeaderView` now
-surfaces `vrf_vkey` (idx 4), `vrf_output` (64) and `vrf_proof` (80) from
-`vrf_result` (idx 5). `src/vrf.rs::proof_to_hash` recomputes beta =
-`SHA512(0x04‖0x03‖enc(8·Gamma))` on cryptoxide's curve25519 (added as a
-`default-features=false, ["curve25519","sha2"]` dep — pure-Rust, no_std, the
-same substrate pallas is built on), byte-identical to all 27 real vectors'
-on-chain output. This is nonce-independent, so no epoch nonce was needed.
+State (2026-07-11): full leader-VRF **verify** shipped, on Sextant's own
+draft-03 code path. `src/vrf.rs` now exposes `verify(vkey, alpha, proof)`,
+`verify_praos_leader(vkey, slot, eta0, proof)` (builds `alpha =
+Blake2b256(BE64(slot)‖eta0)` via `praos_vrf_input`, also public) and the
+migrated `proof_to_hash`. All 22 preprod vectors carry a committed
+`preprod-<slot>.eta0` sidecar (epoch-300 nonce), and every real leader proof
+verifies + matches the independent `cardano-crypto` oracle; tampered
+slot/nonce/key/scalar reject.
 
-Two load-bearing discoveries this slice (both verified against real bytes):
-1. **pallas-crypto 1.1.1 (latest published) ships NO VRF module** — features
-   are ed25519-dalek/kes/rand/…, no `vrf`. So the DoD's "byte-identical
-   verdicts to pallas" for VRF is not satisfiable at the pinned version; the
-   oracle used is the canonical libsodium producer (the block's own committed
-   output), which is strictly stronger. pallas-crypto DOES have a `kes`
-   feature — use it as the oracle for the KES slice.
-2. **cryptoxide `Ge::from_bytes` returns −P** (ref10 negated-decode, what
-   Ed25519 verify wants). VRF needs the true point, so proof_to_hash negates
-   it back (`&Ge::ZERO - &neg.to_cached()`). The full verify must do the same
-   for Gamma AND the vrf_vkey Y — at that point (2nd/3rd caller) extract a
-   `decode_point` helper; it was inlined here to avoid a one-caller abstraction.
+**Substrate migrated cryptoxide → Amaru `curve25519-dalek` fork**
+(`package = "amaru-curve25519-dalek"`, aliased `curve25519-dalek`,
+`default-features=false, ["u64_backend","alloc"]`) + `sha2 0.9` + `blake2 0.9`.
+Why: Elligator2 hash-to-curve must match libsodium byte-for-byte, and cryptoxide
+exposes neither its field ops (mul/sq/from_bytes are private) nor a general
+variable-base Edwards mul, so it cannot host the map or the `U`/`V` equations.
+Upstream dalek's `hash_from_bytes` uses the wrong sign bit; Amaru's fork is a
+single-commit fix (`sign_bit = 0`) and is what the Amaru node itself runs.
+cryptoxide is fully removed — `proof_to_hash` is now `gamma.mul_by_cofactor()`
+(no more −P negate hack), still byte-identical on all 27 vectors. wasm32 build
+confirmed green with the fork.
 
-eta0 for the full alpha-binding verify — NOT blocked: the Bash allowlist has
-no WebFetch/WebSearch/curl, but `cargo run -p harvest` reaches the network
-in-process via reqwest (that is exactly how slice 2 fetched all 27 vectors),
-so path (a) is fully doable autonomously now:
-  (a) [preferred] extend `tools/harvest` to also GET Koios
-      `epoch_params?_epoch_no=N` (N = the block's epoch) and write the 32-byte
-      eta0 (`nonce`) as a sidecar next to each vector (e.g.
-      `preprod-<slot>.eta0`), then the verify test reconstructs alpha offline.
-      Keeps the loop self-contained and feeds the separate nonce-evolution DoD
-      line. Run `cargo run -p harvest` once, commit the vectors + sidecars.
-  (b) fallback only: run the verify slice in a session with WebFetch/curl.
-Attack (a) next: the spec is fully pinned (see the copy-pasteable block from
-research): alpha = Blake2b256(BE64(slot)‖eta0); H = 8·elligator2(SHA512(0x04‖
-0x01‖Y‖alpha)[0..32] with bit255 cleared); U = s·B−c·Y, V = s·H−c·Gamma;
-c' = SHA512(0x04‖0x02‖H‖Gamma‖U‖V)[0..16]; accept iff c'==c. Elligator2 (the
-one hard part) has no cryptoxide helper — port from IOG libsodium/Amaru.
+Trust note for the red-team / Live slice: **eta0 is a byte input, not a trusted
+verdict.** A wrong eta0 changes alpha, so it can only make a genuine proof
+*reject* (liveness), never make an invalid proof *accept* (safety holds). In the
+tests eta0 is self-authenticating — the 22 real proofs verifying is proof the
+Koios nonce was correct. For a live consumer, the trust-minimal source of eta0
+is to **compute** it from the chain (the separate nonce-evolution DoD line):
+eta0 evolves deterministically from block VRF outputs. That slice makes the
+whole leader-VRF path oracle-free.
+
+Attack next — **KES + operational certificate verify** (DoD "verifies … KES",
+same differential pattern). Unlike VRF, **pallas-crypto 1.1.1 HAS a `kes`
+feature** — use it as the differential oracle (add `pallas-crypto` dev-dep with
+`features=["kes"]`). The header's `body_signature` (index 1 of the header
+`[header_body, body_signature]`) is the KES signature over the header body; the
+operational cert lives in the header_body tail we currently `skip()` (fields
+after `vrf_result`: op-cert = [hot_vkey, seq_no, kes_period, sigma], then
+protocol version). Surface those on `HeaderView`, verify (a) the cold-key
+Ed25519 signature over the op-cert, and (b) the KES signature over the body at
+the header's KES period, against ≥20 real vectors, byte-identical verdict to
+pallas-crypto's kes. cardano-crypto also ships a `kes` feature as a second
+oracle. No new network input needed (KES is self-contained in the header).
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`);
 repo is Flux-Point-Studios/sextant — if CI webhooks go quiet, Repair/re-sync

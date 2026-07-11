@@ -19,11 +19,23 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
 # bodies use it) while consuming the whole block; alloc is no_std-compatible.
 minicbor = { version = "2.2.2", features = ["alloc"] }
-# Pure-Rust, no_std curve25519 + SHA-512 for ECVRF (draft-03) verification —
-# the same crypto substrate pallas is built on. Only the primitives Sextant's
-# own VRF code path composes; the ECVRF logic itself lives in src/vrf.rs.
-cryptoxide = { version = "0.4.4", default-features = false, features = ["curve25519", "sha2"] }
+# Cardano's leader VRF is ECVRF-ED25519-SHA512-Elligator2 (IETF draft-03). The
+# Elligator2 hash-to-curve must match libsodium byte-for-byte, which upstream
+# curve25519-dalek does not (sign-bit handling); Amaru's fork carries the
+# single-commit fix (`hash_from_bytes` unsets the sign bit) and is what the
+# Amaru node itself runs. Sextant composes its field/point primitives — the
+# ECVRF verify orchestration (hash-to-curve, the two point equations, the
+# challenge recomputation) is Sextant's own code path in src/vrf.rs.
+curve25519-dalek = { package = "amaru-curve25519-dalek", version = "3.2.0", default-features = false, features = ["u64_backend", "alloc"] }
+# SHA-512 (draft-03 suite hash) and Blake2b-256 (the Praos VRF input hash), both
+# on the RustCrypto digest 0.9 family the dalek fork's `hash_from_bytes` expects.
+sha2 = { version = "0.9", default-features = false }
+blake2 = { version = "0.9", default-features = false }
 
 [dev-dependencies]
 hex = "0.4.3"
 pallas-traverse = "1.1.1"
+# Independent, non-dalek pure-Rust ECVRF (its own fe25519/elligator2 port),
+# advertised 100% cardano-node compatible — the differential oracle that
+# cross-checks Sextant's verdict on the same inputs as the real vectors.
+cardano-crypto = "1.0.8"
