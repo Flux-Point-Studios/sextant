@@ -43,9 +43,15 @@
 //! `signed_message` under its own aggregate verification key. The BLS
 //! aggregate / lottery-eligibility / Merkle-batch check is the composed
 //! [`mithril_stm`] primitive; the wire deserialize, parameter assembly, and
-//! message binding are Sextant's own path. The full tip→genesis walk that
-//! composes all three (`verify_genesis`, `verify_chain`, `verify_standard`) is
-//! the subsequent Mithril slice.
+//! message binding are Sextant's own path.
+//!
+//! [`verify_chain_anchored`] composes all three into the full chain of trust: a
+//! genesis-anchored segment (oldest first) verifies iff its integrity, linkage and
+//! AVK binding hold ([`verify_chain`]), its root is the network genesis anchor
+//! ([`verify_genesis`]), and every certificate rising from that anchor rides a
+//! valid STM multi-signature ([`verify_standard`]). It is the read path's trust
+//! terminus — the certificate whose signed Cardano state a UTxO read is checked
+//! against is only as trustworthy as its walk back to the genesis key.
 
 use std::collections::BTreeMap;
 
@@ -323,6 +329,16 @@ pub enum StandardError {
     /// `signed_message` is not the hash of `protocol_message`: the signed content
     /// does not bind this certificate's protocol message (and its AVK).
     MessageMismatch,
+    /// A degenerate threshold — `k == 0`, `m == 0`, or `phi_f` outside `(0, 1)` —
+    /// under which a trivial multi-signature could clear the bar (`phi_f == 1`
+    /// makes every claimed lottery win, so one signer alone reaches the quorum).
+    WeakParameters,
+    /// The aggregate verification key or multi-signature commits to a degenerate
+    /// signer set — a leaf count outside `[1, MAX_AVK_LEAVES]`, a total stake below
+    /// what a signature claims, or more signatures / lottery indices than
+    /// `MAX_SINGLE_SIGS` / `MAX_LOTTERY_INDICES` — that would drive mithril-stm's
+    /// Merkle / lottery verify into unbounded work on untrusted bytes.
+    ImplausibleAvk,
     /// The `aggregate_verification_key` field is not hex-encoded STM AVK JSON.
     MalformedAvk,
     /// The `multi_signature` field is not hex-encoded STM signature JSON.
@@ -338,6 +354,15 @@ impl core::fmt::Display for StandardError {
             StandardError::NotStandard => write!(f, "certificate carries no STM multi-signature"),
             StandardError::MessageMismatch => {
                 write!(f, "signed_message does not bind the protocol message")
+            }
+            StandardError::WeakParameters => {
+                write!(f, "protocol parameters are a degenerate threshold")
+            }
+            StandardError::ImplausibleAvk => {
+                write!(
+                    f,
+                    "aggregate verification key commits to a degenerate signer set"
+                )
             }
             StandardError::MalformedAvk => {
                 write!(f, "aggregate verification key is not valid STM AVK JSON")
@@ -383,17 +408,44 @@ pub fn verify_standard(cert: &Certificate) -> Result<(), StandardError> {
         return Err(StandardError::MessageMismatch);
     }
 
+    // Fail closed on a degenerate threshold before any curve work: `k == 0` /
+    // `m == 0` / `phi_f ∉ (0, 1)` would let a trivial multi-signature clear the bar
+    // (`phi_f == 1` makes every claimed lottery win, so a single signer reaches the
+    // quorum, and it also unbounds the eligibility Taylor series). Standalone these
+    // are attacker-controlled; in a chain walk [`verify_chain`]'s integrity check
+    // independently pins them to the committed hash. (`phi_f` NaN fails both
+    // comparisons, so it is rejected here too.)
+    let p = &cert.metadata.protocol_parameters;
+    if p.k == 0 || p.m == 0 || !(p.phi_f > 0.0 && p.phi_f < 1.0) {
+        return Err(StandardError::WeakParameters);
+    }
+
+    // Cap the untrusted blob sizes before decoding: mithril-stm's own deserialize
+    // and Sextant's `serde_json::Value` guard both allocate proportional to the
+    // input, so an oversized AVK / multi-signature is a memory DoS.
+    if cert.aggregate_verification_key.len() > MAX_STM_BLOB_HEX {
+        return Err(StandardError::MalformedAvk);
+    }
+    if cert.multi_signature.len() > MAX_STM_BLOB_HEX {
+        return Err(StandardError::MalformedSignature);
+    }
+
     let avk_json =
         decode_hex(&cert.aggregate_verification_key).ok_or(StandardError::MalformedAvk)?;
+    let sig_json = decode_hex(&cert.multi_signature).ok_or(StandardError::MalformedSignature)?;
+    // Bound the AVK / signature stake, leaf count, and lottery work before the STM
+    // verify: on untrusted bytes a leaf count near the u64 overflow, a signer
+    // claiming more stake than the total, or an oversized signatures / indexes
+    // array all drive mithril-stm into unbounded work.
+    guard_stm_bounds(&avk_json, &sig_json)?;
+
     let concat_avk: AggregateVerificationKeyForConcatenation<StmDigest> =
         serde_json::from_slice(&avk_json).map_err(|_| StandardError::MalformedAvk)?;
     let avk = AggregateVerificationKey::new(concat_avk);
 
-    let sig_json = decode_hex(&cert.multi_signature).ok_or(StandardError::MalformedSignature)?;
     let multi_sig: AggregateSignature<StmDigest> =
         serde_json::from_slice(&sig_json).map_err(|_| StandardError::MalformedSignature)?;
 
-    let p = &cert.metadata.protocol_parameters;
     let params = Parameters {
         m: p.m,
         k: p.k,
@@ -403,6 +455,164 @@ pub fn verify_standard(cert: &Certificate) -> Result<(), StandardError> {
     multi_sig
         .verify(cert.signed_message.as_bytes(), &avk, &params)
         .map_err(|_| StandardError::InvalidMultiSignature)
+}
+
+/// The largest registered-signer count Sextant will hand to the STM verifier. The
+/// AVK's Merkle tree carries one leaf per registered stake pool; no Cardano network
+/// has approached even 10⁴ pools, so 2²⁴ (≈16.8M) is enormous headroom while
+/// keeping the leaf count far from the u64 arithmetic overflow that drives
+/// mithril-stm's Merkle verify into unbounded work near `nr_leaves ≈ 2⁶⁴`.
+const MAX_AVK_LEAVES: u64 = 1 << 24;
+
+/// Cap on the hex length of an untrusted AVK / multi-signature blob (4 MiB). Real
+/// certificates are kilobytes; both mithril-stm's deserialize and Sextant's own
+/// `serde_json::Value` guard allocate proportional to this, so it bounds memory.
+const MAX_STM_BLOB_HEX: usize = 1 << 22;
+
+/// Cap on the number of single signatures in an aggregate (2¹⁶). A real quorum is
+/// at most the registered pool count; this bounds the per-signature work.
+const MAX_SINGLE_SIGS: usize = 1 << 16;
+
+/// Cap on the total lottery indices across all single signatures (2¹⁸). A genuine
+/// multi-signature carries `k` winning indices (thousands at most); mithril-stm
+/// evaluates one lottery per index *before* checking the count against `k`, so an
+/// oversized `indexes` array is a compute DoS this bound forecloses.
+const MAX_LOTTERY_INDICES: usize = 1 << 18;
+
+/// Reject an AVK / multi-signature whose committed stake, leaf count, or lottery
+/// work would drive mithril-stm's Merkle / lottery verify into unbounded work on
+/// untrusted bytes. Each bound is an invariant a genuine certificate satisfies
+/// trivially:
+/// * the AVK's `nr_leaves` is in `[1, MAX_AVK_LEAVES]` — a huge value overflows the
+///   Merkle-tree arithmetic and never terminates;
+/// * no single signature claims more stake than the AVK's `total_stake` — a signer
+///   with `stake > total_stake` makes the eligibility Taylor series' exponent
+///   exceed 1, so it never converges;
+/// * there are at most `MAX_SINGLE_SIGS` signatures and `MAX_LOTTERY_INDICES` total
+///   lottery indices — mithril-stm runs one lottery evaluation per index across all
+///   signatures before the count is checked against `k`, so an oversized array is a
+///   compute DoS.
+///
+/// Fields are read straight from the wire JSON (fail-closed on any missing or
+/// out-of-range value), before the typed deserialize the STM verify consumes. In a
+/// chain walk the AVK is additionally pinned by the AVK-binding to the genesis root.
+fn guard_stm_bounds(avk_json: &[u8], sig_json: &[u8]) -> Result<(), StandardError> {
+    let avk: serde_json::Value =
+        serde_json::from_slice(avk_json).map_err(|_| StandardError::MalformedAvk)?;
+    let total_stake = avk
+        .get("total_stake")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(StandardError::MalformedAvk)?;
+    let nr_leaves = avk
+        .pointer("/mt_commitment/nr_leaves")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(StandardError::MalformedAvk)?;
+    if nr_leaves == 0 || nr_leaves > MAX_AVK_LEAVES {
+        return Err(StandardError::ImplausibleAvk);
+    }
+
+    let sig: serde_json::Value =
+        serde_json::from_slice(sig_json).map_err(|_| StandardError::MalformedSignature)?;
+    let signatures = sig
+        .get("signatures")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(StandardError::MalformedSignature)?;
+    if signatures.len() > MAX_SINGLE_SIGS {
+        return Err(StandardError::ImplausibleAvk);
+    }
+    let mut total_indices = 0usize;
+    for entry in signatures {
+        // Each signature is `[{sigma, indexes, ..}, [verification_key, stake]]`;
+        // the signer's stake is `signatures[i][1][1]` and its lottery wins are
+        // `signatures[i][0].indexes`.
+        let stake = entry
+            .pointer("/1/1")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(StandardError::MalformedSignature)?;
+        if stake > total_stake {
+            return Err(StandardError::ImplausibleAvk);
+        }
+        let indices = entry
+            .pointer("/0/indexes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(StandardError::MalformedSignature)?;
+        total_indices = total_indices.saturating_add(indices.len());
+        if total_indices > MAX_LOTTERY_INDICES {
+            return Err(StandardError::ImplausibleAvk);
+        }
+    }
+    Ok(())
+}
+
+/// Why a genesis-anchored certificate chain failed to verify. Each variant names
+/// where in the walk the failure lies; untrusted aggregator bytes make every
+/// failure a recoverable outcome, never a panic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchoredError {
+    /// The segment's integrity, hash-linkage, or AVK-binding failed (the inner
+    /// [`ChainError`] carries the offending certificate's index).
+    Chain(ChainError),
+    /// The segment's root is not a valid genesis anchor.
+    Genesis(GenesisError),
+    /// The standard certificate at `index` (0-based, oldest = root) is not
+    /// authorized by a valid STM multi-signature.
+    Standard {
+        /// Position of the offending standard certificate in the segment.
+        index: usize,
+        /// Why its multi-signature was rejected.
+        source: StandardError,
+    },
+}
+
+impl core::fmt::Display for AnchoredError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AnchoredError::Chain(e) => write!(f, "chain integrity: {e}"),
+            AnchoredError::Genesis(e) => write!(f, "genesis anchor: {e}"),
+            AnchoredError::Standard { index, source } => {
+                write!(f, "certificate {index}: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AnchoredError {}
+
+/// Verify a genesis-anchored Mithril certificate chain end-to-end on Sextant's own
+/// path — the full chain of trust the read path depends on. `certs` is the segment
+/// oldest first: `certs[0]` the genesis root, the last certificate its tip.
+///
+/// Composes the three verifiers built across the Mithril slices, none of them the
+/// aggregator's own verdict:
+/// * [`verify_chain`] — every certificate hashes to its committed `hash`
+///   (integrity, which also pins each `k`/`m`/`phi_f` to that hash), each
+///   `previous_hash` links to its predecessor (linkage), and each aggregate
+///   verification key is the one its predecessor authorized (AVK binding);
+/// * [`verify_genesis`] — the root is the network's genesis anchor, its
+///   `genesis_signature` valid under the pinned `genesis_vkey`;
+/// * [`verify_standard`] — every certificate rising from the anchor rides a valid
+///   STM multi-signature over its own `signed_message` under its own AVK.
+///
+/// Because the integrity check runs first, a parameter-weakened forgery cannot
+/// reach [`verify_standard`] with an attacker-chosen threshold. Returns the
+/// verified segment's endpoints (root and tip hashes), or the offending
+/// certificate's position on the first failure.
+pub fn verify_chain_anchored(
+    certs: &[Certificate],
+    genesis_vkey: &[u8; 32],
+) -> Result<VerifiedChain, AnchoredError> {
+    let (root, rising) = certs
+        .split_first()
+        .ok_or(AnchoredError::Chain(ChainError::Empty))?;
+    let verified = verify_chain(certs).map_err(AnchoredError::Chain)?;
+    verify_genesis(root, genesis_vkey).map_err(AnchoredError::Genesis)?;
+    for (i, cert) in rising.iter().enumerate() {
+        verify_standard(cert).map_err(|source| AnchoredError::Standard {
+            index: i + 1,
+            source,
+        })?;
+    }
+    Ok(verified)
 }
 
 /// Decode an even-length hex string — the aggregator's json-hex encoding of the
