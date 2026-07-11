@@ -20,6 +20,10 @@ const BLOCK_LEN: u64 = 5;
 /// The read-path fields Sextant extracts from a block header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderView {
+    /// Ledger era discriminator, validated to a supported Praos era (Babbage
+    /// = 6, Conway = 7). Later slices key body/VRF schema on this so a header
+    /// cannot be validated under the wrong era's rules.
+    pub era: u8,
     pub block_number: u64,
     pub slot: u64,
     pub issuer_vkey: [u8; 32],
@@ -95,6 +99,7 @@ impl HeaderView {
         }
 
         Ok(Self {
+            era: era as u8, // validated to 6 | 7 above
             block_number,
             slot,
             issuer_vkey,
