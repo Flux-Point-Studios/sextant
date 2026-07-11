@@ -145,3 +145,28 @@ generation and the preview-net Live UTxO exercise.
 Carried from red-team (for when the full body/VRF validation lands): now that
 `HeaderView.era` is available, cross-check it against the transaction-body
 schema so a Conway-body-labeled-Babbage block cannot pass full validation.
+
+## Blockers (read first)
+**CI is RED and it blocks all merges — fix this before the next slice.**
+Slice 4 (full leader-VRF verify) is CODE-COMPLETE and carries red-team
+`VERDICT: SHIP`, but it is PARKED on **PR #4**
+(branch `slice-4-leader-vrf-verify`) because the Merge policy requires CI green
+and Woodpecker is failing.
+
+Diagnosis (not a code defect): every pipeline for the branch fails in ~41–48 s
+— far too fast to have compiled the new ~40-crate tree (minutes locally), so it
+dies at an early step (rustup / `cargo fmt` / initial crates.io index+download)
+*before* the slice's code compiles. The only structural change vs the green
+slice-3 build is the new deps (`amaru-curve25519-dalek`, `sha2 0.9`,
+`blake2 0.9`, dev-only `cardano-crypto`). Most likely the self-hosted runner
+cannot fetch the new/obscure crates (registry/mirror gap or lost crates.io
+egress). Local proof is solid: `scripts/harness.sh --full` exits 0 (fmt, clippy
+`-D warnings`, 22 tests, wasm32) and a clean-target clippy compiled the whole
+new tree — plus an independent red-team SHIP.
+
+Do next, in order: (1) open the Woodpecker pipeline log (target URL on PR #4)
+and confirm the failing step; if it is a crate fetch, add the new crates to the
+runner's source/mirror or restore crates.io egress (or Repair/re-sync repo 15).
+(2) Re-run CI; when green, squash-merge PR #4 and sync `main`. (3) THEN mark the
+slice-4 Plan item done and branch the KES slice from the merged result — do NOT
+start KES from this pre-merge `main`, or it will diverge from the parked branch.
