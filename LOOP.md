@@ -104,6 +104,7 @@ needs a row in Evidence.
 | 2026-07-11 04:40 UTC | Full leader-VRF verify on Sextant's own draft-03 code path: 22 real preprod leader proofs accept and yield the committed output, verdict byte-identical to an independent non-dalek oracle; tampered slot/nonce/key/scalar all reject | `cargo test --test vrf` — `real_preprod_leader_proofs_verify` (≥20 cases, `verify_praos_leader` binds `alpha = Blake2b256(BE64(slot)‖eta0)`), `verdict_matches_independent_oracle` (vs `cardano-crypto` `VrfDraft03::verify` on the same alpha), `tampered_leader_proof_is_rejected`; hash-to-curve = Amaru's elligator-sign-fixed `curve25519-dalek` fork, ECVRF orchestration is Sextant's own. All 8 vrf + 12 header tests green in `scripts/harness.sh --full` (exit 0) |
 | 2026-07-11 04:40 UTC | Substrate migrated cryptoxide → Amaru `curve25519-dalek` fork; `proof_to_hash` regression-free on all 27 vectors; wasm32 artifact still builds | `scripts/harness.sh --full` exit 0 — `proof_to_hash` now `gamma.mul_by_cofactor()` on the fork (drops cryptoxide's −P negate hack), `every_vector_output_equals_proof_to_hash` still byte-identical; `cargo build --release --target wasm32-unknown-unknown` green with the dalek fork (`default-features=false, ["u64_backend","alloc"]`) + sha2 0.9 + blake2 0.9 |
 | 2026-07-11 05:05 UTC | Red-team of the verify slice returned BLOCK on the canonicity boundary (a false-accept class the dalek-based oracle could not catch); closed by tightening to match libsodium's canonical-only decode | `fluxpoint-loop:red-team-reviewer` VERDICT BLOCK: `verify` reduced a non-canonical `s` (`from_bytes_mod_order`) and `decode_point` tolerated non-canonical point encodings. Fixed: `s` now `Scalar::from_canonical_bytes(..)` (reject `s ≥ L`), `decode_point` requires a compress round-trip (reject y `≥ p`, matching libsodium `ge25519_is_canonical`). Both reject only adversarial encodings a canonical producer never emits — all 22 real proofs still verify. New oracle-independent negatives `non_canonical_scalar_is_rejected` (s+L → `VerificationFailed`) and `non_canonical_point_is_rejected` (Gamma=p → `InvalidGamma`); `scripts/harness.sh --full` exit 0, 22 tests (12 header + 10 vrf) |
+| 2026-07-11 05:49 UTC | Slice 4 (full leader-VRF verify) merged to main; operator caught a flaky test that a single green run and the red-team both missed | PR #4 squash-merged (`44365a8`), CI green (pipeline 40). Independent `fluxpoint-loop:red-team-reviewer` SHIP — `verify` binds vkey+alpha (real-Gamma+garbage-`c‖s` forgery rejected, 80×9 single-byte tamper → 0 accepted, all 22 real leader proofs verify vs on-chain truth), Elligator2 byte-exact, deps sound (Amaru fork = 1 auditable line). Flaky test fixed: `leader_cases` sorted by slot, tampered test now finds a distinct-vkey case (`fs::read_dir` order made it pass/fail non-deterministically); `scripts/harness.sh --full` exit 0 on merged main |
 
 ## Notes for the next iteration
 State (2026-07-11): full leader-VRF **verify** shipped, on Sextant's own
@@ -158,30 +159,11 @@ Carried from red-team (for when the full body/VRF validation lands): now that
 `HeaderView.era` is available, cross-check it against the transaction-body
 schema so a Conway-body-labeled-Babbage block cannot pass full validation.
 
-## Blockers (read first)
-**CI is RED and it blocks all merges — fix this before the next slice.**
-Slice 4 (full leader-VRF verify) is CODE-COMPLETE and carries red-team
-`VERDICT: SHIP`, but it is PARKED on **PR #4**
-(branch `slice-4-leader-vrf-verify`) because the Merge policy requires CI green
-and Woodpecker is failing.
-
-Diagnosis (not a code defect — CONFIRMED by a controlled run): every pipeline
-for the branch fails in ~41–48 s — far too fast to have compiled the new
-~40-crate tree (minutes locally), so it dies at an early step (rustup /
-`cargo fmt` / initial crates.io index+download) *before* the slice's code
-compiles. Control: this doc commit on `main` (old deps, no new crates) built
-**green** on the same runner (pipeline 37) while the branch (new deps) fails —
-so the differentiator is strictly the new dependency fetch/build, not the code. The only structural change vs the green
-slice-3 build is the new deps (`amaru-curve25519-dalek`, `sha2 0.9`,
-`blake2 0.9`, dev-only `cardano-crypto`). Most likely the self-hosted runner
-cannot fetch the new/obscure crates (registry/mirror gap or lost crates.io
-egress). Local proof is solid: `scripts/harness.sh --full` exits 0 (fmt, clippy
-`-D warnings`, 22 tests, wasm32) and a clean-target clippy compiled the whole
-new tree — plus an independent red-team SHIP.
-
-Do next, in order: (1) open the Woodpecker pipeline log (target URL on PR #4)
-and confirm the failing step; if it is a crate fetch, add the new crates to the
-runner's source/mirror or restore crates.io egress (or Repair/re-sync repo 15).
-(2) Re-run CI; when green, squash-merge PR #4 and sync `main`. (3) THEN mark the
-slice-4 Plan item done and branch the KES slice from the merged result — do NOT
-start KES from this pre-merge `main`, or it will diverge from the parked branch.
+## Attacking next
+KES + operational-certificate verification (Plan item 5 — the second half of
+DoD line 2). pallas-crypto 1.1.1 ships a `kes` feature usable as the
+differential oracle here (unlike VRF, which it lacks). Branch from the merged
+`main` (slice 4 is in). The prior slice-4 CI blocker (Woodpecker runner could
+not fetch the new obscure crates) is resolved — pipeline 40 is green on the
+merged deps; if a future slice adds more obscure crates and CI fails fast on
+fetch again, the fix is on the runner (crates.io egress / mirror), not the code.
