@@ -293,42 +293,61 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — DoD line 3 CLOSED; pick the next DoD line
-Line 3 (chain-following across an epoch boundary, incl. nonce evolution) is done:
-formula (`src/nonce.rs`), single-epoch chain (`src/chain.rs`), and the real 299→300
-boundary (`tests/boundary.rs` + `boundary-*` vectors, `harvest boundary`) are all
-shipped. Remaining unchecked DoD lines: 2 (header validation on mainnet+preview),
-4 (Mithril), 5 (UTxO verify — design slice first), 6 (Artifacts in CI), 7 (Live),
-8 (no single-caller abstractions / no dead code — final sweep).
+## Attacking next — DoD line 4: Mithril genesis-anchored certificate-chain verify
+Protocol independently derived from the mithril source (mithril-common 0.6.67 +
+mithril-stm 0.10.5) and validated against a LIVE preprod certificate
+(spec-derivation workflow, confidence HIGH). USE THIS.
 
-Recommended next slice — **Mithril: genesis-anchored certificate chain** (DoD
-line 4). Rationale: it is the ROOT OF TRUST that anchors everything downstream —
-a Mithril certificate chain, verified from the genesis-configured genesis key,
-certifies a snapshot the read path can trust WITHOUT replaying all history. That
-directly unblocks the snapshot-anchored option for the UTxO line (5), which is the
-last hop before the Live line (7). Highest compounding leverage of the remaining
-lines, and the next clean crypto slice (independent multi-sig / STM verification,
-differential against the Mithril client lib as dev-only oracle). Shape: fetch a
-certificate chain from a public aggregator (`https://aggregator.pre-release-
-preview` / preprod aggregator), verify each cert's multi-signature and the
-chain back to the genesis-anchored certificate; negative test on a tampered cert.
-Follow the established pattern: real fetched artifacts checked in as vectors,
-Sextant's own verify path, differential oracle dev-only, harness stays offline.
+COMPOSE the STM primitive, IMPLEMENT the chain-walk yourself (bytes-in/verdict-out):
+- Compose `mithril-stm = { version = "0.10.5", default-features = false,
+  features = ["num-integer-backend"] }` for the multi-sig verify only. NEVER
+  enable `rug-backend` or `future_snark` (rug = GMP, breaks wasm). It rides blst
+  `portable` (off-x86 OK). Differential oracle: `mithril-common` (dev-only) —
+  its `CertificateVerifier::verify_certificate_chain`.
+- Implement in `src/mithril.rs`: entity structs (Certificate, CertificateMetadata,
+  ProtocolMessage = ordered map keyed by a ProtocolMessagePartKey enum,
+  ProtocolParameters{k,m,phi_f}, CertificateSignature{ Genesis(hex) |
+  Multi(SignedEntityType, json-hex) }); the 4 byte-exact SHA-256 hash fns
+  (ProtocolParameters.compute_hash uses a U8F24 fixed-point `phi_f =
+  round(phi_f*2^24) as u32-BE` — inline ~5 lines, do NOT pull `fixed`; golden
+  check phi_f=0.7 -> 11744051; metadata: chrono RFC3339 nanoseconds as i64-BE;
+  ProtocolMessage iterates in enum order; Certificate.compute_hash feeds the wire
+  avk/multi_sig strings DIRECTLY, no re-serialize); the chain-walk (tip -> genesis
+  via `previous_hash`) as Sextant control flow with an injected
+  `get_certificate(prev_hash)` retriever (lib stays offline/sync; harvester/test
+  supplies fetched bytes).
+- GENESIS ANCHORING (the trust root, the crux): the walk terminates at a GENESIS
+  cert whose `genesis_signature` is Ed25519 by the per-network GENESIS
+  VERIFICATION KEY over the genesis AVK. Reuse `src/ed25519.rs` (gate to match
+  mithril verify_strict). Fetch the preprod genesis vkey, pin it as a vector.
+- AVK BINDING (chain of trust): each cert's protocol_message carries
+  `NextAggregateVerificationKey` = next epoch's AVK; verify the CHILD cert's own
+  `aggregate_verification_key` == what the PARENT signed, recursively to the
+  genesis AVK. Plus previous_hash / epoch chaining as pure comparisons.
+- STANDARD cert = STM multi-sig verify (`ProtocolMultiSignature::verify(
+  signed_message, avk, params)` via mithril-stm) + AVK-binding + linking. GENESIS
+  cert = Ed25519 genesis-sig. Follow 0.6.67 verify_standard (10 steps) /
+  verify_genesis (5 steps) ordering.
 
-Alternative path — **close DoD line 2 (mainnet header validation)**. Leader-VRF +
-KES are proven on 22 real preprod blocks; line 2 also wants mainnet. Needs a
-real-MAINNET block harvest with eta0 (the 5 existing mainnet vectors are pallas
-synthetic decode-fixtures with hand-set slots — see the line-2 assessment note
-below). Extend `tools/harvest` with a mainnet relay/Koios/magic + mainnet eta0
-source, then run the EXISTING `vrf`/`kes` verifiers on them. Smaller (no new verify
-code) but carries the operator-decision flavor already flagged for line 2. Pick
-Mithril unless the operator wants line 2 ticked first.
+WASM (harness gates `cargo build --target wasm32` — must stay green):
+RECOMMENDED — put the Mithril verifier + `mithril-stm` behind a cargo feature
+(`mithril`, OFF by default). `cargo test/clippy --all-features` exercise it on the
+host (with the mithril-common oracle); the default lib build + the wasm build
+EXCLUDE it, so the wasm artifact stays lean and dodges blst's wasm C-toolchain
+(clang) need entirely. The harness already uses `--all-features` for test/clippy
+and plain for the wasm build, so this composes cleanly. (Alt if you want Mithril
+IN wasm: add `apt-get install -y clang` to `.woodpecker/harness.yml` + under
+`cfg(target_family="wasm")` set `getrandom = {version="0.2", features=["js"]}` —
+IOG's mithril-client-wasm proves blst->wasm works with clang.)
 
-Then: UTxO design slice (line 5) → UTxO verify + negative test → Live (line 7);
-Artifacts/CI (line 6) can be done any time and is independent.
+HARVEST + DoD proof: extend `tools/harvest` to fetch a real preprod certificate
+CHAIN from the aggregator (base `https://aggregator.pre-release-preview.api.
+mithril.network/aggregator` — CONFIRM; GET /certificates, /certificate/{hash},
+walk `previous_hash` to a genesis cert) + the preprod genesis vkey; check them in
+as JSON vectors. DoD line 4 proof = a test that verifies the chain to genesis and
+NAMES the certificate hash; negatives (tampered multi-sig / broken previous_hash /
+wrong genesis vkey / mismatched NextAVK) each reject; verdict byte-identical to
+mithril-common's verifier.
 
-Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`); repo
-Flux-Point-Studios/sextant (repo 15), CI green through pipeline 75. Trust-
-substrate normal-dep graph unchanged (all oracles dev-only). Carried red-team
-note: cross-check `HeaderView.era` against the tx-body schema so a Conway-body-
-labelled-Babbage block cannot pass full validation.
+Infra: Woodpecker CI green through pipeline 75; trust-substrate normal-dep graph
+otherwise unchanged (feature-gate keeps mithril-stm out of the default/wasm graph).
