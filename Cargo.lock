@@ -1527,10 +1527,13 @@ dependencies = [
  "amaru-curve25519-dalek",
  "blake2 0.9.2",
  "cardano-crypto",
+ "chrono",
  "hex",
  "minicbor 2.2.2",
  "pallas-crypto",
  "pallas-traverse",
+ "serde",
+ "serde_json",
  "sha2 0.9.9",
 ]
 

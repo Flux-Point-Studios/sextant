@@ -129,6 +129,19 @@ needs a row in Evidence.
       test-level composition of the existing primitive. `boundary-` prefix keeps
       these out of part 2's single-epoch preprod sweep; the all-`*.block`
       decode/VRF sweeps auto-verify them against pallas.
+- [x] Mithril certificate hashing (DoD line 4, part 1 of N): `src/mithril.rs`
+      (behind an OFF-by-default `mithril` cargo feature so the wasm/default lib
+      graph stays lean) defines the certificate entity structs and the byte-exact
+      SHA-256 `compute_hash` fns (ProtocolParameters U8F24 `phi_f`, metadata
+      RFC3339-nanos, ProtocolMessage in enum order, Certificate feeding the wire
+      avk/multi_sig strings directly). Harvest a real preprod certificate segment
+      (`tools/harvest mithril`, aggregator `release-preprod`) as JSON vectors;
+      prove `Certificate::compute_hash` == the aggregator's own `hash` on every
+      vector and that each cert's `previous_hash` == its parent vector's computed
+      hash (self-authenticating chain links), plus the golden `phi_f=0.7 ->
+      11744051`, verdict byte-identical to `mithril-common`'s hasher. Signature
+      verification (genesis Ed25519 anchor, STM multi-sig, AVK binding, full
+      chain-walk to genesis) are the subsequent Mithril slices.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -186,10 +199,42 @@ needs a row in Evidence.
 | 2026-07-11 16:40 UTC | REAL BOUNDARY (DoD line 3, part 3 — closes line 3): a stored contiguous preprod run across the epoch 299→300 turn proves η0 evolved; each side's leader-VRF is bound to its own epoch nonce and rejects the other's | `cargo run -p harvest boundary` BlockFetched 10 blocks (slots 127958330..=127958607, turn at 127958489) → `boundary-<slot>.block` + `.eta0`; last-299 slot 127958384 carries η0(299) `9adf4f5b…f4e0b2`, first-300 slot 127958489 carries η0(300) `aa845533…4eeb6c30`. `cargo test --test boundary` — `boundary_run_crosses_epoch_299_to_300_and_the_nonce_evolved` (verify_segment(pre, η0(299)) Ok, verify_segment(post, η0(300)) Ok, boundary links by hash + `+1` height + slot advance, names evolved η0(300)), `each_side_rejects_the_other_epochs_nonce` (verify_segment(pre, η0(300)) and verify_segment(post, η0(299)) both `Vrf{index:0}`). `scripts/harness.sh --full` exit 0, 45 tests (2 boundary + 7 chain + 13 header + 4 kes + 5 nonce + 4 opcert + 10 vrf); the all-`*.block` decode + VRF-output sweeps auto-verify the 10 new vectors against pallas. No `src/` change — the per-epoch nonce switch is a test-level composition of `chain::verify_segment` |
 | 2026-07-11 16:21 UTC | Slice 9 (real 299→300 boundary) merged to main with red-team SHIP — DoD line 3 CLOSED | PR #9 squash-merged (`3268daa`), CI `ci/woodpecker/pr/harness` green (pipeline 75). `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM/LOW: split clean 5/5 monotone (`[A,B,A,B]` trips "spans more than two epochs", both sides guarded non-empty); rejection is specifically leader-VRF at index 0 (opcert+KES nonce-independent, so correct-nonce Ok proves opcert passes → swapped η0 fails only VRF → `Vrf{0}` guaranteed, not an artifact); mis-tag-proof (a wrong sidecar η0 or `slot>=turn_slot` off-by-one fails its own `verify_segment.expect`, so the crypto subordinates the untrusted harvest; turn block 127958489 correctly epoch-300); η0 is a pinned input, wrong η0 only rejects (liveness) never false-accepts (safety); boundary is a real link (prev_hash==block_hash, +1 height) and the all-`*.block` VRF sweep independently confirms all 10 are genuine preprod headers; trust substrate untouched (zero `src/`/`Cargo` diff, `harvest` is `publish=false`, `boundary-` prefix isolates the `preprod-`-scoped sweeps). `scripts/harness.sh --full` exit 0 on merged main, working tree clean |
 | 2026-07-11 16:29 UTC | Independent red-team of the autonomously-merged real-boundary slice: VERDICT SHIP — DoD line 3 soundly closed | Fresh `fluxpoint-loop:red-team-reviewer` + operator 3× flaky-check: genuine cryptographic mutual rejection (epoch-300 block's leader-VRF returns Err under η0(299) via real `alpha` divergence — NOT a nonce-inequality shortcut); real boundary at `firstSlotOf(300)=127,958,400` (Byron offset accounted); contiguous hash-linked run; no overclaim (Koios η0 is input); no regression, deterministic. Consensus-verification core (DoD lines 2+3) now complete |
+| 2026-07-11 18:05 UTC | Mithril certificate hashing (DoD line 4, part 1): Sextant's own `Certificate::compute_hash` (`src/mithril.rs`, `mithril` feature) reproduces the preprod aggregator's committed `hash` byte-exactly on 12 real certificates, and each `previous_hash` is the parent's recomputed content hash | `cargo test --features mithril` — `tests/mithril.rs::certificate_hash_matches_aggregator` (12 certs: 11 `MithrilStakeDistribution` + 1 `CardanoTransactions`), `previous_hash_links_to_parent_content` (≥10 in-segment links), `tampered_certificate_breaks_the_hash`; module unit goldens vs mithril-common's own test vectors: `protocol_parameters_hash_matches_mithril_golden` (`ace019…`), `certificate_metadata_hash_matches_mithril_golden` (`f16631…`), `phi_f_fixed_point_golden` (0.7→11744051). Vectors harvested by new `cargo run -p harvest mithril` (aggregator `release-preprod`). `scripts/harness.sh --full` exit 0, 52 tests; the wasm build is a cached no-op (mithril feature OFF by default → no serde/chrono/json in the default+wasm graph; Cargo.lock adds 0 crates) |
 
 ## Notes for the next iteration
-State (2026-07-11): **REAL BOUNDARY shipped — DoD line 3 is CLOSED** (this slice,
-part 3 of 3). `cargo run -p harvest boundary` (new mode in `tools/harvest`)
+State (2026-07-11): **Mithril certificate HASHING shipped** (DoD line 4, part 1
+of N). `src/mithril.rs` (behind the OFF-by-default `mithril` cargo feature)
+decodes an aggregator certificate on Sextant's own path and recomputes its
+content hash byte-exactly to `mithril-common`: the four nested SHA-256 hashes
+(`ProtocolParameters` with `k`/`m` BE-u64 + `phi_f` as a `U8F24` round-ties-even
+`u32`; `CertificateMetadata` with chrono BE-i64 nanosecond timestamps + per-signer
+`party_id‖BE(stake)`; `ProtocolMessage` iterated in `ProtocolMessagePartKey`
+**enum order**, not JSON order; `Certificate` feeding the wire avk/multi_sig/
+genesis_sig strings directly, standard-cert path binding `signed_entity_type`).
+Proven on 12 real preprod certs (`cargo run -p harvest mithril`, aggregator
+`release-preprod`) — all match the aggregator's own committed `hash`, and each
+`previous_hash` is the parent's recomputed hash — plus mithril-common's own unit
+goldens (`ace019…`, `f16631…`, phi_f 0.7→11744051). Feature-gated so the default
++ wasm graph is unchanged (**Cargo.lock adds 0 crates**; serde/serde_json/chrono
+were already resolved via existing dev-deps).
+
+**Attacking next — DoD line 4, part 2: genesis anchoring + AVK binding + STM
+multi-sig verify.** The hashing primitive above is the chain-link substrate; the
+remaining parts add the trust root and the signatures (see the "Attacking next"
+block below, still valid). Two open design points for that slice: (a) the
+tip→genesis walk is ~1 cert/epoch and genesis is near epoch 0, so hundreds of
+hops — the `mithril` harvest currently caps at `MITHRIL_HOPS=12`; decide whether
+the DoD "genesis-anchored chain" is proven by walking a bounded recent segment
+whose oldest cert's AVK is checked against a pinned genesis-derived AVK, or by a
+full walk (needs a smarter fetch, e.g. the aggregator's genesis cert endpoint if
+one exists). (b) STM multi-sig verify pulls `mithril-stm`+blst → keep it under
+the same `mithril` feature (off in wasm) per the spec; add `apt-get install -y
+clang` to CI only if Mithril-in-wasm is later wanted. `SignedEntityType` /
+`ProtocolMessagePartKey` model only the variants seen in real vectors — a cert
+with another tag is a clean deserialize error, extend with its own vector then.
+
+Prior state (2026-07-11): **REAL BOUNDARY shipped — DoD line 3 is CLOSED** (slice
+9, part 3 of 3). `cargo run -p harvest boundary` (new mode in `tools/harvest`)
 BlockFetched a contiguous 10-block preprod run across the epoch 299→300 turn
 (slots 127958330..=127958607, turn at 127958489) into `boundary-<slot>.block` +
 per-epoch `.eta0` sidecars: the last epoch-299 block (127958384) carries η0(299)

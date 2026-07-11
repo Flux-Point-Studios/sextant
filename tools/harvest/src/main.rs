@@ -27,6 +27,11 @@ use std::path::PathBuf;
 const RELAY: &str = "preprod-node.play.dev.cardano.org:3001";
 const KOIOS: &str = "https://preprod.koios.rest/api/v1";
 const PREPROD_MAGIC: u64 = 1;
+/// Mithril aggregator for the preprod network the block vectors come from.
+const MITHRIL_AGG: &str = "https://aggregator.release-preprod.api.mithril.network/aggregator";
+/// Cap the tip→genesis walk so a long production chain can't harvest hundreds of
+/// vectors; enough hops to prove byte-exact hashing + `previous_hash` linking.
+const MITHRIL_HOPS: usize = 12;
 /// Skip the newest few blocks — near the tip they can still roll back.
 const SETTLE_SKIP: usize = 8;
 
@@ -65,8 +70,105 @@ async fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("eta0") => backfill_eta0().await,
         Some("boundary") => fetch_boundary().await,
+        Some("mithril") => fetch_mithril().await,
         _ => fetch_blocks().await,
     }
+}
+
+/// Walk the preprod Mithril certificate chain tip→(genesis | `MITHRIL_HOPS`
+/// hops), saving each certificate as verbatim `mithril-cert-<hash>.json` (the
+/// exact wire bytes `Certificate::compute_hash` is checked against). The
+/// aggregator's own `hash` is the self-authenticating oracle: each cert's
+/// `previous_hash` is the parent's content hash, so the saved segment is a
+/// hash-linked chain. Uses the aggregator only; the bytes are input to verify,
+/// never trusted state.
+async fn fetch_mithril() -> Result<()> {
+    let out_dir = vectors_dir()?;
+    let client = reqwest::Client::new();
+
+    // Tip certificate hash from the list (newest-first).
+    let list: serde_json::Value = client
+        .get(format!("{MITHRIL_AGG}/certificates"))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .context("mithril certificates list")?
+        .error_for_status()?
+        .json()
+        .await
+        .context("mithril certificates json")?;
+    let mut hash = list
+        .get(0)
+        .and_then(|c| c.get("hash"))
+        .and_then(|h| h.as_str())
+        .context("aggregator returned no certificates")?
+        .to_string();
+
+    let mut written = 0usize;
+    let mut reached_genesis = false;
+    for _ in 0..MITHRIL_HOPS {
+        // Fetch the raw bytes verbatim — compute_hash must see the exact wire
+        // strings (avk / multi_sig / timestamps), not a re-serialization.
+        let text = client
+            .get(format!("{MITHRIL_AGG}/certificate/{hash}"))
+            .header("accept", "application/json")
+            .send()
+            .await
+            .with_context(|| format!("mithril certificate {hash}"))?
+            .error_for_status()?
+            .text()
+            .await
+            .with_context(|| format!("mithril certificate {hash} body"))?;
+        let cert: serde_json::Value =
+            serde_json::from_str(&text).with_context(|| format!("parse certificate {hash}"))?;
+        let self_hash = cert
+            .get("hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default();
+        ensure!(
+            self_hash == hash,
+            "aggregator returned cert {self_hash} for requested {hash}"
+        );
+
+        std::fs::write(out_dir.join(format!("mithril-cert-{hash}.json")), &text)
+            .context("write certificate vector")?;
+        written += 1;
+
+        let genesis_sig = cert
+            .get("genesis_signature")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default();
+        let prev = cert
+            .get("previous_hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default()
+            .to_string();
+        println!(
+            "  wrote mithril-cert-{hash}.json (epoch {}, {} bytes){}",
+            cert.get("epoch").and_then(|e| e.as_u64()).unwrap_or(0),
+            text.len(),
+            if genesis_sig.is_empty() {
+                ""
+            } else {
+                " [GENESIS]"
+            }
+        );
+        if !genesis_sig.is_empty() {
+            reached_genesis = true;
+            break;
+        }
+        ensure!(
+            !prev.is_empty(),
+            "non-genesis cert {hash} has no previous_hash"
+        );
+        hash = prev;
+    }
+
+    println!(
+        "harvested {written} mithril certificate vectors into {} (genesis reached: {reached_genesis})",
+        out_dir.display()
+    );
+    Ok(())
 }
 
 /// BlockFetch `count` recent settled preprod blocks off the relay and write
