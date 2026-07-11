@@ -8,6 +8,7 @@
 //! agree with pallas or the harness goes red (vectors are inputs to verify,
 //! never trusted state).
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -59,7 +60,9 @@ fn decodes_babbage_header_era() {
 /// harvested vectors are auto-checked here, and cross-era coverage is asserted.
 #[test]
 fn every_vector_matches_pallas_and_is_praos() {
-    let mut checked = 0usize;
+    // Count distinct block contents, not files, so duplicate copies of one
+    // vector cannot inflate the ≥20 claim.
+    let mut distinct: HashSet<Vec<u8>> = HashSet::new();
     let (mut saw_babbage, mut saw_conway) = (false, false);
 
     for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
@@ -92,12 +95,13 @@ fn every_vector_matches_pallas_and_is_praos() {
             7 => saw_conway = true,
             e => panic!("non-Praos era {e} in {}", path.display()),
         }
-        checked += 1;
+        distinct.insert(bytes.clone());
     }
 
     assert!(
-        checked >= 20,
-        "DoD requires ≥20 verified vectors, found {checked}"
+        distinct.len() >= 20,
+        "DoD requires ≥20 distinct verified vectors, found {}",
+        distinct.len()
     );
     assert!(
         saw_babbage && saw_conway,
