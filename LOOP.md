@@ -70,13 +70,20 @@ needs a row in Evidence.
       (cardano-node ground truth), verdict byte-identical to pallas-crypto's
       independent `cryptoxide` backend; tamper / `s+L` malleation /
       malformed-CBOR all rejected. PR #5.
-- [ ] KES body-signature verification (the other half of DoD line 2): the
+- [x] KES body-signature verification (the other half of DoD line 2): the
       header's `body_signature` (header idx 1) is a `Sum6Kes` signature over the
-      raw header_body bytes at period `slot/129600 − opcert.kes_period`. Verify
-      recursively on the ed25519 substrate (Blake2b256 vk-hash tree, Sum0 =
-      Ed25519 leaf, 448-byte sig), differential vs pallas-crypto `kes`. Requires
-      the decoder to capture the raw header_body byte span (the KES-signed
-      message). Then check DoD line 2.
+      raw header_body bytes at period `slot/129600 − opcert.kes_period`. Verified
+      recursively on the existing ed25519 substrate (Blake2b256 vk-hash tree,
+      Sum0 = Ed25519 leaf, 448-byte sig) on Sextant's own path in `src/kes.rs`
+      (`verify_kes` / `verify_header_kes`); the decoder now captures the raw
+      header_body span + the 448-byte body_signature on `HeaderView`. All 22 real
+      preprod body signatures verify (cardano-node ground truth, periods 0..35),
+      verdict byte-identical to pallas-crypto's independent `Sum6Kes`; tampered
+      sig/vk-node/root-key/message/period and out-of-range/underflow periods all
+      rejected. `blake2b256` extracted to `src/hash.rs` (shared with vrf). No new
+      crate in the trust-substrate normal graph (pallas `kes` feature is dev-only).
+      DoD line 2 assessment recorded in Notes (KES + leader-VRF proven on ≥20 real
+      preprod; a full "from mainnet" tick needs a real-mainnet harvest with eta0).
 - [ ] <derive the next slice from the Definition of Done, one at a time>
 
 ## Constraints
@@ -123,20 +130,50 @@ needs a row in Evidence.
 | 2026-07-11 06:32 UTC | Operational-certificate verify (opcert half of DoD line 2): all 22 real preprod opcerts verify on Sextant's own Ed25519 path, verdict byte-identical to pallas-crypto's independent `cryptoxide` backend; the cold key genuinely signed `hot_vkey ‖ BE64(seq) ‖ BE64(kes_period)` | `cargo test --test opcert` — `real_preprod_opcerts_verify` (≥20), `opcert_verdict_matches_independent_oracle` (vs `pallas_crypto::key::ed25519`, cryptoxide, on genuine + 1-bit tamper), `tampered_opcert_is_rejected` (sig/hot/seq/period/wrong-cold-key), `opcert_rejects_non_canonical_scalar` (`s+L`); + `header_decode::rejects_bad_opcert_shape`. `src/ed25519.rs` = libsodium strict cofactorless verify on the amaru dalek fork; `decode_point` extracted to `src/curve.rs` (shared with vrf). `scripts/harness.sh --full` exit 0, 27 tests (13 header + 4 opcert + 10 vrf) |
 | 2026-07-11 06:32 UTC | Slice 5 merged to main with red-team SHIP | PR #5 squash-merged (`32d50b4`), CI `ci/woodpecker/pr/harness` green (pipeline 48). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM: Ed25519 boundary no looser than libsodium (no false-accept path), OCertSignable layout confirmed by 22-vector parity, decoder element-accounting exact + fail-closed, `curve.rs` extraction byte-identical (vrf's 10 tests green), authority binds {cold,hot,seq,period}. One LOW (module doc overstated opcert as full header auth) fixed in `5303ff8` (scoped to cold→hot delegation); single-variant `KesError` accepted as next-slice scaffolding. No new crate fetch (pallas-crypto already resolved transitively) |
 | 2026-07-11 06:53 UTC | Independent red-team of the autonomously-merged opcert slice: VERDICT SHIP (confirms the loop's self-review) | Fresh `fluxpoint-loop:red-team-reviewer` + operator 4× flaky-check: 0 forged opcerts accepted; Ed25519 matches libsodium strictness and is stricter than its own cryptoxide oracle on small-order A (9 forgeries the oracle accepts but cardano-node/Sextant reject — oracle is the lax side); no VRF regression from shared `curve.rs`; BE64 OCertSignable confirmed on 22 vectors; no panic/DoS (300k iters); deterministic (both case-builders `sort_by_key(slot)`) |
+| 2026-07-11 07:40 UTC | KES body-signature verify (KES half of DoD line 2): all 22 real preprod header body signatures verify on Sextant's own recursive `Sum6Kes` path at `slot/129600 − opcert.kes_period` (cardano-node ground truth), verdict byte-identical to pallas-crypto's independent `Sum6Kes`; the hot KES key genuinely signed the raw header_body CBOR | `cargo test --test kes` — `real_preprod_kes_body_sigs_verify` (≥20, `verify_header_kes`, periods 0..35), `kes_verdict_matches_independent_oracle` (vs `pallas_crypto::kes` `Sum6KesSig::verify`, genuine + 1-bit tamper), `tampered_kes_body_sig_is_rejected` (sig/last-vk-node/root-key/message/wrong-period), `kes_period_out_of_range_is_rejected` (≥64 and slot-precedes-opcert underflow). `src/kes.rs` recurses the Blake2b256 vk tree over `src/ed25519::verify` leaves; decoder captures raw header_body span + 448-byte body_signature; `blake2b256` shared via `src/hash.rs`. Mutation check: inverting the subtree split → 3/4 tests red. `scripts/harness.sh --full` exit 0, 31 tests (13 header + 4 kes + 4 opcert + 10 vrf) |
 
 ## Notes for the next iteration
-State (2026-07-11): **operational-certificate verify shipped** (slice 5, PR #5,
-`32d50b4`). `src/ed25519.rs` exposes `verify(pubkey, msg, sig) -> bool`
-(libsodium strict cofactorless: canonical `S<L`, canonical non-small-order `A`,
-`sB−kA` re-compress compare). `src/kes.rs` exposes `opcert_signable(&OpCert) ->
-[u8;48]` and `verify_opcert(cold_vkey, &OpCert) -> Result<(), KesError>`.
-`HeaderView` now carries `opcert: OpCert {hot_vkey, sequence_number, kes_period,
-sigma}` (header_body idx 8). The canonical point-decode is now shared in
-`src/curve.rs` (`decode_point`, used by both vrf and ed25519). Oracle for the
-opcert differential is `pallas-crypto` (dev-dep, default features) — its
-`key::ed25519` runs on `cryptoxide`, independent of the dalek fork.
+State (2026-07-11): **KES body-signature verify shipped** (this slice). DoD line
+2's two crypto halves — leader-VRF (slice 4) and KES (opcert slice 5 + this KES
+body-sig slice) — are now both proven on the 22 real preprod vectors, each
+byte-identical to an independent pallas-family oracle.
 
-Prior state: full leader-VRF **verify** on Sextant's own draft-03 code path.
+`src/kes.rs` now exposes, beyond opcert: `verify_kes(root_vkey, period, msg,
+&[u8;448]) -> Result<(), KesError>` (recursive `Sum6Kes`: depth-6 Blake2b256 vk
+tree over `ed25519::verify` leaves, `sig = sigma(d−1) ‖ vk0 ‖ vk1`, split at
+`2^(d−1)`), and `verify_header_kes(&HeaderView)` which derives the evolution
+period `slot/129600 − opcert.kes_period` (checked_sub + `<64` bound, else
+`KesPeriodOutOfRange`). `HeaderView` gained `header_body: Vec<u8>` (the raw CBOR
+span the KES key signs, captured `body_start..d.position()`) and
+`body_signature: [u8;448]`. `blake2b256` is now shared in `src/hash.rs` (vrf's
+`praos_vrf_input` and kes's vk tree both call it). Oracle: `pallas-crypto` dev-dep
+now `features=["kes"]` → `pallas_crypto::kes::summed_kes::Sum6KesSig::verify` — an
+independent `Sum6Kes` implementation. The `kes` feature pulls dev-only mainstream
+transitives (serde_with/schemars/chrono/time); `cargo tree -p sextant --edges
+normal` confirms the trust-substrate lib graph is unchanged (4 direct deps).
+
+**DoD line 2 assessment — deliberately left unchecked.** Line 2 asks for VRF+KES
+on ≥20 golden vectors "pulled from preview and mainnet." What is proven: leader-VRF
++ KES on 22 **preprod** blocks (freshly BlockFetched off a live relay), oracle-
+parity on each. What is NOT proven for a fully honest tick: (a) the leader-VRF
+verify runs preprod-only because mainnet vectors have no `.eta0` sidecar; (b) the
+5 mainnet vectors are pallas **synthetic decode-fixtures** — the diagnostic this
+slice ran shows babbage1/2/3 carry hand-set slots (~1.03M, impossible for real
+Babbage) whose slot→KES-period relationship is off by a constant, so
+`verify_header_kes` (which derives the period from the slot) cannot use them;
+babbage4 (slot 63.5M) and conway1 obey the formula and DO match the oracle's
+period exactly (27, 5) — confirming the period math and the KES verifier, not a
+bug. A clean line-2 tick needs a **real-mainnet block harvest with eta0**
+(same tooling as the preprod harvest). Recorded here so the operator, not the
+loop, decides whether preprod-primary satisfies line 2.
+
+Prior state: operational-certificate verify (slice 5, PR #5, `32d50b4`).
+`src/ed25519.rs` exposes `verify(pubkey, msg, sig) -> bool` (libsodium strict
+cofactorless). `src/kes.rs` exposes `opcert_signable`/`verify_opcert`. `HeaderView`
+carries `opcert` (header_body idx 8). `src/curve.rs` `decode_point` is shared by
+vrf and ed25519.
+
+Earlier state: full leader-VRF **verify** on Sextant's own draft-03 code path.
 `src/vrf.rs` exposes `verify(vkey, alpha, proof)`, `verify_praos_leader(vkey,
 slot, eta0, proof)` (builds `alpha = Blake2b256(BE64(slot)‖eta0)` via
 `praos_vrf_input`) and `proof_to_hash`. All 22 preprod vectors carry a
@@ -165,48 +202,44 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-Attack next — **KES body-signature verify** (the remaining half of DoD line 2;
-opcert is done). The header's `body_signature` (header idx 1 of `[header_body,
-body_signature]`) is a Cardano `Sum6Kes` signature over the **raw header_body
-CBOR bytes**, at the header's KES period. Build it entirely on the existing
-substrate (`src/ed25519::verify` + `blake2` — both already deps); do NOT add an
-obscure KES crate (Constraint: minimal substrate; avoids the slice-4 CI
-dep-fetch pain). Concrete shape, from research (all cross-corroborated, but the
-starred items need a `cargo doc`/registry confirm before gating):
-- Sum6 sig = 448 bytes; `SumN sig = sigma(SumN-1) ‖ vk0(32) ‖ vk1(32)`, base
-  `Sum0` = a 64-byte Ed25519 sig. Root vk = `opcert.hot_vkey`.
-- vk-hash tree: `vk = Blake2b256(vk0 ‖ vk1)` (32 bytes). Recursive
-  `verify(period, vk, msg)`, split `t = 2^(d-1)`: parse `(sigma', vk0, vk1)`;
-  check `vk == Blake2b256(vk0‖vk1)`; if `period < t` recurse left `(period,
-  vk0)`, else right `(period − t, vk1)`; `Sum0` = `ed25519::verify(vk, msg,
-  sigma')`.
-- Period = `slot / 129600 − opcert.kes_period` (slotsPerKESPeriod = 129600 on
-  preprod/mainnet/preview, a Shelley-genesis constant). Bounds: `0 ≤ period <
-  MaxKESEvolutions` (*62 mainnet — confirm per network; Sum6 supports 64).
-- Message = the raw header_body byte span. The decoder currently reads fields
-  but does NOT capture that span — add it: record `d.position()` before
-  `expect_array(PRAOS_HEADER_BODY_LEN)` and after skipping idx 9, and surface
-  `bytes[start..end]` (owned `Vec<u8>` on `HeaderView`, alloc already used).
-- Oracle: `pallas-crypto` with `features=["kes"]` (already a dev-dep; `kes` is
-  a non-default feature). *`Sum6KesSig::verify(&self, period: u32, pk:
-  &PublicKey, msg: &[u8]) -> Result<(), _>` — CONFIRM receiver/arg-order/return
-  via `cargo doc -p pallas-crypto --features kes --no-deps` (highest-risk
-  detail). `cardano-crypto` also has a `kes` feature as a second oracle. No new
-  network input (KES is self-contained in the header).
-
 ## Attacking next
-KES body-signature verification (the second half of DoD line 2; opcert shipped
-in slice 5). Branch from merged `main` (`32d50b4`). Full concrete shape,
-substrate choice, period math, and the pallas-crypto `kes` oracle caveat are in
-the "Attack next" paragraph above. First failing test to write: decode a real
-preprod header's `body_signature`, verify the Sum6Kes signature over the raw
-header_body bytes at `slot/129600 − opcert.kes_period`, assert accept on all 22
-real vectors and reject on a tampered signature/period; then check DoD line 2.
+The next unchecked substantive DoD line is **line 3: chain following across an
+epoch boundary, including nonce evolution.** This is the highest-leverage next
+slice: computing eta0 from the chain makes the whole leader-VRF path oracle-free
+(the eta0 trust note above), and it is the prerequisite that lets a real-mainnet
+harvest carry its own eta0 — which is what a fully honest DoD-line-2 "from
+mainnet" tick needs. Recommended primary. Concrete shape (confirm exact hashing
+against a real vector before gating — it is self-authenticating, see below):
+- Per-block nonce contribution: `η_block = Blake2b256(outputVRF)` where
+  `outputVRF` is the block's 64-byte certified VRF output (Praos, Babbage+, one
+  VRF per block). Rolling candidate nonce evolves `η_c' = Blake2b256(η_c ‖
+  η_block)` (cardano-ledger `⋆` / `evolveNonce`); genesis seed is the Shelley
+  genesis `extraEntropy`/initial η.
+- Epoch η0: frozen at the randomness-stability window (`3k/f` slots into the
+  epoch, `RandomnessStabilisationWindow`), combined with the previous epoch's
+  last-block-header-hash nonce (η_ph) and extra entropy: `η0(e+1) = η_c(stab) ⋆
+  η_ph ⋆ extraEntropy`. Confirm the exact combine order against ledger.
+- **Self-authenticating oracle (no new trusted input):** harvest a preprod
+  header sequence spanning the 299→300 boundary and evolve the nonce forward; the
+  computed epoch-300 η0 must equal the `preprod-<slot>.eta0` sidecars already in
+  the tree (Koios epoch-300 nonce `aa845533…4eeb6c30`). DoD line 3's proof is "a
+  test naming the epoch and the evolved nonce value" — that equality is it.
+- Harvest tooling exists (`tools/harvest`, pallas-network N2N BlockFetch, points
+  from Koios); extend it to pull a contiguous boundary-spanning run.
+
+Smaller alternative if appetite is low this iteration — **DoD line 6 artifacts
+(cbindgen C-header in CI).** The wasm32 build is already gated by the harness;
+the missing half is generating the C header via cbindgen + publishing the static
+lib in CI. Well-scoped, unlocks the C-ABI consumer, and is a named ratchet point.
+Third option — **close DoD line 2 honestly** by harvesting real mainnet blocks
+(with eta0) so leader-VRF + KES run on a mainnet set, not just preprod.
+
+Branch from merged `main` after this PR lands. Recommendation: attack nonce
+evolution (line 3) — it compounds the VRF path and unblocks the mainnet tick.
 
 Infra: Woodpecker runs the harness on push/PR (`ci/woodpecker/*/harness`); repo
-is Flux-Point-Studios/sextant (repo 15). CI green through pipeline 48; the
-slice-4 obscure-crate fetch blocker is resolved and the KES slice adds no new
-crate (built on existing deps). Ratchet points not yet gated: cbindgen C-header
-generation and the preview-net Live UTxO exercise. Carried from an earlier
-red-team: once full body validation lands, cross-check `HeaderView.era` against
-the tx-body schema so a Conway-body-labeled-Babbage block cannot pass.
+is Flux-Point-Studios/sextant (repo 15). CI green through pipeline 48. The KES
+slice added no crate to the trust-substrate normal graph (the `pallas-crypto
+kes` feature is dev-only; `cargo tree --edges normal` unchanged). Carried from an
+earlier red-team: once full body validation lands, cross-check `HeaderView.era`
+against the tx-body schema so a Conway-body-labeled-Babbage block cannot pass.

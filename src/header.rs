@@ -14,6 +14,9 @@ const PRAOS_HEADER_BODY_LEN: u64 = 10;
 /// operational_cert (header_body index 8) element count: `[hot_vkey,
 /// sequence_number, kes_period, sigma]`.
 const OPCERT_LEN: u64 = 4;
+/// body_signature (header array index 1) length: a `Sum6Kes` signature —
+/// `sigma5(384) ‖ vk0(32) ‖ vk1(32)`, the same width across the Praos eras.
+const KES_SIGNATURE_LEN: usize = 448;
 /// block = [header, tx_bodies, tx_witness_sets, auxiliary_data, invalid_txs].
 const BLOCK_LEN: u64 = 5;
 
@@ -40,6 +43,14 @@ pub struct HeaderView {
     /// The operational certificate (header_body index 8) binding the hot KES
     /// key to the cold `issuer_vkey`.
     pub opcert: OpCert,
+    /// The raw CBOR bytes of `header_body` (header array index 0), exactly as
+    /// serialized in the block — the message the hot KES key signs. Captured as
+    /// an owned byte span so `kes::verify_header_kes` can check `body_signature`
+    /// against the exact bytes cardano-node signed, with no re-encoding.
+    pub header_body: Vec<u8>,
+    /// The 448-byte `Sum6Kes` body signature (header array index 1) the hot KES
+    /// key produced over `header_body` at the header's KES evolution period.
+    pub body_signature: [u8; KES_SIGNATURE_LEN],
 }
 
 /// A Praos header's operational certificate (header_body index 8): the pool's
@@ -109,6 +120,9 @@ impl HeaderView {
 
         expect_array(&mut d, BLOCK_LEN)?; // block
         expect_array(&mut d, 2)?; // header: [header_body, body_signature]
+        // The KES-signed message is the raw CBOR of header_body; record the span
+        // from the opening array token through the last consumed element.
+        let body_start = d.position();
         expect_array(&mut d, PRAOS_HEADER_BODY_LEN)?; // header_body
 
         let block_number = d.u64().map_err(|_| DecodeError::MalformedCbor)?;
@@ -123,10 +137,13 @@ impl HeaderView {
         d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 7: block_body_hash
         let opcert = read_opcert(&mut d)?; // idx 8: operational_cert
         d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 9: protocol_version
+        let header_body = bytes[body_start..d.position()].to_vec();
+
+        // header array index 1: the Sum6-KES body signature over header_body.
+        let body_signature = read_bytes_exact::<KES_SIGNATURE_LEN>(&mut d)?;
 
         // Consume the remainder so trailing or malformed bytes anywhere in the
         // input are rejected, not silently ignored.
-        d.skip().map_err(|_| DecodeError::MalformedCbor)?; // body_signature
         for _ in 0..(BLOCK_LEN - 1) {
             d.skip().map_err(|_| DecodeError::MalformedCbor)?; // rest of block
         }
@@ -143,6 +160,8 @@ impl HeaderView {
             vrf_output,
             vrf_proof,
             opcert,
+            header_body,
+            body_signature,
         })
     }
 }
