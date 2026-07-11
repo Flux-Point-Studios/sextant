@@ -77,6 +77,9 @@ fn leader_cases() -> Vec<LeaderCase> {
             output: view.vrf_output,
         });
     }
+    // Deterministic order — fs::read_dir order is unspecified and varies by
+    // platform, which must not change which case a test anchors on.
+    cases.sort_by_key(|c| c.slot);
     cases
 }
 
@@ -216,7 +219,8 @@ fn verdict_matches_independent_oracle() {
 /// and the independent oracle both reject the tampered proof.
 #[test]
 fn tampered_leader_proof_is_rejected() {
-    let c = &leader_cases()[0];
+    let cases = leader_cases();
+    let c = &cases[0];
     let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
 
     let mut proof = c.proof;
@@ -235,9 +239,13 @@ fn tampered_leader_proof_is_rejected() {
     // Wrong slot → different alpha → rejected.
     assert!(vrf::verify_praos_leader(&c.vkey, c.slot ^ 1, &c.eta0, &c.proof).is_err());
 
-    // Another block's public key cannot claim this proof.
-    let other = &leader_cases()[1];
-    assert!(other.vkey != c.vkey);
+    // Another pool's public key cannot claim this proof. Consecutive preprod
+    // blocks can share a pool vkey, so pick a case whose vkey genuinely differs
+    // rather than assuming the next one does.
+    let other = cases
+        .iter()
+        .find(|o| o.vkey != c.vkey)
+        .expect("vector set must contain ≥2 distinct leader vkeys");
     assert!(vrf::verify(&other.vkey, &alpha, &c.proof).is_err());
 }
 
