@@ -91,7 +91,12 @@ pub fn proof_to_hash(proof: &[u8; 80]) -> Result<[u8; 64], VrfError> {
 /// 5. accept iff `c' == c`, then return `proof_to_hash(pi)`.
 pub fn verify(vkey: &[u8; 32], alpha: &[u8], proof: &[u8; 80]) -> Result<[u8; 64], VrfError> {
     let gamma = decode_point(&proof[..32]).ok_or(VrfError::InvalidGamma)?;
-    let c = scalar_from_16(&proof[32..48]);
+    // The 16-byte challenge c, widened into the low half of a 32-byte scalar for
+    // the `s·B − c·Y` / `s·H − c·Gamma` equations; c is always well below the
+    // group order, so `from_bits` performs no reduction.
+    let mut c_bytes = [0u8; 32];
+    c_bytes[..16].copy_from_slice(&proof[32..48]);
+    let c = Scalar::from_bits(c_bytes);
     let mut s_bytes = [0u8; 32];
     s_bytes.copy_from_slice(&proof[48..80]);
     // Reject a non-canonical response scalar (`s ≥ L`) rather than silently
@@ -202,13 +207,4 @@ fn decode_point(bytes: &[u8]) -> Option<EdwardsPoint> {
     let compressed = CompressedEdwardsY::from_slice(bytes);
     let point = compressed.decompress()?;
     (point.compress() == compressed).then_some(point)
-}
-
-/// The proof's 16-byte challenge `c`, widened into the low half of a 32-byte
-/// little-endian scalar for the `s·B − c·Y` / `s·H − c·Gamma` equations; the
-/// value is always well below the group order, so no reduction occurs.
-fn scalar_from_16(bytes16: &[u8]) -> Scalar {
-    let mut buf = [0u8; 32];
-    buf[..16].copy_from_slice(bytes16);
-    Scalar::from_bits(buf)
 }
