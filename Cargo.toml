@@ -5,11 +5,20 @@ edition = "2024"
 description = "Read-path verifying Cardano client: Rust core (header VRF/KES, Mithril, UTxO verification) with C-ABI + wasm targets."
 repository = "https://github.com/Flux-Point-Studios/sextant"
 
+# The harvester lives in its own workspace member so its async/network deps
+# (tokio, reqwest, pallas-network) never enter the trust-substrate lib's
+# build. Harness commands operate on the `sextant` package only.
+[workspace]
+members = ["tools/harvest"]
+resolver = "3"
+
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-minicbor = "2.2.2"
+# `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
+# bodies use it) while consuming the whole block; alloc is no_std-compatible.
+minicbor = { version = "2.2.2", features = ["alloc"] }
 
 [dev-dependencies]
 hex = "0.4.3"

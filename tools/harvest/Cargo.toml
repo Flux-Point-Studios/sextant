@@ -1,0 +1,17 @@
+[package]
+name = "harvest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Dev-only vector harvester: pulls recent preprod block CBOR off a public
+# relay into ../../tests/vectors/. Not part of the sextant lib or its harness.
+
+[dependencies]
+pallas-network = "1.1.1"
+pallas-traverse = "1.1.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+hex = "0.4"
+anyhow = "1"
