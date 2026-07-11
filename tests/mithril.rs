@@ -16,8 +16,19 @@
 //! independent (cryptoxide) verdict, and its immediate child is hash-linked and
 //! AVK-bound to it — the genesis trust root authorizes the next epoch's signer set.
 //!
-//! The STM multi-signature verify and the full tip→genesis walk are the
-//! subsequent Mithril slices.
+//! Part 4 (STM multi-signature): the authority every *standard* certificate rides
+//! on. Each is signed by a stake-based threshold multi-signature over its
+//! `signed_message` under its own aggregate verification key. All 12 real preprod
+//! standard multi-signatures verify on Sextant's own path (wire deserialize +
+//! parameter assembly + message binding), and swapping the message, the AVK, or
+//! the protocol message — or corrupting the blobs — is rejected. The BLS
+//! aggregate / lottery / Merkle-batch check is the composed `mithril-stm`
+//! primitive: it is the reference STM implementation, so the oracle here is the
+//! real on-chain signatures themselves (a threshold BLS signature no adversary can
+//! forge), not a second library.
+//!
+//! The full tip→genesis walk that composes all three verifiers is the subsequent
+//! Mithril slice.
 #![cfg(feature = "mithril")]
 
 use std::collections::HashMap;
@@ -26,7 +37,8 @@ use std::path::PathBuf;
 
 use pallas_crypto::key::ed25519::{PublicKey, Signature};
 use sextant::mithril::{
-    Certificate, GenesisError, ProtocolMessagePartKey, verify_chain, verify_genesis,
+    Certificate, GenesisError, ProtocolMessagePartKey, StandardError, verify_chain, verify_genesis,
+    verify_standard,
 };
 
 fn vectors_dir() -> PathBuf {
@@ -278,4 +290,114 @@ fn genesis_anchors_its_child() {
     assert_eq!(verified.root_hash, genesis.hash);
     assert_eq!(verified.tip_hash, child.hash);
     assert_eq!(verified.length, 2);
+}
+
+/// Every harvested *standard* certificate — one that rides on an STM
+/// multi-signature rather than a genesis Ed25519 signature.
+fn standard_certs() -> Vec<Certificate> {
+    let mut certs: Vec<Certificate> = harvested_certs()
+        .into_iter()
+        .filter(|c| !c.is_genesis() && !c.multi_signature.is_empty())
+        .collect();
+    // Deterministic order so per-index tampering picks the same target every run.
+    certs.sort_by(|a, b| a.hash.cmp(&b.hash));
+    certs
+}
+
+/// The STM half of the trust chain: every real preprod *standard* certificate is
+/// authorized by a valid STM (stake-based threshold multi-signature) over its own
+/// `signed_message`, under its own aggregate verification key and the protocol
+/// parameters in force. Verified on Sextant's own path — wire deserialize,
+/// parameter assembly, and the signed-message binding are Sextant's; the BLS
+/// aggregate / lottery-eligibility / Merkle-batch verify is the composed
+/// mithril-stm primitive. These are real multi-signatures produced by real
+/// preprod signers, so a valid verdict is genuine ground truth, not a fixture.
+#[test]
+fn real_preprod_multi_signatures_verify() {
+    let certs = standard_certs();
+    assert!(
+        certs.len() >= 10,
+        "expected ≥10 harvested standard certificates, found {}",
+        certs.len(),
+    );
+    for cert in &certs {
+        verify_standard(cert)
+            .unwrap_or_else(|e| panic!("standard certificate {} must verify: {e:?}", cert.hash));
+    }
+}
+
+/// The multi-signature genuinely binds {message, AVK, parameters}: swapping in a
+/// different certificate's signed message or aggregate verification key makes the
+/// STM verify fail. Non-vacuous — the real BLS signature only satisfies its own
+/// message and signer set.
+#[test]
+fn multi_signature_binds_message_and_avk() {
+    let certs = standard_certs();
+    let a = &certs[0];
+    let b = certs
+        .iter()
+        .find(|c| {
+            c.signed_message != a.signed_message
+                && c.aggregate_verification_key != a.aggregate_verification_key
+        })
+        .expect("a second distinct standard certificate");
+
+    // Genuine certificate verifies.
+    assert!(verify_standard(a).is_ok());
+
+    // A's multi-signature over B's message → STM rejects.
+    let mut wrong_message = a.clone();
+    wrong_message.protocol_message = b.protocol_message.clone();
+    wrong_message.signed_message = b.signed_message.clone();
+    assert_eq!(
+        verify_standard(&wrong_message),
+        Err(StandardError::InvalidMultiSignature),
+    );
+
+    // A's multi-signature under B's aggregate verification key → STM rejects.
+    let mut wrong_avk = a.clone();
+    wrong_avk.aggregate_verification_key = b.aggregate_verification_key.clone();
+    assert_eq!(
+        verify_standard(&wrong_avk),
+        Err(StandardError::InvalidMultiSignature),
+    );
+}
+
+/// Every way a standard-certificate authorization can be forged is rejected with a
+/// distinct verdict: a genesis certificate is not STM-signed; a swapped protocol
+/// message is no longer bound by `signed_message`; a corrupted signature or AVK
+/// blob never reaches the curve.
+#[test]
+fn tampered_standard_certificate_is_rejected() {
+    let good = standard_certs().remove(0);
+    assert!(verify_standard(&good).is_ok());
+
+    // A genesis certificate carries no multi-signature.
+    let genesis = read_cert("mithril-genesis-cert.json");
+    assert_eq!(verify_standard(&genesis), Err(StandardError::NotStandard));
+
+    // Swapped protocol message → signed_message no longer binds it, caught before
+    // any curve work.
+    let mut msg_bad = good.clone();
+    msg_bad
+        .protocol_message
+        .message_parts
+        .insert(ProtocolMessagePartKey::CurrentEpoch, "999".to_string());
+    assert_eq!(
+        verify_standard(&msg_bad),
+        Err(StandardError::MessageMismatch),
+    );
+
+    // Malformed multi-signature hex → rejected as malformed, never a false accept.
+    let mut sig_bad = good.clone();
+    sig_bad.multi_signature = "not-hex".to_string();
+    assert_eq!(
+        verify_standard(&sig_bad),
+        Err(StandardError::MalformedSignature),
+    );
+
+    // Malformed aggregate verification key hex → rejected as malformed.
+    let mut avk_bad = good.clone();
+    avk_bad.aggregate_verification_key = "zzzz".to_string();
+    assert_eq!(verify_standard(&avk_bad), Err(StandardError::MalformedAvk));
 }
