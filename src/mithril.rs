@@ -329,13 +329,15 @@ pub enum StandardError {
     /// `signed_message` is not the hash of `protocol_message`: the signed content
     /// does not bind this certificate's protocol message (and its AVK).
     MessageMismatch,
-    /// A degenerate threshold — `k == 0`, `m == 0`, or `phi_f` outside `(0, 1]` —
-    /// under which a trivial multi-signature could clear the bar.
+    /// A degenerate threshold — `k == 0`, `m == 0`, or `phi_f` outside `(0, 1)` —
+    /// under which a trivial multi-signature could clear the bar (`phi_f == 1`
+    /// makes every claimed lottery win, so one signer alone reaches the quorum).
     WeakParameters,
-    /// The aggregate verification key commits to a degenerate signer set — a leaf
-    /// count outside `[1, MAX_AVK_LEAVES]`, or a total stake below what a signature
-    /// claims — that would drive mithril-stm's Merkle / lottery verify into
-    /// unbounded work on untrusted bytes.
+    /// The aggregate verification key or multi-signature commits to a degenerate
+    /// signer set — a leaf count outside `[1, MAX_AVK_LEAVES]`, a total stake below
+    /// what a signature claims, or more signatures / lottery indices than
+    /// `MAX_SINGLE_SIGS` / `MAX_LOTTERY_INDICES` — that would drive mithril-stm's
+    /// Merkle / lottery verify into unbounded work on untrusted bytes.
     ImplausibleAvk,
     /// The `aggregate_verification_key` field is not hex-encoded STM AVK JSON.
     MalformedAvk,
@@ -407,21 +409,34 @@ pub fn verify_standard(cert: &Certificate) -> Result<(), StandardError> {
     }
 
     // Fail closed on a degenerate threshold before any curve work: `k == 0` /
-    // `m == 0` / `phi_f ∉ (0, 1]` would let a trivial multi-signature clear the
-    // bar. Standalone these are attacker-controlled; in a chain walk
-    // [`verify_chain`]'s integrity check independently pins them to the committed
-    // hash. (`phi_f` NaN fails both comparisons, so it is rejected here too.)
+    // `m == 0` / `phi_f ∉ (0, 1)` would let a trivial multi-signature clear the bar
+    // (`phi_f == 1` makes every claimed lottery win, so a single signer reaches the
+    // quorum, and it also unbounds the eligibility Taylor series). Standalone these
+    // are attacker-controlled; in a chain walk [`verify_chain`]'s integrity check
+    // independently pins them to the committed hash. (`phi_f` NaN fails both
+    // comparisons, so it is rejected here too.)
     let p = &cert.metadata.protocol_parameters;
-    if p.k == 0 || p.m == 0 || !(p.phi_f > 0.0 && p.phi_f <= 1.0) {
+    if p.k == 0 || p.m == 0 || !(p.phi_f > 0.0 && p.phi_f < 1.0) {
         return Err(StandardError::WeakParameters);
+    }
+
+    // Cap the untrusted blob sizes before decoding: mithril-stm's own deserialize
+    // and Sextant's `serde_json::Value` guard both allocate proportional to the
+    // input, so an oversized AVK / multi-signature is a memory DoS.
+    if cert.aggregate_verification_key.len() > MAX_STM_BLOB_HEX {
+        return Err(StandardError::MalformedAvk);
+    }
+    if cert.multi_signature.len() > MAX_STM_BLOB_HEX {
+        return Err(StandardError::MalformedSignature);
     }
 
     let avk_json =
         decode_hex(&cert.aggregate_verification_key).ok_or(StandardError::MalformedAvk)?;
     let sig_json = decode_hex(&cert.multi_signature).ok_or(StandardError::MalformedSignature)?;
-    // Bound the AVK / signature stake and leaf count before the STM verify: on
-    // untrusted bytes a leaf count near the u64 overflow, or a signer claiming more
-    // stake than the total, drives mithril-stm into unbounded work.
+    // Bound the AVK / signature stake, leaf count, and lottery work before the STM
+    // verify: on untrusted bytes a leaf count near the u64 overflow, a signer
+    // claiming more stake than the total, or an oversized signatures / indexes
+    // array all drive mithril-stm into unbounded work.
     guard_stm_bounds(&avk_json, &sig_json)?;
 
     let concat_avk: AggregateVerificationKeyForConcatenation<StmDigest> =
@@ -449,16 +464,36 @@ pub fn verify_standard(cert: &Certificate) -> Result<(), StandardError> {
 /// mithril-stm's Merkle verify into unbounded work near `nr_leaves ≈ 2⁶⁴`.
 const MAX_AVK_LEAVES: u64 = 1 << 24;
 
-/// Reject an AVK / multi-signature whose committed stake or leaf count would drive
-/// mithril-stm's Merkle / lottery verify into unbounded work on untrusted bytes.
-/// Two bounds, each an invariant a genuine certificate satisfies trivially:
+/// Cap on the hex length of an untrusted AVK / multi-signature blob (4 MiB). Real
+/// certificates are kilobytes; both mithril-stm's deserialize and Sextant's own
+/// `serde_json::Value` guard allocate proportional to this, so it bounds memory.
+const MAX_STM_BLOB_HEX: usize = 1 << 22;
+
+/// Cap on the number of single signatures in an aggregate (2¹⁶). A real quorum is
+/// at most the registered pool count; this bounds the per-signature work.
+const MAX_SINGLE_SIGS: usize = 1 << 16;
+
+/// Cap on the total lottery indices across all single signatures (2¹⁸). A genuine
+/// multi-signature carries `k` winning indices (thousands at most); mithril-stm
+/// evaluates one lottery per index *before* checking the count against `k`, so an
+/// oversized `indexes` array is a compute DoS this bound forecloses.
+const MAX_LOTTERY_INDICES: usize = 1 << 18;
+
+/// Reject an AVK / multi-signature whose committed stake, leaf count, or lottery
+/// work would drive mithril-stm's Merkle / lottery verify into unbounded work on
+/// untrusted bytes. Each bound is an invariant a genuine certificate satisfies
+/// trivially:
 /// * the AVK's `nr_leaves` is in `[1, MAX_AVK_LEAVES]` — a huge value overflows the
 ///   Merkle-tree arithmetic and never terminates;
 /// * no single signature claims more stake than the AVK's `total_stake` — a signer
 ///   with `stake > total_stake` makes the eligibility Taylor series' exponent
-///   exceed 1, so it never converges.
+///   exceed 1, so it never converges;
+/// * there are at most `MAX_SINGLE_SIGS` signatures and `MAX_LOTTERY_INDICES` total
+///   lottery indices — mithril-stm runs one lottery evaluation per index across all
+///   signatures before the count is checked against `k`, so an oversized array is a
+///   compute DoS.
 ///
-/// Both fields are read straight from the wire JSON (fail-closed on any missing or
+/// Fields are read straight from the wire JSON (fail-closed on any missing or
 /// out-of-range value), before the typed deserialize the STM verify consumes. In a
 /// chain walk the AVK is additionally pinned by the AVK-binding to the genesis root.
 fn guard_stm_bounds(avk_json: &[u8], sig_json: &[u8]) -> Result<(), StandardError> {
@@ -482,14 +517,27 @@ fn guard_stm_bounds(avk_json: &[u8], sig_json: &[u8]) -> Result<(), StandardErro
         .get("signatures")
         .and_then(serde_json::Value::as_array)
         .ok_or(StandardError::MalformedSignature)?;
+    if signatures.len() > MAX_SINGLE_SIGS {
+        return Err(StandardError::ImplausibleAvk);
+    }
+    let mut total_indices = 0usize;
     for entry in signatures {
-        // Each signature is `[sig, [verification_key, stake]]`; the signer's stake
-        // is `signatures[i][1][1]`.
+        // Each signature is `[{sigma, indexes, ..}, [verification_key, stake]]`;
+        // the signer's stake is `signatures[i][1][1]` and its lottery wins are
+        // `signatures[i][0].indexes`.
         let stake = entry
             .pointer("/1/1")
             .and_then(serde_json::Value::as_u64)
             .ok_or(StandardError::MalformedSignature)?;
         if stake > total_stake {
+            return Err(StandardError::ImplausibleAvk);
+        }
+        let indices = entry
+            .pointer("/0/indexes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or(StandardError::MalformedSignature)?;
+        total_indices = total_indices.saturating_add(indices.len());
+        if total_indices > MAX_LOTTERY_INDICES {
             return Err(StandardError::ImplausibleAvk);
         }
     }

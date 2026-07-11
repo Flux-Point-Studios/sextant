@@ -542,10 +542,10 @@ fn chain_anchored_rejects_forgeries() {
 /// Hardening (part-4 red-team carry): `verify_standard` fails closed on degenerate
 /// protocol parameters. Standalone, a certificate's own `k`/`m`/`phi_f` are
 /// attacker-controlled; a `k=0` or `phi_f≥1` threshold would let a trivial
-/// multi-signature clear the bar. The guard rejects them before any curve work,
-/// independent of the chain-integrity check that also pins them to the committed
-/// hash. `phi_f = 1.0` is inside the accepted `(0, 1]` range, so it passes the
-/// guard and is stopped only by the signature verify.
+/// multi-signature clear the bar (`phi_f == 1` makes every claimed lottery win, so
+/// one signer alone reaches the quorum). The guard rejects them before any curve
+/// work, independent of the chain-integrity check that also pins them to the
+/// committed hash.
 #[test]
 fn verify_standard_rejects_weak_parameters() {
     let child = read_cert("mithril-genesis-child.json");
@@ -580,13 +580,16 @@ fn verify_standard_rejects_weak_parameters() {
         Err(StandardError::WeakParameters)
     );
 
-    // phi_f = 1.0 is the inclusive upper bound of the accepted (0, 1] range: it
-    // clears the guard, and because a higher phi_f only makes the lottery *easier*,
-    // the real signatures still verify. (It is rejected only when it is not the
-    // committed value — the chain-integrity check catches that.)
+    // phi_f = 1.0 makes every claimed lottery win, so it is rejected as degenerate
+    // even though a higher phi_f would otherwise only ease the lottery — a lone
+    // signer must not be able to clear the quorum. (A hair below, phi_f < 1, is
+    // accepted; the genuine 0.65 verifies above.)
     let mut phi_one = child;
     phi_one.metadata.protocol_parameters.phi_f = 1.0;
-    assert_eq!(verify_standard(&phi_one), Ok(()));
+    assert_eq!(
+        verify_standard(&phi_one),
+        Err(StandardError::WeakParameters)
+    );
 }
 
 /// Decode an aggregator json-hex field back to its JSON string, for targeted
@@ -657,6 +660,35 @@ fn verify_standard_rejects_hostile_stm_inputs() {
     );
     assert_eq!(
         verify_standard_within(avk_huge, 10),
+        Some(Err(StandardError::ImplausibleAvk)),
+    );
+
+    // Oversized blobs are capped on length before any decode — a memory DoS
+    // (mithril-stm's deserialize and the guard's `serde_json::Value` both allocate
+    // proportional to the input).
+    let mut avk_big = child.clone();
+    avk_big.aggregate_verification_key = "0".repeat((1 << 22) + 2);
+    assert_eq!(verify_standard(&avk_big), Err(StandardError::MalformedAvk));
+    let mut sig_big = child.clone();
+    sig_big.multi_signature = "0".repeat((1 << 22) + 2);
+    assert_eq!(
+        verify_standard(&sig_big),
+        Err(StandardError::MalformedSignature),
+    );
+
+    // DoS: an oversized `indexes` array — mithril-stm evaluates one lottery per
+    // index across all signatures *before* checking the count against k, so a
+    // signature with a huge indexes array must be rejected before the verify. The
+    // bounded-time assertion proves the guard fires, not the loop.
+    let idx_key = "\"indexes\":[";
+    let idx_start = sig_json.find(idx_key).expect("indexes array") + idx_key.len();
+    let idx_end = idx_start + sig_json[idx_start..].find(']').expect("indexes close");
+    let flood = vec!["0"; 400_000].join(",");
+    let hostile = format!("{}{flood}{}", &sig_json[..idx_start], &sig_json[idx_end..]);
+    let mut idx_flood = child.clone();
+    idx_flood.multi_signature = hex::encode(hostile.as_bytes());
+    assert_eq!(
+        verify_standard_within(idx_flood, 10),
         Some(Err(StandardError::ImplausibleAvk)),
     );
 
