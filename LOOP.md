@@ -153,10 +153,13 @@ Slice 4 (full leader-VRF verify) is CODE-COMPLETE and carries red-team
 (branch `slice-4-leader-vrf-verify`) because the Merge policy requires CI green
 and Woodpecker is failing.
 
-Diagnosis (not a code defect): every pipeline for the branch fails in ~41–48 s
-— far too fast to have compiled the new ~40-crate tree (minutes locally), so it
-dies at an early step (rustup / `cargo fmt` / initial crates.io index+download)
-*before* the slice's code compiles. The only structural change vs the green
+Diagnosis (not a code defect — CONFIRMED by a controlled run): every pipeline
+for the branch fails in ~41–48 s — far too fast to have compiled the new
+~40-crate tree (minutes locally), so it dies at an early step (rustup /
+`cargo fmt` / initial crates.io index+download) *before* the slice's code
+compiles. Control: this doc commit on `main` (old deps, no new crates) built
+**green** on the same runner (pipeline 37) while the branch (new deps) fails —
+so the differentiator is strictly the new dependency fetch/build, not the code. The only structural change vs the green
 slice-3 build is the new deps (`amaru-curve25519-dalek`, `sha2 0.9`,
 `blake2 0.9`, dev-only `cardano-crypto`). Most likely the self-hosted runner
 cannot fetch the new/obscure crates (registry/mirror gap or lost crates.io
