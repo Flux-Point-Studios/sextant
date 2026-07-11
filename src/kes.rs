@@ -110,6 +110,11 @@ pub fn verify_kes(
 /// header implies: `slot / SLOTS_PER_KES_PERIOD − opcert.kes_period`, the offset
 /// from when the hot key's operational certificate was issued. A slot preceding
 /// that issue period, or an offset past the tree's 64 evolutions, fails closed.
+///
+/// This proves only that the key rooted at `opcert.hot_vkey` signed the body; it
+/// does not authorize that hot key. Pair it with [`verify_opcert`], which binds
+/// the hot key to the pool's registered cold `issuer_vkey` — the two together
+/// authenticate authorship (cold → hot delegation, then hot → body signature).
 pub fn verify_header_kes(view: &HeaderView) -> Result<(), KesError> {
     let period = (view.slot / SLOTS_PER_KES_PERIOD)
         .checked_sub(view.opcert.kes_period)
