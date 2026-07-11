@@ -35,7 +35,9 @@ blake2 = { version = "0.9", default-features = false }
 [dev-dependencies]
 hex = "0.4.3"
 pallas-traverse = "1.1.1"
-# Independent, non-dalek pure-Rust ECVRF (its own fe25519/elligator2 port),
-# advertised 100% cardano-node compatible — the differential oracle that
-# cross-checks Sextant's verdict on the same inputs as the real vectors.
+# Pure-Rust ECVRF advertised 100% cardano-node compatible, with its own
+# libsodium-port Elligator2 hash-to-curve (`fe25519`/`elligator2`) independent
+# of the dalek fork's — the differential oracle that cross-checks Sextant's
+# verdict on the same inputs as the real vectors. Shares dalek for the group
+# arithmetic, so its independence is in the hash-to-curve step.
 cardano-crypto = "1.0.8"

@@ -15,7 +15,10 @@
 //!
 //! pallas 1.1.1 ships no VRF, so the oracle is the canonical producer
 //! (cardano-node) that minted these blocks, cross-checked against
-//! `cardano-crypto` — an independent, non-dalek pure-Rust reimplementation.
+//! `cardano-crypto`, whose Elligator2 hash-to-curve is an independent
+//! libsodium-port (its own `fe25519`/`elligator2`), not the dalek fork's — so
+//! the cross-check is meaningful on the error-prone hash-to-curve step even
+//! though both libraries share dalek for the group arithmetic.
 
 use std::collections::HashSet;
 use std::fs;
@@ -235,4 +238,62 @@ fn tampered_leader_proof_is_rejected() {
     let other = &leader_cases()[1];
     assert!(other.vkey != c.vkey);
     assert!(vrf::verify(&other.vkey, &alpha, &c.proof).is_err());
+}
+
+/// The Ed25519 group order L, little-endian.
+const GROUP_ORDER_LE: [u8; 32] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+];
+
+/// Little-endian 32-byte addition (no final carry-out for the values used here).
+fn add_le(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut carry = 0u16;
+    for i in 0..32 {
+        let sum = a[i] as u16 + b[i] as u16 + carry;
+        out[i] = sum as u8;
+        carry = sum >> 8;
+    }
+    out
+}
+
+/// A non-canonical response scalar `s' = s + L` reduces to the same scalar and
+/// so satisfies the equation arithmetically, but Sextant rejects it — closing
+/// the malleability a plain `from_bytes_mod_order` would admit. This is checked
+/// directly (not via the oracle, which shares dalek's reducing decoder).
+#[test]
+fn non_canonical_scalar_is_rejected() {
+    let c = &leader_cases()[0];
+    let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
+
+    // Sanity: the genuine proof (canonical s < L) still verifies.
+    assert!(vrf::verify(&c.vkey, &alpha, &c.proof).is_ok());
+
+    let mut s = [0u8; 32];
+    s.copy_from_slice(&c.proof[48..80]);
+    let s_plus_l = add_le(&s, &GROUP_ORDER_LE); // s + L ≥ L, non-canonical
+    let mut proof = c.proof;
+    proof[48..80].copy_from_slice(&s_plus_l);
+
+    assert_eq!(
+        vrf::verify(&c.vkey, &alpha, &proof),
+        Err(VrfError::VerificationFailed),
+    );
+}
+
+/// A non-canonical point encoding (y-coordinate `≥ p`) is rejected even when it
+/// decodes to an on-curve point. `p` in little-endian encodes `y ≡ 0`, which is
+/// on-curve, but re-compresses to the canonical all-zero y, so `decode_point`
+/// (used for Gamma here) refuses it rather than accepting the malleated bytes.
+#[test]
+fn non_canonical_point_is_rejected() {
+    let mut p_le = [0xffu8; 32];
+    p_le[0] = 0xed;
+    p_le[31] = 0x7f; // p = 2^255 - 19
+
+    let view = HeaderView::from_block_cbor(&unhex(CONWAY1)).expect("decode header");
+    let mut proof = view.vrf_proof;
+    proof[..32].copy_from_slice(&p_le); // put a non-canonical y in Gamma
+    assert_eq!(vrf::proof_to_hash(&proof), Err(VrfError::InvalidGamma));
 }

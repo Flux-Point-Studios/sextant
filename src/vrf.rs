@@ -94,7 +94,11 @@ pub fn verify(vkey: &[u8; 32], alpha: &[u8], proof: &[u8; 80]) -> Result<[u8; 64
     let c = scalar_from_16(&proof[32..48]);
     let mut s_bytes = [0u8; 32];
     s_bytes.copy_from_slice(&proof[48..80]);
-    let s = Scalar::from_bytes_mod_order(s_bytes);
+    // Reject a non-canonical response scalar (`s ≥ L`) rather than silently
+    // reducing it: a canonical producer's `s` is always `< L`, so this never
+    // rejects a real proof, and it denies an adversary the malleated `s + L`
+    // encoding that reduces to the same scalar.
+    let s = Scalar::from_canonical_bytes(s_bytes).ok_or(VrfError::VerificationFailed)?;
 
     let y = decode_point(vkey).ok_or(VrfError::InvalidPublicKey)?;
     if y.is_small_order() {
@@ -189,10 +193,15 @@ fn gamma_to_hash(gamma: &EdwardsPoint) -> [u8; 64] {
 }
 
 /// Decode a compressed Edwards point, returning `None` for off-curve or
-/// non-canonical encodings (what libsodium's `ge25519_frombytes` + canonicity
-/// check reject).
+/// non-canonical encodings. libsodium's `ge25519_is_canonical` rejects a
+/// y-coordinate `≥ p`, but dalek's `decompress` silently accepts it, so we
+/// enforce canonicity by requiring the point to re-compress to the exact input
+/// bytes. A canonical producer never emits a non-canonical encoding, so this
+/// only ever rejects adversarial bytes, never a real block.
 fn decode_point(bytes: &[u8]) -> Option<EdwardsPoint> {
-    CompressedEdwardsY::from_slice(bytes).decompress()
+    let compressed = CompressedEdwardsY::from_slice(bytes);
+    let point = compressed.decompress()?;
+    (point.compress() == compressed).then_some(point)
 }
 
 /// The proof's 16-byte challenge `c`, widened into the low half of a 32-byte
