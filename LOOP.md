@@ -84,7 +84,28 @@ needs a row in Evidence.
       crate in the trust-substrate normal graph (pallas `kes` feature is dev-only).
       DoD line 2 assessment recorded in Notes (KES + leader-VRF proven on ≥20 real
       preprod; a full "from mainnet" tick needs a real-mainnet harvest with eta0).
+- [x] Nonce-evolution FORMULA (DoD line 3, part 1 of 3): `src/nonce.rs`
+      implements the Praos `⭒` combine (`Blake2b256(a‖b)`), the per-block
+      contribution `Blake2b256(Blake2b256(0x4E ‖ vrf_output))` (double hash +
+      domain tag — the Praos trap the legacy TPraos rolling nonce omits), the
+      rolling fold `η_v' = η_v ⭒ contribution`, and the epoch-boundary combine
+      `η0 = candidate ⭒ prevHashNonce (⭒ extraEntropy)` on Sextant's own path.
+      Differentially proven byte-exact against pallas-crypto's independent
+      implementation: the `test_epoch_nonce` golden pins `epoch_nonce`/`⭒`, the
+      `test_rolling_nonce` golden (30-block shelley-seed fold) pins `⭒` + fold
+      chaining, and on all 22 real preprod VRF outputs `evolve` matches pallas's
+      `generate_rolling_nonce` oracle (fed the test-assembled extended input, so
+      non-circular). Formula only — the prevHashNonce header-hash retag, the
+      candidate-freeze window, and folding a real epoch are chain-data slices
+      (parts 2 + 3), deliberately not claimed here.
 - [ ] <derive the next slice from the Definition of Done, one at a time>
+      NEXT (DoD line 3, parts 2 + 3 per Notes): (2) chain-following over a
+      stored consecutive preprod run — prev_hash links, monotonic slot/block,
+      full per-header crypto; (3) harvest a short 299→300 boundary run + both
+      epochs' `.eta0`, verify each block's leader-VRF against ITS epoch η0 and
+      that the wrong epoch's nonce makes verify fail (the on-chain proof the
+      nonce evolved). Both need `tools/harvest` extended to pull a contiguous
+      sequence; the formula they exercise is now proven.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -133,12 +154,25 @@ needs a row in Evidence.
 | 2026-07-11 07:40 UTC | KES body-signature verify (KES half of DoD line 2): all 22 real preprod header body signatures verify on Sextant's own recursive `Sum6Kes` path at `slot/129600 − opcert.kes_period` (cardano-node ground truth), verdict byte-identical to pallas-crypto's independent `Sum6Kes`; the hot KES key genuinely signed the raw header_body CBOR | `cargo test --test kes` — `real_preprod_kes_body_sigs_verify` (≥20, `verify_header_kes`, periods 0..35), `kes_verdict_matches_independent_oracle` (vs `pallas_crypto::kes` `Sum6KesSig::verify`, genuine + 1-bit tamper), `tampered_kes_body_sig_is_rejected` (sig/last-vk-node/root-key/message/wrong-period), `kes_period_out_of_range_is_rejected` (≥64 and slot-precedes-opcert underflow). `src/kes.rs` recurses the Blake2b256 vk tree over `src/ed25519::verify` leaves; decoder captures raw header_body span + 448-byte body_signature; `blake2b256` shared via `src/hash.rs`. Mutation check: inverting the subtree split → 3/4 tests red. `scripts/harness.sh --full` exit 0, 31 tests (13 header + 4 kes + 4 opcert + 10 vrf) |
 | 2026-07-11 07:58 UTC | Slice 6 (KES body-signature verify) merged to main with red-team SHIP | PR #6 squash-merged (`150e143`), CI `ci/woodpecker/pr/harness` green (pipeline 56). `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM: `verify_sum` visits all 6 vk-node checks + the leaf on every period (no path-shortening), MMM split proven underflow-free by induction, message span byte-exact (`8a`..idx-9, oracle cross-check non-circular), no reachable panic on untrusted bytes, decoder/VRF-refactor regression-free, honestly scoped. Two INFO, one closed with a doc note on `verify_header_kes` (`8a4f1a0`). `scripts/harness.sh --full` exit 0 on merged main, working tree clean |
 | 2026-07-11 07:37 UTC | Independent red-team of the autonomously-merged KES slice: VERDICT SHIP — soundly closes DoD line 2 (VRF + KES) | Fresh `fluxpoint-loop:red-team-reviewer` + operator 4× flaky-check: evolved-period math has no off-by-one (oracle accepts at exactly Sextant's period, rejects at period±1 across all 22); signed message is the byte-exact raw header_body span (not re-encoded); Sum6Kes Merkle path binds both children in order (swapped subtree / tampered node / wrong root all rejected); 15k differential fuzz → 0 disagreements, 0 forgeries accepted; 100k adversarial iters → no panic; no regression from shared `hash.rs`; deterministic |
+| 2026-07-11 14:55 UTC | Nonce-evolution FORMULA (DoD line 3, part 1): Sextant's own `src/nonce.rs` (`⭒` combine, `Blake2b256(Blake2b256(0x4E‖vrf))` per-block contribution, rolling fold, epoch combine) is byte-exact to pallas-crypto's independent nonce implementation and its golden vectors | `cargo test --test nonce` — `epoch_nonce_matches_pallas_test_epoch_nonce` (golden + live `generate_epoch_nonce`), `combine_and_fold_match_pallas_test_rolling_nonce` (30-block shelley-seed golden), `praos_evolve_matches_pallas_rolling_on_real_preprod_vectors` (≥20 real preprod VRF outputs vs `generate_rolling_nonce`, fed the test-assembled `Blake2b256(0x4E‖vrf)`; also pins the double-hash decomposition), `block_contribution_is_praos_double_hash_with_tag` (≠ single hash, ≠ inner-only, ≠ wrong tag), `combine_is_order_sensitive_and_extra_entropy_is_optional`. `scripts/harness.sh --full` exit 0, 36 tests (13 header + 4 kes + 5 nonce + 4 opcert + 10 vrf) |
 
 ## Notes for the next iteration
-State (2026-07-11): **KES body-signature verify shipped** (this slice). DoD line
-2's two crypto halves — leader-VRF (slice 4) and KES (opcert slice 5 + this KES
-body-sig slice) — are now both proven on the 22 real preprod vectors, each
-byte-identical to an independent pallas-family oracle.
+State (2026-07-11): **Nonce-evolution FORMULA shipped** (this slice, DoD line 3
+part 1). `src/nonce.rs` exposes `combine(a,b)` (`⭒` = `Blake2b256(a‖b)`),
+`block_nonce_contribution(&[u8;64])` (`Blake2b256(Blake2b256(0x4E‖vrf))`),
+`evolve(&eta_v, &vrf_output)` (rolling fold) and `epoch_nonce(candidate,
+prevHashNonce, Option<&[u8;32]> extra_entropy)` (epoch combine). All alloc-free
+fixed-buffer over the shared `hash::blake2b256`; `pallas-crypto`'s `nonce` module
+is the dev-only oracle (its `generate_epoch_nonce` IS `⭒`; its
+`generate_rolling_nonce(prev,x)=Blake2b256(prev‖Blake2b256(x))` reproduces the
+Praos fold when fed `Blake2b256(0x4E‖vrf)`). Trust-substrate normal-dep graph
+unchanged. **Formula only** — no chain data consumed yet; the prevHashNonce
+retag, candidate-freeze window, and a real epoch fold are parts 2 + 3.
+
+Prior state (2026-07-11): KES body-signature verify shipped. DoD line 2's two
+crypto halves — leader-VRF (slice 4) and KES (opcert slice 5 + KES body-sig slice
+6) — are both proven on the 22 real preprod vectors, each byte-identical to an
+independent pallas-family oracle.
 
 `src/kes.rs` now exposes, beyond opcert: `verify_kes(root_vkey, period, msg,
 &[u8;448]) -> Result<(), KesError>` (recursive `Sum6Kes`: depth-6 Blake2b256 vk
@@ -205,11 +239,13 @@ eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
 ## Attacking next — DoD line 3: chain-following + nonce evolution
-The exact Praos nonce spec was independently re-derived from cardano-ledger +
-ouroboros-consensus SOURCE and numerically cross-checked against pallas-crypto's
-golden vectors (spec-derivation workflow, confidence HIGH). USE THIS — an earlier
-sketch had the per-block recipe WRONG (single untagged hash) and its "compute η0
-from the chain" plan is INFEASIBLE (see feasibility).
+Part 1 (FORMULA) is DONE and shipped in `src/nonce.rs` (see State above). Parts
+2 + 3 remain. The exact Praos nonce spec was independently re-derived from
+cardano-ledger + ouroboros-consensus SOURCE and numerically cross-checked against
+pallas-crypto's golden vectors (spec-derivation workflow, confidence HIGH), and
+is now also proven in code against pallas on 22 real preprod VRF outputs. USE
+THIS — an earlier sketch had the per-block recipe WRONG (single untagged hash)
+and its "compute η0 from the chain" plan is INFEASIBLE (see feasibility).
 
 VERIFIED Praos (Babbage+, preprod) nonce spec — Blake2b-256, 32-byte nonces, no
 CBOR/length framing:
@@ -234,12 +270,13 @@ CBOR/length framing:
 FEASIBILITY — computing epoch-300 η0 by folding needs ALL ~13k epoch-299 blocks
 to the freeze (~65 MB); INFEASIBLE as checked-in vectors. Do the feasible,
 meaningful decomposition (all three are real and gate the DoD):
-1. FORMULA, differential vs a real oracle: implement ⭒, η_block (0x4E double
-   hash), the rolling fold, and the epoch combine in `src/nonce.rs`; unit-test
-   byte-exact against pallas-crypto's `test_rolling_nonce` (30-block fold from the
-   shelley-genesis seed — it is TPraos single-hash-shaped, so test your ⭒+fold
-   with ITS per-block inputs) and `test_epoch_nonce` (the ⭒ + extra-entropy
-   combine). Proves the formula against ground truth.
+1. FORMULA, differential vs a real oracle: **DONE** (`src/nonce.rs`, PR/this
+   slice). ⭒, η_block (0x4E double hash), the rolling fold, and the epoch combine
+   implemented and unit-tested byte-exact against pallas-crypto's
+   `test_rolling_nonce` (30-block shelley-seed fold, TPraos single-hash-shaped, so
+   ⭒+fold tested with ITS per-block inputs), `test_epoch_nonce` (⭒ +
+   extra-entropy combine), and all 22 real preprod VRF outputs vs
+   `generate_rolling_nonce`. Formula proven against ground truth.
 2. CHAIN-FOLLOWING, real vectors: verify the stored consecutive preprod sequence
    links — each header's prev_hash == blake2b256(previous header bytes) — slots
    and block numbers strictly increase, and each header's full crypto (leader-VRF

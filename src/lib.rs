@@ -8,4 +8,5 @@ pub mod ed25519;
 mod hash;
 pub mod header;
 pub mod kes;
+pub mod nonce;
 pub mod vrf;
