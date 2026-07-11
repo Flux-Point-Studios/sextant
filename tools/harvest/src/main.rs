@@ -4,13 +4,17 @@
 //!
 //!   cargo run -p harvest [count]     # fetch `count` (default 24) block vectors
 //!   cargo run -p harvest eta0        # backfill epoch-nonce sidecars for them
+//!   cargo run -p harvest boundary    # fetch a run spanning the 299→300 turn
 //!
 //! Recent settled block points come from Koios preprod (keyless JSON); the raw
 //! `[era, block]` CBOR comes from the relay via the node-to-node BlockFetch
 //! mini-protocol. The `eta0` mode adds, next to each `preprod-<slot>.block`, a
 //! `preprod-<slot>.eta0` sidecar holding that block's epoch nonce (32-byte hex)
-//! from Koios — the input the full leader-VRF verify binds `alpha` to. Both the
-//! CBOR and the nonce are inputs to verify, never trusted state.
+//! from Koios — the input the full leader-VRF verify binds `alpha` to. The
+//! `boundary` mode fetches a short contiguous run across the epoch 299→300 turn
+//! as `boundary-<slot>.block` + `.eta0`, tagging each block with its own epoch's
+//! nonce so the boundary test can prove leader election evolved with the nonce.
+//! Both the CBOR and the nonce are inputs to verify, never trusted state.
 
 use anyhow::{Context, Result, ensure};
 use pallas_network::facades::PeerClient;
@@ -58,10 +62,11 @@ fn vectors_dir() -> Result<PathBuf> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    if std::env::args().nth(1).as_deref() == Some("eta0") {
-        return backfill_eta0().await;
+    match std::env::args().nth(1).as_deref() {
+        Some("eta0") => backfill_eta0().await,
+        Some("boundary") => fetch_boundary().await,
+        _ => fetch_blocks().await,
     }
-    fetch_blocks().await
 }
 
 /// BlockFetch `count` recent settled preprod blocks off the relay and write
@@ -127,6 +132,113 @@ async fn fetch_blocks() -> Result<()> {
         out_dir.display()
     );
     Ok(())
+}
+
+/// Fetch a short contiguous run spanning the epoch 299→300 turn and write it as
+/// `boundary-<slot>.block` vectors, each with a `boundary-<slot>.eta0` sidecar
+/// holding ITS epoch's active nonce. The pre-turn blocks carry η0(299), the
+/// post-turn blocks η0(300); the boundary test uses that per-epoch nonce to prove
+/// leader election evolved with the nonce. The `boundary-` prefix keeps these out
+/// of the single-epoch preprod chain sweep.
+async fn fetch_boundary() -> Result<()> {
+    const PRE_EPOCH: u64 = 299;
+    const POST_EPOCH: u64 = 300;
+    /// Blocks to pull on each side of the turn.
+    const SPAN: usize = 5;
+
+    let out_dir = vectors_dir()?;
+    let client = reqwest::Client::new();
+
+    // Last SPAN blocks of epoch 299 and first SPAN of epoch 300 (points only).
+    let pre = koios_epoch_blocks(&client, PRE_EPOCH, "abs_slot.desc", SPAN).await?;
+    let post = koios_epoch_blocks(&client, POST_EPOCH, "abs_slot.asc", SPAN).await?;
+    ensure!(
+        !pre.is_empty() && !post.is_empty(),
+        "koios returned no blocks for one side of the boundary"
+    );
+    // The first block of epoch 300 marks the turn: any fetched block at or after
+    // its slot is epoch 300, anything earlier is epoch 299.
+    let turn_slot = post.iter().map(|b| b.abs_slot).min().unwrap();
+
+    // BlockFetch the contiguous range [earliest 299 .. latest 300] off the relay.
+    let start = point(pre.iter().min_by_key(|b| b.abs_slot).unwrap())?;
+    let end = point(post.iter().max_by_key(|b| b.abs_slot).unwrap())?;
+    println!(
+        "fetching {PRE_EPOCH}->{POST_EPOCH} boundary from {RELAY}: slot {} .. {} (turn at {turn_slot})",
+        pre.iter().map(|b| b.abs_slot).min().unwrap(),
+        post.iter().map(|b| b.abs_slot).max().unwrap(),
+    );
+    let mut peer = PeerClient::connect(RELAY, PREPROD_MAGIC)
+        .await
+        .context("connect preprod relay")?;
+    let raw_blocks = peer
+        .blockfetch()
+        .fetch_range((start, end))
+        .await
+        .context("blockfetch boundary range")?;
+    peer.abort().await;
+
+    // Each epoch's active nonce; they must differ or there is no evolution.
+    let eta0_pre = fetch_eta0(&client, PRE_EPOCH).await?;
+    let eta0_post = fetch_eta0(&client, POST_EPOCH).await?;
+    ensure!(
+        eta0_pre != eta0_post,
+        "epoch nonce did not change across the boundary"
+    );
+
+    // Write each block with its epoch's nonce sidecar.
+    let mut written = 0usize;
+    for bytes in &raw_blocks {
+        let blk = MultiEraBlock::decode(bytes).context("pallas decode of fetched block")?;
+        let slot = blk.slot();
+        let (epoch, eta0) = if slot >= turn_slot {
+            (POST_EPOCH, &eta0_post)
+        } else {
+            (PRE_EPOCH, &eta0_pre)
+        };
+        std::fs::write(
+            out_dir.join(format!("boundary-{slot}.block")),
+            hex::encode(bytes),
+        )
+        .context("write boundary block vector")?;
+        std::fs::write(
+            out_dir.join(format!("boundary-{slot}.eta0")),
+            hex::encode(eta0),
+        )
+        .context("write boundary eta0 sidecar")?;
+        println!(
+            "  wrote boundary-{slot}.block (epoch {epoch}, {} bytes)",
+            bytes.len()
+        );
+        written += 1;
+    }
+    println!(
+        "harvested {written} boundary block vectors into {}",
+        out_dir.display()
+    );
+    Ok(())
+}
+
+/// Fetch block points (slot + hash) for one preprod epoch, ordered by `order`
+/// (e.g. `abs_slot.desc`) and capped at `limit` rows.
+async fn koios_epoch_blocks(
+    client: &reqwest::Client,
+    epoch: u64,
+    order: &str,
+    limit: usize,
+) -> Result<Vec<KoiosBlock>> {
+    client
+        .get(format!(
+            "{KOIOS}/blocks?epoch_no=eq.{epoch}&order={order}&limit={limit}&select=abs_slot,hash"
+        ))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .with_context(|| format!("koios blocks epoch {epoch}"))?
+        .error_for_status()?
+        .json()
+        .await
+        .with_context(|| format!("koios blocks json epoch {epoch}"))
 }
 
 /// For every `preprod-<slot>.block` vector, look up the epoch it was minted in
