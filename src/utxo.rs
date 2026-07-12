@@ -67,6 +67,40 @@ pub struct OutPoint {
 /// consumed, and are NOT members. A set, so a duplicated input collapses to one.
 pub type SpendSet = BTreeSet<OutPoint>;
 
+/// The Cardano-transactions commitment a certificate certifies: the Merkle root of
+/// the signed transaction set at a certified `(epoch, block_number)`. Present only on
+/// a `CardanoTransactions` certificate — a stake-distribution certificate commits to
+/// no transaction set. This is the root a proof-based UTxO inclusion check recomputes
+/// against (never trusting a provider-supplied root); when it comes off a
+/// `verify_chain_anchored`-verified tip it is authenticated back to the genesis key.
+/// `block_number` is the recency `certified_at` a caller must carry — the certified
+/// set trails tip, so it proves creation, never unspent.
+///
+/// Pure data in the default (wasm-safe) graph so both the Mithril producer and the
+/// windowed read-path consumer ([`crate::window::verify_watched_window`]) share one
+/// anchor type; a certificate populates it under the `mithril` feature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertifiedTransactions {
+    /// The `cardano_transactions_merkle_root` protocol-message part (hex).
+    pub merkle_root: String,
+    /// The epoch the transaction set is certified for.
+    pub epoch: u64,
+    /// The highest block number the certified transaction set covers.
+    pub block_number: u64,
+}
+
+impl CertifiedTransactions {
+    /// The certified transaction Merkle root as 32 raw bytes, ready to pass as the
+    /// `certified_root` of a UTxO inclusion check. `None` when the hex root is not
+    /// exactly 32 bytes — a malformed certificate, rejected fail-closed rather than
+    /// yielding a partial or garbage root.
+    pub fn merkle_root_bytes(&self) -> Option<[u8; 32]> {
+        crate::inclusion::decode_hex(self.merkle_root.as_bytes())?
+            .try_into()
+            .ok()
+    }
+}
+
 /// The spend verdict a read-path verifier can make. Deliberately has no `Unspent`
 /// variant today: the read path CANNOT establish liveness (see the module docs), so
 /// no code path can coerce a verdict into a positive-liveness claim.
