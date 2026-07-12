@@ -15,6 +15,15 @@ resolver = "3"
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
+# The Live-line consumer: a keeper/batcher stand-in that composes the shipped
+# verify path (genesis-anchored Mithril chain -> certified UTxO read -> spend
+# gate). It calls `verify_chain_anchored`, so it needs the `mithril` feature and
+# is skipped by the default/wasm builds that keep blst out of the graph.
+[[example]]
+name = "verified_read_gate"
+path = "examples/verified_read_gate/main.rs"
+required-features = ["mithril"]
+
 [features]
 # Mithril certificate-chain verification. OFF by default so the default lib and
 # the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
