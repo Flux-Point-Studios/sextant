@@ -9,6 +9,7 @@
 //!   cargo run -p harvest boundary        # fetch a run spanning the 299→300 turn
 //!   cargo run -p harvest mithril         # walk the cert chain tip→(12 hops)
 //!   cargo run -p harvest mithril-genesis # walk tip→genesis, pin the trust root
+//!   cargo run -p harvest mithril-anchor-chain [tip] # genesis→tip chain as one array
 //!   cargo run -p harvest tx-cbor <hash>  # raw tx BODY CBOR (hashes to the txid)
 //!
 //! Recent settled block points come from Koios (keyless JSON); the raw
@@ -133,9 +134,91 @@ async fn main() -> Result<()> {
         Some("boundary") => fetch_boundary().await,
         Some("mithril") => fetch_mithril().await,
         Some("mithril-genesis") => fetch_mithril_genesis().await,
+        Some("mithril-anchor-chain") => fetch_mithril_anchor_chain().await,
         Some("tx-cbor") => fetch_tx_body().await,
         _ => fetch_blocks(&Network::preprod(), want_arg(1)).await,
     }
+}
+
+/// Walk the Mithril certificate chain from `tip_hash` (positional arg 2; default the
+/// golden Cardano-transactions cert `b3582978…`) down `previous_hash` to the genesis
+/// anchor, collecting EVERY certificate verbatim, and write the whole contiguous
+/// segment OLDEST-FIRST as one JSON array `mithril-anchor-chain.json`. This is the
+/// genesis→tip chain `mithril::verify_chain_anchored` walks, so a consumer's verified
+/// read is authenticated all the way back to the pinned network genesis key (rather
+/// than only STM-authenticated at the tip). Aggregator bytes only — input to verify,
+/// never trusted state; the walk fails loudly if it cannot reach a genesis cert.
+async fn fetch_mithril_anchor_chain() -> Result<()> {
+    let tip = std::env::args().nth(2).unwrap_or_else(|| {
+        "b3582978c8ae855f1c05ac41f44904541d4857c8334354e64ce7fb53b767deea".to_string()
+    });
+    let out_dir = vectors_dir()?;
+    let client = reqwest::Client::new();
+
+    let mut hash = tip.clone();
+    let mut chain: Vec<serde_json::Value> = Vec::new();
+    let mut reached_genesis = false;
+    for hop in 0..GENESIS_MAX_HOPS {
+        let text = client
+            .get(format!("{MITHRIL_AGG}/certificate/{hash}"))
+            .header("accept", "application/json")
+            .timeout(std::time::Duration::from_secs(25))
+            .send()
+            .await
+            .with_context(|| format!("certificate {hash}"))?
+            .error_for_status()?
+            .text()
+            .await
+            .with_context(|| format!("certificate {hash} body"))?;
+        let cert: serde_json::Value =
+            serde_json::from_str(&text).with_context(|| format!("parse certificate {hash}"))?;
+        ensure!(
+            cert.get("hash").and_then(|h| h.as_str()) == Some(hash.as_str()),
+            "aggregator returned a different certificate for {hash}"
+        );
+        let is_genesis = cert
+            .get("genesis_signature")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| !s.is_empty());
+        let epoch = cert.get("epoch").and_then(|e| e.as_u64()).unwrap_or(0);
+        let prev = cert
+            .get("previous_hash")
+            .and_then(|h| h.as_str())
+            .unwrap_or_default()
+            .to_string();
+        eprintln!(
+            "hop {hop}: {}… epoch {epoch}{}",
+            &hash[..12.min(hash.len())],
+            if is_genesis { " [GENESIS]" } else { "" }
+        );
+        chain.push(cert);
+        if is_genesis {
+            reached_genesis = true;
+            break;
+        }
+        ensure!(
+            !prev.is_empty(),
+            "non-genesis certificate {hash} has no previous_hash"
+        );
+        hash = prev;
+    }
+    ensure!(
+        reached_genesis,
+        "did not reach a genesis anchor within {GENESIS_MAX_HOPS} hops"
+    );
+    // Oldest (genesis) first — the order `verify_chain_anchored` expects.
+    chain.reverse();
+
+    let path = out_dir.join("mithril-anchor-chain.json");
+    let json = serde_json::to_vec(&chain).context("serialize anchor chain")?;
+    std::fs::write(&path, &json).context("write anchor chain")?;
+    println!(
+        "harvested {}-certificate genesis-anchored chain (genesis → tip {}…) -> {}",
+        chain.len(),
+        &tip[..12.min(tip.len())],
+        path.display()
+    );
+    Ok(())
 }
 
 /// One `tx_info` row: the block a transaction was minted in.
