@@ -592,17 +592,34 @@ needs a row in Evidence.
         — the CRUX wired in), `empty_window_yields_stalled`. + 4 lib unit tests for `tx_body_spans`
         (definite-array split with absolute spans; non-array / indefinite / trailing-bytes → Err). No FFI
         change (header drift-gate clean — no new `extern "C"`); default+wasm graph untouched. Next: slice 4.
-  - [ ] Tier1 slice 4 — `SpendStatus::Unspent{as_of, basis}` variant + the `#[non_exhaustive]`
-        tripwire update, wiring the WatchVerdict into the ladder; honest-scope doc.
-  - [ ] Tier1 slice 5 — C-ABI additive: `SextantWatchVerdict` (sibling struct) + banded constants
-        (`SEXTANT_SPEND_UNSPENT_WATCHED_WINDOW=1` cryptographic-with-assumptions band; `SEXTANT_WATCH_
-        SPENT_OBSERVED=2`/`_STALLED=3`; stall-reason codes; economic ATTESTED band reserved far at
-        100+) + `sextant_verify_watched_window` export (MUST carry the `require_through: u64` hard
-        coverage floor added in the slice-3 truncation fix — the C caller supplies it) +
-        `SEXTANT_ABI_VERSION` 2→3 + header regen +
-        a C smoke leg. NO absolute/eternal/unqualified-unspent constant ever defined. A honest gate
-        example (`examples/windowed_spend_gate`) whose PROCEED line names basis+anchor+as_of+lag+
-        assumptions. See the "## Attacking next" spec for the full pinned design.
+  - [x] Tier1 slice 4+5 (FINAL, merged — CLOSES Tier-1) — ladder reconciliation + C-ABI windowed
+        export + example. DONE (harness `--full` green; independent red-team gated). AS-BUILT vs the
+        pinned brief, two honesty refinements: (i) the kind constant is `SEXTANT_WATCH_NO_SPEND_OBSERVED`
+        (not `_UNSPENT`) and the header carries NO "unspent"/"spent" substring — the honest-scope grep
+        FORCED an operational name; (ii) the struct drops `out_detail` (the fixed self-describing verdict
+        makes it dead weight) and adds an explicit `verified_through` field for the STALLED kind; kind is
+        `u8` 1/2/3 and `basis`/`stall_reason` are separate `u8` axes (kind vs basis, the ladder living
+        solely in `basis`). `require_through` IS carried (truncation defense holds at the C boundary).
+        Full pinned design in "## Attacking next" (C-ABI additive: kind vs basis; Slice 4 — ladder
+        reconciliation). In brief:
+        (a) LADDER RECONCILIATION: strip the CertifiedUnspent/Attested prose from `window::WatchBasis`
+        (docs ONLY WatchedWindow + additive future watch-basis refinements); `utxo::SpendStatus` stays
+        single-inhabitant NotEstablished, points at the `spend-status-tier-ladder` memory. No behavior
+        change; `#[non_exhaustive]` tripwires stay.
+        (b) C-ABI: SIBLING FIXED-SIZE `#[repr(C)] SextantWatchVerdict{ kind:u8, basis:u8, assumptions:u8
+        (bit0=mithril_quorum,bit1=data_complete), pad, stall_reason:u32, anchor_height/as_of_height/
+        as_of_slot:u64, spend_at_height/spend_at_slot:u64, spending_txid:[u8;32] }` (NO `-3` sizing —
+        fixed-width). Constants: `SEXTANT_WATCH_UNSPENT=1`/`_SPENT_OBSERVED=2`/`_STALLED=3` (kind);
+        `SEXTANT_WATCH_BASIS_WATCHED_WINDOW=1` (basis, band 1..=9; CertifiedUnspent reserved 2..=9;
+        ATTESTED reserved 100+); stall-reason codes. NO absolute/eternal/unqualified-unspent constant.
+        Never mutate `SextantVerifiedOutput` (spend_status stays 0).
+        (c) EXPORT `sextant_verify_watched_window(...)` MUST carry `require_through:u64`; certified_root
+        +anchor_height come ONLY from a prior `sextant_mithril_verify_chain_anchored` (honest-by-
+        construction). Guard/write-once/wasm-safe. `SEXTANT_ABI_VERSION` 2→3 + `make header` regen
+        (drift/leak/honest-scope greps green) + a C smoke leg exercising Unspent + a refused case.
+        (d) EXAMPLE `examples/windowed_spend_gate` (WatchVerdict analogue of `verified_read_gate`):
+        PROCEED line names basis+anchor+as_of+lag+assumptions; REFUSES on SpentObserved, on Stalled,
+        and on a truncated (WindowTooShort) window.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -1139,8 +1156,11 @@ whole leader-VRF path oracle-free.
 ## Attacking next — BEYOND-DoD v0.2: Windowed-unspent Tier 1 (Unspent{WatchedWindow})
 Design pinned by a spec workflow (follower-mechanism research + verdict/consumer/C-ABI research +
 adversarial synthesis), OPERATOR-RATIFIED, build SLICE-BY-SLICE (red-team gate each). The Plan
-lists the 5 slices; THIS is the shared design + the load-bearing invariants every slice must hold.
-CURRENT slice = Tier1 slice 1 (`decode_spends`, the tx-INPUT decoder). The DoD stays DONE.
+lists the slices; THIS is the shared design + the load-bearing invariants every slice must hold.
+CURRENT slice = Tier1 slice 4+5 (FINAL, merged): ladder reconciliation + the C-ABI windowed export +
+the `windowed_spend_gate` example. Slices 1-3 (decoder, body-bind, `verify_watched_window` core incl.
+the slice-3 truncation CRITICAL fix — mandatory `require_through` floor + `StallReason::WindowTooShort`)
+are DONE + red-team-verified on main. The DoD stays DONE.
 
 ### The honest verdict (enforced by TYPE, not comment)
 `WatchVerdict` has THREE terminal shapes and only ONE is Unspent — collapsing SpentObserved vs
@@ -1190,22 +1210,49 @@ start.n + 1 == segment.len()` AND `verify_segment == Ok` AND creation observed a
 
 ### The consumer contract (Masumi escrow / ADAM spend-gate)
 A three-clause AND, and clause C is the one naive impls forget: PROCEED iff (A) escrow funded at the
-certified anchor [inclusion Ok]; AND (B) no spend through the verified tip [`Unspent{as_of,
-WatchedWindow}`]; AND (C) the tip is recent enough FOR THE CALLER [`now_slot_estimate − as_of_slot ≤
+certified anchor [inclusion Ok]; AND (B) no spend through a verified tip THAT REACHES THE CALLER'S
+COVERAGE FLOOR [`Unspent{as_of, WatchedWindow}` WITH `require_through` supplied = the height the caller
+needs coverage through, e.g. the funding height or later — the slice-3 truncation fix: without the
+floor, a window truncated one block before the spend trivially satisfies "no spend through [too-early]
+tip"; `verify_watched_window` returns `Stalled{WindowTooShort}`, never `Unspent`, when the tip is below
+`require_through`]; AND (C) the tip is recent enough FOR THE CALLER [`now_slot_estimate − as_of_slot ≤
 max_lag`, enforced BY THE CONSUMER — Sextant proves "no spend through as_of", only the consumer knows
 how stale is too stale for ITS economics]. MUST NOT: read `Unspent{as_of}` as tip-state or eternal;
 fold `Stalled` into "probably fine" (a non-answer is a REFUSE); `SpentObserved` → definite refuse.
 The honest gate (`examples/windowed_spend_gate`, slice 5) prints basis+anchor+as_of+lag+assumptions
 on the SAME line as PROCEED — no bare `-> PROCEED` for a windowed verdict.
 
-### C-ABI additive (slice 5) — the ladder banding
-Additive only: new banded constant `SEXTANT_SPEND_UNSPENT_WATCHED_WINDOW=1` (the CRYPTOGRAPHIC-WITH-
-ASSUMPTIONS band 1..=9; Tier-2 ledger-state reserved in the same band's free slots), outcome codes
-`SEXTANT_WATCH_SPENT_OBSERVED=2`/`_STALLED=3` + stall-reason codes, a SIBLING `SextantWatchVerdict`
-struct (never mutating `SextantVerifiedOutput` — its spend_status stays always 0), a
-`sextant_verify_watched_window` export, `SEXTANT_ABI_VERSION` 2→3, header regen. The economic
-ATTESTED band stays RESERVED + numerically FAR (100+), so an attestation can never be numerically
-mistaken for a proof. NEVER define `SEXTANT_SPEND_UNSPENT` (unqualified) / `_ABSOLUTE` / `_ETERNAL`.
+### C-ABI additive (slice 4+5) — kind vs basis, the ladder in ONE place
+Additive only; never mutate `SextantVerifiedOutput` (its `spend_status` stays always 0). A SIBLING
+FIXED-SIZE `#[repr(C)] SextantWatchVerdict` (WatchVerdict is fixed-width → plain caller-allocated
+out-param, NO `-3` caller-sizing). SEPARATE the two axes that the old single-constant conflated:
+- `kind: u8` — the VERDICT SHAPE, closed 3-set forever: `SEXTANT_WATCH_UNSPENT=1`,
+  `SEXTANT_WATCH_SPENT_OBSERVED=2`, `SEXTANT_WATCH_STALLED=3`.
+- `basis: u8` — the LADDER band, meaningful ONLY when `kind==UNSPENT` (else 0). This is the ONE
+  canonical home of the tier ladder (slice 4's reconciliation): `SEXTANT_WATCH_BASIS_WATCHED_WINDOW=1`
+  in the CRYPTOGRAPHIC-WITH-ASSUMPTIONS band 1..=9 (Tier-2 `CertifiedUnspent` ledger-state reserved in
+  that band's free slots 2..=9); the economic ATTESTED band stays RESERVED + numerically FAR (100+),
+  so an attestation can never be numerically mistaken for a proof. Tier-2 arrives as a new `basis`
+  VALUE, `kind` never grows — future-proof without an ABI break of the discriminant.
+Fields: `kind`, `basis`, `assumptions:u8` (bit0=mithril_quorum, bit1=data_complete), pad,
+`stall_reason:u32` (when Stalled), `anchor_height/as_of_height/as_of_slot:u64`,
+`spend_at_height/spend_at_slot:u64` + `spending_txid:[u8;32]` (when SpentObserved). Export
+`sextant_verify_watched_window(...)` MUST carry `require_through:u64` (the slice-3 truncation-fix hard
+floor — the C caller supplies its coverage floor); the anchor's `certified_root`+`anchor_height` come
+ONLY from a prior `sextant_mithril_verify_chain_anchored` (honest-by-construction: the export takes
+BYTES the caller obtained from a real genesis-authenticated verify, never a caller verdict). Guard-
+wrapped, write-once, wasm-safe (window core is default-graph, 0 blst). `SEXTANT_ABI_VERSION` 2→3 +
+`make header` regen (drift/leak/honest-scope greps green). NEVER define `SEXTANT_WATCH_UNSPENT_ABSOLUTE`
+/ `_ETERNAL` / any unqualified-unspent constant.
+
+### Slice 4 — ladder reconciliation (folded into slice 5, no separate PR)
+The reserved `CertifiedUnspent`/`Attested` tiers were documented in BOTH `utxo::SpendStatus` AND
+`window::WatchBasis` — a duplication. Canonicalize: `WatchBasis` documents ONLY `WatchedWindow` + that
+future WATCH-basis refinements are additive (drop the CertifiedUnspent/Attested prose — those are NOT
+watch bases: CertifiedUnspent is a future Mithril ledger-state cert, Attested is economic Materios).
+`SpendStatus` stays single-inhabitant `NotEstablished` and points at the `spend-status-tier-ladder`
+memory for the full cross-operation ladder instead of re-listing tiers. On the C side the ladder lives
+solely in the `basis` constants above. No behavior change; `#[non_exhaustive]` tripwires stay.
 
 ### Honest scope (the plain statement the tier carries)
 `Unspent{WatchedWindow}` proves ONLY "no input spending the watched outpoint appears in any body of a

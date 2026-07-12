@@ -111,9 +111,38 @@ int main(void) {
                                    UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
                                    datum_buf, sizeof datum_buf, &vdetail) == ErrNullPointer);
 
+    /* ---- The windowed watch-verdict export: garbage in must yield a STALLED
+     * non-answer across the C boundary, NEVER a false no-spend, and the fixed
+     * SextantWatchVerdict crosses the boundary. The authentic no-spend /
+     * spend-observed / window-too-short paths are proven in tests/window.rs's FFI
+     * module (they load the 22-block preprod window, too large to embed here). */
+    uint8_t wtxid[32];
+    memset(wtxid, 0, sizeof wtxid);
+    SextantWatchVerdict wv;
+    memset(&wv, 0, sizeof wv);
+    const uint8_t *wptrs[1] = {b0};
+    const size_t wlens[1] = {sizeof b0};
+
+    /* One garbage block: the header segment fails to verify -> STALLED, never a
+     * no-spend. rc is Ok because the verdict lives in the struct, not the code. */
+    int32_t rc_w = sextant_verify_watched_window(wptrs, wlens, 1, eta0, 4927469, wtxid, 0,
+                                                 4921937, 0, 100000, &wv);
+    CHECK(rc_w == Ok);
+    CHECK(wv.kind == SEXTANT_WATCH_STALLED);
+    CHECK(wv.kind != SEXTANT_WATCH_NO_SPEND_OBSERVED);
+
+    /* Boundary guards: zero count is empty input; a null out or null block list is a
+     * caller error, not a crash. */
+    CHECK(sextant_verify_watched_window(wptrs, wlens, 0, eta0, 0, wtxid, 0, 0, 0, 0, &wv) ==
+          ErrEmptyInput);
+    CHECK(sextant_verify_watched_window(wptrs, wlens, 1, eta0, 0, wtxid, 0, 0, 0, 0, NULL) ==
+          ErrNullPointer);
+    CHECK(sextant_verify_watched_window(NULL, wlens, 1, eta0, 0, wtxid, 0, 0, 0, 0, &wv) ==
+          ErrNullPointer);
+
     printf("smoke: ok (abi=%u verify_segment rc=%d index=%lld header rc=%d msg=\"%s\" "
-           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d)\n",
+           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d watch_kind=%u)\n",
            sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg,
-           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof);
+           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof, wv.kind);
     return 0;
 }
