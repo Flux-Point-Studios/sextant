@@ -423,6 +423,26 @@ needs a row in Evidence.
       `src/ffi.rs` (+ `SextantVerifiedOutput` `#[repr(C)]`, a UtxoError status band, cbindgen header,
       smoke.c) so a C/WASM consumer proves the C-ABI primitive end-to-end (closes the deferred FFI
       export too).
+- [ ] BEYOND-DoD — C-ABI `sextant_verify_utxo_read` export + end-to-end C consumer (proves the
+      C-ABI/WASM primitive is genuinely consumable; closes the deferred FFI export). The DoD is
+      already DONE (STATUS: DONE stays); this is a beyond-DoD primitive slice. Design pinned by a
+      spec workflow (FFI-inventory survey + variable-length-output-marshalling research + adversarial
+      synthesis) — USE the full "## Attacking next" spec below. In brief: export a CORE (ungated,
+      no-blst, wasm-safe) `sextant_verify_utxo_read` marshalling `VerifiedOutput` via the RESERVED
+      `ErrBufferTooSmall=-3` caller-sizing protocol (fixed scalars in a `#[repr(C)]
+      SextantVerifiedOutput`; variable `address` + `datum` bytes to caller `(buf,cap)` pairs, true
+      lengths in the struct, NO free fn); add status bands 400-402 (flattened inclusion) + 410-411
+      (utxo), appended after 327 with NO renumbering; EXTEND `sextant_mithril_verify_chain_anchored`
+      with `out_ct_root[32]`/`out_ct_block`/`out_has_ct` (the certified root obtainable ONLY from the
+      genesis-authenticated verify — honest by construction) and bump `SEXTANT_ABI_VERSION` 1→2;
+      `spend_status: u8` ALWAYS `0 == SEXTANT_SPEND_NOT_ESTABLISHED` (the ONLY defined constant — no
+      "unspent"/"spent" value exists at the ABI) + the tier-banding forward-compat below; regenerate
+      `include/sextant.h` (`make header`, drift + leak gates); a CORE-only `tests/smoke/smoke.c`
+      end-to-end consumer (sizing-probe → -3 → resize → Ok accept; tamper coin byte → 400 spoof-refuse)
+      + a `#[cfg(mithril)]` Rust FFI end-to-end compose test (anchored verify → `out_ct_root` →
+      `verify_utxo_read`). All under `scripts/harness.sh --full` + CI. Red-team the variable-length
+      marshalling (write-once-last, no partial copy on -3), the honest-scope constant (no "unspent"
+      token in the header), and the feature-gate (core export pulls NO blst). See the full spec below.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -856,97 +876,173 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — DoD line 7: Live / first-consumer genesis-anchored verified read + spoof-reject
-Design derived by a spec workflow (real-consumer-pattern research + the exact composed-verify
-pipeline + spoof matrix + Rust-vs-C-ABI decision) and OPERATOR-RATIFIED: FULL genesis-anchored,
-Rust consumer now (C-ABI export a follow-on). This CLOSES the LAST DoD line; then STATUS: DONE.
+## Attacking next — BEYOND-DoD: C-ABI sextant_verify_utxo_read export + end-to-end C consumer
+Design pinned by a spec workflow (FFI-inventory survey + variable-length-output-marshalling
+research + adversarial synthesis). USE THIS. The DoD is already DONE; this is a beyond-DoD
+primitive slice that proves the C-ABI/WASM primitive is genuinely consumable end-to-end (and
+closes the deferred FFI export). Leave `STATUS: DONE`.
 
-### The honest framing (state it plainly; there is NO real write-path consumer)
-Sextant is the READ-PATH library; the real downstream consumer is the separate WRITE-PATH layer
-(transaction building — explicitly out of scope per Constraints). So the deliverable is legitimately
-an EXAMPLE/harness consumer of Sextant's read VERDICT — a keeper/batcher stand-in — that runs the
-real composed verify path against REAL committed preprod data and refuses a spoofed provider
-response. Line 7's wording ("the first downstream consumer's execution path performs one verified
-UTxO read … before a spend decision, and rejects a spoofed RPC response in the same test") is met
-literally by this: the read, the gate, and the same-run spoof-refuse.
+### The core export (UNGATED — wasm-safe, no blst)
+`utxo::verify_utxo_read`'s type graph is blake2b256 + `inclusion::verify_tx_inclusion`(blake2s) +
+minicbor only — no blst/mithril_stm/chrono — and `pub mod utxo`/`pub mod inclusion` are
+feature-invariant. So `sextant_verify_utxo_read` is a CORE export (no `#[cfg]`), present in the
+default lib AND the wasm32 build.
+```
+#[unsafe(no_mangle)] pub unsafe extern "C" fn sextant_verify_utxo_read(
+    tx_bytes: *const u8, tx_bytes_len: usize,
+    out_index: usize,
+    proof_hex: *const u8, proof_hex_len: usize,
+    certified_root: *const u8,          // 32 readable bytes
+    block_number: u64,
+    out: *mut SextantVerifiedOutput,
+    address_buf: *mut u8, address_cap: usize,
+    datum_buf: *mut u8, datum_cap: usize,
+    out_detail: *mut SextantErrorDetail,
+) -> i32
+```
+Inside `guard()`: null-check tx_bytes/proof_hex/certified_root/out then ErrNullPointer
+(address_buf/datum_buf may be null iff their cap==0); `tx_bytes_len==0` then ErrEmptyInput (do NOT
+pre-reject proof_hex_len==0 — `decode_hex` returns None then MalformedProof=402); borrow slices +
+`&*(certified_root as *const [u8;32])`; call `utxo::verify_utxo_read`. On Err then `write_detail(-1,0)`
++ return `utxo_status(&e)`. On Ok(v) then compute `address_len`, `datum_kind`+`datum_len`; if
+`address_cap<address_len || datum_cap<datum_len` then write the FULL struct (scalars + true lengths +
+kind + spend_status=0 + zeroed `_reserved`), `write_detail(-1,0)`, copy ZERO variable bytes, return
+ErrBufferTooSmall(-3). Else `copy_min` address then datum into the bufs, THEN `*out = struct`, THEN
+`write_detail(-1,0)`, return Ok. `copy_min(dst,cap,src)` clamps to `min(len,cap)` and only derefs a
+non-null buf. This is the FIRST live producer of `-3`.
 
-### The verified-read pipeline (untrusted bytes in → genesis-anchored verdict → spend gate)
-One control flow, composing only SHIPPED functions:
-1. `certs: Vec<Certificate> = serde_json::from_slice(&fs::read("tests/vectors/mithril-anchor-chain.json")?)?`
-   — the 106-cert genesis→tip chain (UNTRUSTED provider bytes; oldest-first).
-2. `genesis_vkey: [u8;32]` from `tests/vectors/mithril-genesis.vkey` — the ONE pinned trust root
-   (hardcode/pin it at the call site; it is the only trusted input).
-3. `let v = mithril::verify_chain_anchored(&certs, &genesis_vkey)?;` — authenticates the chain back
-   to the genesis Ed25519 key (105 AVK-bindings + STM multi-sigs; PROVEN Ok on this fixture).
-4. `let ct = v.certified_transactions.ok_or(NotATxCert)?;` → `CertifiedTransactions{merkle_root,
-   epoch, block_number}` — the STM-authenticated Cardano-transactions root + height, sourced from
-   the AUTHENTICATED cert, NEVER from the provider. (tip cert = `b3582978…`, root `83c012fd…`,
-   block 4927469.)
-5. `let mut certified_root=[0u8;32]; hex::decode_to_slice(&ct.merkle_root, &mut certified_root)?;`
-6. `tx_bytes = fs::read` the hex of `tests/vectors/mithril-tx-body.cbor` (UNTRUSTED provider bytes,
-   blake2b256 == tx `242f2037…a636`); `proof_hex` = the `proof` field of `mithril-txproof.json`.
-7. `let out = utxo::verify_utxo_read(&tx_bytes, 0, &proof_hex, &certified_root, ct.block_number)?;`
-   → `VerifiedOutput{address, lovelace, datum, certified_at, spend_status: NotEstablished}`.
-   (Internally: H = blake2b256(tx_bytes) NEVER a provider H; verify_tx_inclusion recomputes the
-   Merkle root and asserts == certified_root; then the Conway TxOut decode.)
-8. SPEND GATE (a boolean over the VERIFIED output — the only decision the consumer makes):
-   `proceed = out.lovelace >= 5_000_000 && out.datum == Some(Datum::Inline(EXPECTED_ORDER_DATUM))`
-   where EXPECTED_ORDER_DATUM = the golden inline datum `d8799f…4417` (out0 = a real on-chain order:
-   script addr `7015e93b…` holding 5 ADA + inline datum). The gate MUST NOT branch on
-   `spend_status`. It stops at the boolean — never builds or submits a tx.
+### The struct (caller-allocated, fixed-width; variable bytes go to caller buffers)
+```
+#[repr(C)] #[derive(Clone,Copy)]
+pub struct SextantVerifiedOutput {
+    pub lovelace: u64,
+    pub certified_at: u64,        // the Mithril-certified height; NOT tip state, NOT liveness
+    pub address_len: usize,       // true len; may exceed address_cap (then retry)
+    pub datum_len: usize,         // 0=none, 32=hash, variable=inline; may exceed datum_cap
+    pub datum_kind: u8,           // 0=none, 1=Hash (32B in datum_buf), 2=Inline (datum_len B)
+    pub spend_status: u8,         // ALWAYS SEXTANT_SPEND_NOT_ESTABLISHED (0) — never gate on it
+    pub _reserved: [u8; 6],       // zeroed on write
+}
+```
+ONE datum channel discriminated by `datum_kind` (both Hash-32 and Inline flow through `datum_buf` —
+DRYer than a second `datum_hash[32]` scalar). Variable bytes (address, datum) NEVER go in the
+struct. `datum_kind==inline` delivers RAW plutus-data CBOR (the `#6.24`-unwrapped bytes) — the
+header notes the caller decodes it.
 
-### The spoof-reject leg (same test, same gate — the DoD's "rejects a spoofed RPC" clause)
-Feed a forged provider response back through the SAME consumer gate and assert REFUSE (fail-closed —
-on any spoof `verify_*` returns Err BEFORE a VerifiedOutput exists, so the gate is never reached):
-- (a) TAMPERED UTxO bytes: flip an output coin byte → H changes → `verify_utxo_read` →
-  `Err(UtxoError::Inclusion(InclusionError::NotIncluded))` → REFUSE. (REQUIRED leg.)
-- (c) UNANCHORED cert chain: swap in a wrong genesis vkey (or re-rooted chain) → `verify_chain_
-  anchored` → `Err(AnchoredError::Genesis(..))` → REFUSE. (REQUIRED leg — proves the anchor is
-  load-bearing at consumer altitude.)
-- (invariant) the consumer only ever passes `v.certified_transactions.merkle_root` to
-  `verify_utxo_read`, NEVER a provider-supplied root — assert this structurally.
+### Status bands (append after MithrilStdMalformedCertJson=327; NO renumbering)
+```
+UtxoInclusionNotIncluded = 400, UtxoInclusionRootMismatch = 401, UtxoInclusionMalformedProof = 402,
+UtxoMalformedTx = 410, UtxoOutputIndexOutOfRange = 411,
+```
+`utxo_status(&UtxoError)` flatten helper (UNGATED, beside chain_status): `Inclusion(NotIncluded|
+RootMismatch|MalformedProof)` to 400/401/402; `MalformedTx` to 410; `OutputIndexOutOfRange` to 411.
+Add the 5 matching `STATUS_MESSAGES` rows (each non-empty — `status_message_is_defined_for_every_code`
+exercises them). The extended mithril export needs NO new band: certified-tx absence then `out_has_ct=0`
+(rc stays Ok).
 
-### Named tests (tests/consumer.rs; TDD RED first) + the example binary
-- `examples/verified_read_gate.rs`: `fn main()` runs the accept path then the spoof path, emits the
-  structured log lines, exits NONZERO on any unexpected outcome (fail-closed). Its stdout IS the DoD
-  "service log excerpt".
-- `tests/consumer.rs` mirrors the assertions so CI judges "done":
-  * `consumer_proceeds_on_the_authentic_certified_order` — `Decision::Proceed` on `242f2037…a636#0`;
-    the PROCEED log line carries `certified_at=4927469` + the mandatory NotEstablished note.
-  * `consumer_refuses_a_spoofed_tampered_utxo` — SAME run: tampered bytes → the SAME gate →
-    `Decision::Refuse` + a WARN line naming `reason=NotIncluded`.
-  * `consumer_refuses_an_unanchored_cert_chain` — wrong genesis vkey → `Decision::Refuse` via
-    `AnchoredError::Genesis`.
-Log excerpt shape (the DoD proof, both paths from one run):
-`INFO read.verify utxo=242f2037…a636#0 certified_at=4927469 anchored=genesis lovelace=5000000
-datum=inline` → `INFO spend.gate 242f2037…a636#0 -> PROCEED  note=spend_status=NotEstablished
-(authenticity+inclusion proven; unspent deferred to the ledger at submission)`; then
-`WARN read.verify utxo=242f2037…a636#0 provider=spoofed reason=NotIncluded` → `INFO spend.gate
-242f2037…a636#0 -> REFUSE (no verified output; spend not submitted)`.
+### Extend the mithril anchor export (certified root ONLY from the authenticated verify)
+EXTEND `sextant_mithril_verify_chain_anchored` (stays `#[cfg(feature="mithril")]`) with three
+trailing out-params, NOT a sibling (a sibling `certified_root(certs)` would re-open the
+provider-injects-a-root hole): `out_ct_root: *mut u8` (32 RAW bytes of
+`certified_transactions.merkle_root`, ready to pass straight as `certified_root`; zeroed when no
+tx-cert), `out_ct_block: *mut u64`, `out_has_ct: *mut u8`. Fill on Ok from `v.certified_transactions`
+(Some then `hex::decode_to_slice` the merkle_root into 32 raw bytes, fail CLOSED to an error code if
+malformed; None then zero root, block 0, has_ct 0). Null-check the 3 new ptrs. This changes the
+signature so bump `SEXTANT_ABI_VERSION` 1 to 2 (thread to ALL abi assertions: tests/ffi.rs,
+tests/smoke/smoke.c). WHY: a C consumer is then PHYSICALLY unable to obtain a certified root without
+having authenticated the chain to genesis — honest by construction, matching `gate.rs`'s
+root-only-from-authenticated-cert property.
 
-### Honest scope (mandatory, verbatim in the PROCEED log note + module docs)
-"This verified read proves authentic, genesis-certified transaction INCLUSION (the output was
-created and is certified as of block certified_at, ~100 blocks behind tip); it does NOT and cannot
-prove the output is currently UNSPENT — that is deferred to the ledger at spend submission." The
-consumer MUST NOT claim: unspent/live/spendable-now; tip state (it is certified_at); that PROCEED
-means the spend will succeed; that the multi-asset bundle was verified (lovelace/coin only).
+### The sizing protocol (no free fn, allocation-free)
+Each variable field has a `(buf, cap)` pair; the TRUE length lives in the struct. ONE call decodes
+once and services both buffers (you must decode the Conway output to learn either length, so a
+mandatory two-pass would redundantly re-verify). On success copy `min(len,cap)` + write true len.
+`-3` if EITHER cap short: write the struct (true lengths — the sizing sub-result) but ZERO variable
+bytes; caller reads `out.address_len`/`out.datum_len`, resizes, retries (idempotent — the fn
+rehashes + recomputes). A caller MAY pass `buf=NULL, cap=0` as a pure sizing probe. NO `sextant_free`
+— the caller owns every buffer (critical on wasm: no free callback crosses back in). Address ~29-57B
+(a 128B first buffer usually one-shots); inline datum unbounded (to ~16 KB) — which is exactly why -3
+sizing is mandatory and a fixed datum cap is unacceptable.
 
-### Feature-gate / build
-The consumer uses `verify_chain_anchored` (mithril feature) so `tests/consumer.rs` is
-`#[cfg(feature="mithril")]` and the example builds under `--features mithril`; no change to the
-default/wasm graph, no new dep (serde_json + hex already available). No `src/` verify change — the
-consumer only COMPOSES shipped functions. `scripts/harness.sh --full` must stay green.
+### Panic-safety + write-once-last (reuse guard() + write_detail() verbatim)
+Null-check ALL required ptrs FIRST. Run `verify_utxo_read` FULLY inside guard() BEFORE any out write
+(Err/panic then out + buffers UNTOUCHED). The fixed struct and the detail are written LAST on every
+terminal path, after any variable-byte copy that path performs — the struct is the caller's commit
+point (it reads `datum_kind`/`*_len` to interpret the buffers), so an observably-populated struct
+ALWAYS corresponds to buffers already fully written (Ok) or deliberately untouched-with-true-lengths
+(-3). Single struct assignment; `copy_nonoverlapping` with no early return between the two copies —
+a caught unwind can only occur BEFORE the writes begin, never mid-commit.
+
+### Honest scope across the boundary + the SpendStatus TIER LADDER (operator direction)
+`spend_status` crosses as a `u8` ALWAYS written 0. `pub const SEXTANT_SPEND_NOT_ESTABLISHED: u8 = 0;`
+(beside SEXTANT_ABI_VERSION, emitted as a `#define`). The export writes ONLY 0; NO
+`SEXTANT_SPEND_UNSPENT`/`_SPENT` is EVER defined — no wire value means "unspent". Header banner on
+the struct + the `spend_status` field + above the fn (mirroring utxo.rs:8-24 / gate.rs:197-203): a
+genuine Ok proves the returned {address, lovelace, datum} are AUTHENTIC on-chain bytes of a
+Mithril-certified output (inclusion + provenance anchored to genesis at `certified_at`) and NOTHING
+MORE — NOT unspent (no Cardano commitment for it; trails tip ~100 blocks; the ledger decides at
+submission); `spend_status` is always `SEXTANT_SPEND_NOT_ESTABLISHED`, never gate a spend on it. A
+red-team must grep the header and confirm NO "unspent"/"spent" token exists.
+
+TIER LADDER (forward-compat — DESIGN the shape, do NOT add empty variants): make the Rust
+`utxo::SpendStatus` `#[non_exhaustive]` and document the ladder in its doc: Tier 1 `NotEstablished`
+(today) then Tier 2 `CertifiedUnspent { epoch }` (CRYPTOGRAPHIC, from a Mithril ledger-state cert +
+Merkle proof, when it ships) then Tier 3 `Attested { committee, at }` (ECONOMIC trust, a Materios /
+Witness-Network committee), with the LOAD-BEARING INVARIANT that an economic tier is NEVER coercible
+into a cryptographic one. At the ABI, document `spend_status` as a BANDED code space: `0 =
+NotEstablished`; a reserved CRYPTOGRAPHIC band (future `SEXTANT_SPEND_CERTIFIED_UNSPENT`) kept
+DISTINCT from a reserved ECONOMIC/ATTESTED band (future `SEXTANT_SPEND_ATTESTED`), so a consumer
+switching on the byte always sees the trust basis and can never read an attestation as a proof. A
+future tier is ADDITIVE (a new constant + a `sextant_abi_version` bump), never a layout break. Do
+NOT define the future constants now — only document the reserved bands + the invariant. (See the
+`spend-status-tier-ladder` memory.)
+
+### cbindgen / header (stable, no nightly)
+`SextantVerifiedOutput` surfaces automatically (referenced by the signature — no cbindgen.toml
+`include`); the 5 enum variants ride SextantStatus's forced include; `SEXTANT_SPEND_NOT_ESTABLISHED`
+surfaces as a `#define` (pub const, NOT in `exclude`). `make header`, commit `include/sextant.h`.
+The core export + struct + const + variants emit UNCONDITIONALLY (outside `#if defined(SEXTANT_MITHRIL)`);
+the extended mithril export (now 3 more params) stays under the `#ifdef`. Harness gates: drift
+(`diff -u`), `#if defined(SEXTANT_MITHRIL)` present, NO `blst|mithril_stm` token — all satisfied
+(name no blst/mithril_stm type in any signature).
+
+### The C end-to-end consumer (core-only) + the mithril compose test
+Extend `tests/smoke/smoke.c` (compiled WITHOUT -DSEXTANT_MITHRIL — links the default no-blst
+libsextant.a, UNCHANGED cc line): the C analogue of `examples/verified_read_gate`. Commit a tiny
+`tests/smoke/utxo_fixture.h` (tx-body bytes, proof-hex bytes, the 32-byte golden root
+`83c012fd…774129`, block 4927469, expected-datum bytes) as `static const` arrays to avoid CI path
+coupling. ACCEPT: sizing probe (caps=0) then CHECK rc==ErrBufferTooSmall, read lengths, resize, call
+again then CHECK rc==0, lovelace>=5000000, datum_kind==2, datum_len==79 + bytes match,
+spend_status==SEXTANT_SPEND_NOT_ESTABLISHED, certified_at==4927469. SPOOF-REFUSE: flip the output-0
+coin byte (as `gate::tamper_output0_coin`) then CHECK rc==UtxoInclusionNotIncluded(400). Null guard
+then ErrNullPointer. Update the abi check to 2. Link-reference `sextant_verify_utxo_read` (dead-strip
+then link error). The FULL mithril compose (anchored verify then `out_ct_root` then `verify_utxo_read`)
+is proven in `tests/ffi.rs` under `--all-features` (smoke.c structurally can't include the mithril
+proto). No `.woodpecker/artifacts.yml` change (rides the existing cc+./smoke line).
+
+### TDD test plan (RED first; every assertion in the harness/CI)
+tests/ffi.rs (ungated): `good_read_fills_struct_and_buffers` (golden values); `buffer_too_small_
+reports_true_lengths` (caps=0 then -3 + true lengths, buffers untouched; then exact caps then Ok;
+partial: address fits/datum short then -3); `sizing_query_null_bufs`; `tampered_bytes_not_included`
+(then 400); `out_of_range_index` (then 411); `null_guards` (+ tx_len==0 then ErrEmptyInput);
+`spend_status_constant` (==0, only constant defined). `#[cfg(mithril)]`: extend the anchored_ffi test
+with the 3 out-params (has_ct==1, ct_block==4927469, ct_root(32)==golden); a None-case (stake-dist
+tip then has_ct==0); the END-TO-END compose (anchored verify then feed ct_root then verify_utxo_read
+then gate predicate; then tamper then 400). smoke.c: the C accept + spoof-refuse. Header: `make header`
++ drift/leak gates.
 
 ### Open risks for the red-team
-(1) THE UNSPENT GAP misread as spend-safety — the single largest risk; the NotEstablished note on
-the PROCEED line + docs is non-negotiable, and the gate must never branch on `spend_status`.
-(2) PROVIDER-TRUST RESIDUE — the certified_root MUST come from the authenticated cert
-(`v.certified_transactions.merkle_root`), never a provider root; assert structurally. (3) The spoof
-leg must be driven THROUGH the consumer's decision function (not just `verify_utxo_read` directly),
-so "rejects a spoofed RPC in the same test" is met at consumer altitude. (4) Keep the MVP on
-committed fixtures — no live network in the DoD-proof path (a live-fetch variant is a separate
-ignored/networked test). (5) Overclaiming "verified spend/UTxO" when only certified INCLUSION of the
-coin (not the multi-asset bundle, not tip state) is proven.
+(1) VARIABLE-LENGTH MARSHALLING UB — `copy_min` must copy NOTHING (not a truncated prefix) on the -3
+path; only deref a non-null buf when cap>0 and (Ok) len<=cap. (2) WRITE-ONCE-LAST — no path writes
+*out or a buffer twice; struct+detail strictly last. (3) ABI-STABILITY — usize is 4B on wasm32 / 8B
+native; consumers must use the cbindgen struct, never hardcoded offsets; `_reserved` zeroed. (4) THE
+HONEST-SCOPE CONSTANT MISREAD (the single greatest safety risk) — only `SEXTANT_SPEND_NOT_ESTABLISHED`
+defined, no unspent constant, header banner present; grep the header for any "unspent"/"spent"
+token. (5) FEATURE-GATE LEAK — `cargo build --release` (default) must contain `sextant_verify_utxo_read`
+(nm the .a) and NO blst/mithril_stm symbol; re-run the header leak grep; the core export names no
+blst type. (6) HEADER DRIFT — regenerate `include/sextant.h` in the SAME change. (7) ABI BUMP 1 to 2
+threaded to ALL assertions (tests/ffi.rs, smoke.c). (8) the extended mithril fill decodes merkle_root
+hex — fail CLOSED on a malformed root, never a partial/garbage out_ct_root with has_ct=1.
 
-Infra: Woodpecker CI green through DoD lines 2/3/4/5/6; the anchor chain + fixtures are committed so
-the consumer + its tests are hermetic.
+Infra: Woodpecker CI green through the whole DoD; the default/wasm graph must stay blst-free and the
+committed header drift-free.
