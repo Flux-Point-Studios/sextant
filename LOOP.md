@@ -251,6 +251,44 @@ needs a row in Evidence.
       segment → nonzero code + `out_detail.index>=0`), proving external C linkage +
       symbol retention on the Linux artifact target. A durable downloadable release
       (plugin-release / `gh release`) needs a CI secret — deferred to the operator.
+- [ ] UTxO part 1 of 3 — harvest a real tx-inclusion proof + surface the certified
+      root (DoD line 5, proof-based certified-inclusion; operator-ratified). Extend
+      `tools/harvest` with a `mithril-tx-proof <txhash>` mode: GET the aggregator's
+      `/proof/cardano-transaction?transaction_hashes=<h>` (release-preprod;
+      `CardanoTransactionsProofs` JSON), fetch its `certificate_hash` cert + walk toward
+      genesis (reuse the genesis walk) as the anchoring chain, and capture the raw tx
+      CBOR (extract from the tx's block via pallas). Commit as `tests/vectors/`
+      fixtures. Then SURFACE the certified root: `mithril::verify_chain_anchored` /
+      `VerifiedChain` (src/mithril.rs) already verify the tip cert but only return
+      `{root_hash,tip_hash,length}` — add the tip cert's `CardanoTransactionsMerkleRoot`
+      + `(epoch, block_number)` (already-modelled `ProtocolMessagePartKey` parts) to the
+      returned struct. RED: a test asserting the fixture cert's surfaced root ==
+      `73d8885a…67a8b2` (the harvested artifact's `merkle_root`) + block 4926569.
+- [ ] UTxO part 2 of 3 — the MKMap/MMR inclusion verify (the crypto core, wasm-safe
+      default build). Implement, in the DEFAULT (non-`mithril`, no-blst, wasm-safe) graph,
+      a ~200-LOC pure-Rust BLAKE2s-256 Merkle-Mountain-Range verifier reproducing Mithril's
+      `MKMapProof<BlockRange>` verify: decode the hex→JSON proof
+      (`{master_proof: MKProof{inner_root,inner_leaves,inner_proof_size,inner_proof_items},
+      sub_proofs}`), verify each per-range sub-proof (tx-hash leaf → range-root) + the
+      master MMR proof (range-root → master root), recompute the root via `compute_root()`
+      (NEVER trust the input `inner_root`), and `contains(tx_hash)`. `verify_tx_inclusion(
+      proof_bytes, tx_hash, certified_root) -> Result<(), InclusionError>` asserts the
+      recomputed root == `certified_root`. Oracle: the golden vector (recomputed root ==
+      the surfaced cert `merkle_root` on the real fixture) + a dev-only differential vs
+      `ckb-merkle-mountain-range` (the crate mithril rides). Negatives: a mutated
+      proof-path node → `RootMismatch`; a tx-hash not in the proof → `NotIncluded`.
+- [ ] UTxO part 3 of 3 — `verify_utxo_read` + the honest verdict (CLOSES DoD line 5).
+      `verify_utxo_read(tx_bytes, out_index, proof_bytes, certified_root, block_number) ->
+      Result<VerifiedOutput, _>`: hash the SUPPLIED `tx_bytes` → H (never trust a
+      provider-supplied H), `verify_tx_inclusion(H)`, decode `TxOut[out_index]` from the
+      certified bytes, return `VerifiedOutput { addr, value, datum, certified_at:
+      block_number, spend_status: SpendStatus::NotEstablished }`. The `spend_status` enum is
+      the honesty enforced in the type — uncoercible to "unspent" (no code path may narrow
+      it). NAMED negative (the DoD proof) `tampered_utxo_claim_is_rejected`: flip one
+      lovelace/datum byte in the `TxOut` → recomputed leaf no longer resolves into the
+      certified root → `Err(RootMismatch)`; variant: substitute tx-B's bytes under tx-A's
+      proof → rejected. See the "## Attacking next" spec for the full pinned design + the
+      honest-scope statement (proves provenance/inclusion, NOT unspent).
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -617,206 +655,73 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — DoD line 6: Artifacts (C-ABI FFI + cbindgen header + wasm/CI)
-Design independently derived by a spec workflow (survey of the real API + error
-enums, external best-practice research on Rust FFI / wasm / cbindgen, two design
-angles, adversarial synthesis) and reconciled against the actual source
-(`era: u8`, `prev_hash: Option<[u8;32]>`, `VerifiedChain{root_hash,tip_hash:String,
-length}`). USE THIS. It turns the verified core into the consumable C-ABI/WASM
-primitive the whole project exists to be; the surface is a genuine boundary, so the
-exported verdicts are justified surface, not gratuitous abstraction.
+## Attacking next — DoD line 5: UTxO read verification (proof-based certified-inclusion)
+Design derived by a spec workflow (Mithril-source + Cardano-CDDL research, cursed-problem reframing,
+adversarial synthesis) and OPERATOR-RATIFIED. The real aggregator vector is confirmed live. USE THIS.
 
-### The surface — 4 core `extern "C"` symbols + 1 feature-gated, in `src/ffi.rs`
-Edition-2024 `#[unsafe(no_mangle)] pub unsafe extern "C"`; every fallible body is
-`guard(|| { ... })`. Null every required pointer at the top of the closure →
-`ErrNullPointer`; `count==0` → `ErrEmptyInput`.
-1. `sextant_abi_version() -> u32` (infallible, no guard) → `SEXTANT_ABI_VERSION = 1`.
-   cbindgen emits `#define SEXTANT_ABI_VERSION 1`; consumer asserts equality at load.
-2. `sextant_verify_segment(block_ptrs: *const *const u8, block_lens: *const usize,
-   count: usize, eta0: *const u8, out_detail: *mut SextantErrorDetail) -> i32` — the
-   composed read-path verdict. Rebuild `Vec<&[u8]>` of BORROWS from the two parallel
-   arrays (never a copy, lives+dies inside the closure), borrow `eta0` as `&[u8;32]`,
-   call `chain::verify_segment`. Ok → `{index:-1,detail:0}`, return 0. Err →
-   `chain_status()` maps class+block index+inner leaf code, return the i32.
-3. `sextant_header_decode(bytes: *const u8, bytes_len: usize, out: *mut
-   SextantHeaderView, out_detail: *mut SextantErrorDetail) -> i32` — `header::decode`,
-   then `project_header(&h)` fills the fixed struct (no variable field → no free fn).
-4. `sextant_status_message(status: i32, buf: *mut u8, cap: usize) -> usize` — copies a
-   `&'static str` (all literals, NO alloc, NO index formatting) into `buf`; null buf /
-   `cap==0` returns the required length (sizing query). Log-only; never verdict-bearing.
-5. `#[cfg(feature="mithril")] sextant_mithril_verify_chain_anchored(cert_json_ptrs,
-   cert_json_lens, count, genesis_vkey: *const u8, out_root_hex: *mut u8 [64],
-   out_tip_hex: *mut u8 [64], out_length: *mut u64, out_detail) -> i32` — per (ptr,len)
-   `Certificate::from_json` (parse fail → `MithrilStdMalformedCertJson(327)`, index=i),
-   then `verify_chain_anchored`. Ok → copy each 32-byte digest as 64 lowercase hex
-   chars (no NUL) into the caller buffers + `length`. Err → `anchored_status()` flattens
-   `AnchoredError::{Chain,Genesis,Standard{index}}` to its leaf code + `{index,detail}`.
+### The honest scope (state it plainly, ENFORCE it in the type)
+Cardano commits to NO UTxO-set state root (the Conway header carries only `block_body_hash`, a
+per-block tx-merkle root — no ledger-state hash / accumulator). Mithril certifies TRANSACTIONS
+(`CardanoTransactionsMerkleRoot`, ~100 blocks behind tip) and immutable-file digests — NOT a UTxO
+set. So this slice PROVES: the bytes of output `(H, i)` = {addr, value, datum} are the authentic
+on-chain bytes of tx `H`, and `H` is a member of the Mithril-certified transaction set at certified
+height X, authenticated end-to-end back to the genesis key. It DOES NOT and CANNOT prove `(H,i)` is
+currently UNSPENT (tx-set membership is a monotone "created" predicate; no Cardano commitment exists
+to prove unspent against; the verdict trails tip ~100 blocks). Unspent is deferred to the ledger,
+which atomically rejects a double-spend at submission — NEVER launder that into a "verified unspent"
+claim. Enforce the honesty in the return type: `spend_status: SpendStatus::NotEstablished`,
+uncoercible to "unspent", and `certified_at: block_number` travels with every verdict.
 
-### `SextantStatus` — one flat `#[repr(i32)]` enum, ALL bands defined unconditionally
-Only the mithril FN is `#[cfg]`-gated; the enum (incl. the 300-band mithril codes) is
-NOT — so the committed header and the numbering are feature-invariant across both build
-configs. No `#[non_exhaustive]` (cbindgen must emit a closed C enum). Verbatim:
-```
-#[repr(i32)] #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub enum SextantStatus {
-  Ok = 0,
-  ErrNullPointer = -1, ErrEmptyInput = -2, ErrBufferTooSmall = -3, ErrPanic = -9,
-  DecodeMalformedCbor = 100, DecodeUnsupportedEra = 101, DecodeBadHashLen = 102, DecodeTrailingBytes = 103,
-  VrfInvalidGamma = 110, VrfInvalidPublicKey = 111, VrfSmallOrderPublicKey = 112, VrfVerificationFailed = 113,
-  KesOpCertInvalidSignature = 120, KesInvalidSignature = 121, KesPeriodOutOfRange = 122,
-  ChainDecode = 200, ChainBrokenLink = 201, ChainOpCert = 202, ChainVrf = 203, ChainKes = 204,
-  MithrilChainEmpty = 300, MithrilChainHash = 301, MithrilChainBrokenLink = 302, MithrilChainAvkBinding = 303,
-  MithrilGenesisNotGenesis = 310, MithrilGenesisMalformedSignature = 311, MithrilGenesisMessageMismatch = 312, MithrilGenesisInvalidSignature = 313,
-  MithrilStdNotStandard = 320, MithrilStdMessageMismatch = 321, MithrilStdWeakParameters = 322, MithrilStdImplausibleAvk = 323,
-  MithrilStdMalformedAvk = 324, MithrilStdMalformedSignature = 325, MithrilStdInvalidMultiSignature = 326,
-  MithrilStdMalformedCertJson = 327,
-}
-```
-Mapping invariants: `chain::ChainError` (200 band) and `mithril::ChainError` (300 band)
-are DISJOINT — the whole point of banding (they are same-named distinct types). Flatten
-`AnchoredError` to the leaf: `Chain(BrokenLink{i})→302,index=i`; `Genesis(InvalidSignature)
-→313`; `Standard{index,WeakParameters}→322,index=index` (Standard's index is 1-based,
-root=0 reserved — pass through, document root is never a Standard offender). For
-`chain::Decode(UnsupportedEra|BadHashLen)`, `detail` carries the INNER leaf code
-(101/102), NOT the era/len scalar (one detail slot; scalar recoverable by re-decoding that
-block). For the standalone `header_decode` path, `detail` DOES carry the scalar (era/len).
-Every mapping fn (`decode_status/vrf_code/kes_code/chain_status`, and `#[cfg(mithril)]`
-`anchored_status/mithril_chain_status/genesis_status/standard_status`) has real fan-in —
-no single-caller abstraction. One shared `write_detail(ptr,index,detail)` (no-ops on null).
+### The primitive (confirmed live on release-preprod)
+Aggregator `https://aggregator.release-preprod.api.mithril.network/aggregator` — CardanoTransactions
+IS enabled. `GET /artifact/cardano-transactions` -> `{merkle_root, epoch, block_number, hash,
+certificate_hash}` (sample: root `73d8885a…67a8b2`, block 4926569, epoch 300, cert `b91da12f…857e53`).
+`GET /proof/cardano-transaction?transaction_hashes=<h>` -> `CardanoTransactionsProofs
+{certificate_hash, certified_transactions:[{transactions_hashes, proof}], non_certified_transactions,
+latest_block_number}`. The `proof` field is HEX(JSON) of `MKMapProof<BlockRange>` =
+`{master_proof: MKProof, sub_proofs}` where `MKProof = {inner_root:{hash:[32 u8]}, inner_leaves:
+[[block_range,{hash}]], inner_proof_size:<MMR node count>, inner_proof_items:[{hash},...]}`. Node
+merge = BLAKE2s-256(left‖right); leaf = tx-hash bytes; MMR semantics = `ckb-merkle-mountain-range`.
+A real sample is captured in the session scratchpad (tx `242f2037…a636`, block 4925999, cert
+`b91da12f…857e53`, recompute target `73d8885a…67a8b2`, inner_proof_size 629099, 12 proof items).
 
-### Two `#[repr(C)]` structs — both caller-allocated, fixed-width, memcpy-safe, no free fn
-```
-#[repr(C)] #[derive(Clone,Copy)]
-pub struct SextantErrorDetail { pub index: i64 /* -1 = n/a */, pub detail: u64 /* era|len|inner code; 0=none */ }
+### COMPOSE the existing trust root; compute the verdict on Sextant's own path
+- The cert (`certificate_hash`) is authenticated by the EXISTING `verify_chain_anchored` (genesis
+  anchor + AVK-binding + STM multi-sig). The provider is trusted for proof BYTES ONLY, never a verdict.
+- Recompute the Merkle-forest root from the proof (`compute_root()`, NEVER trust the input
+  `inner_root`) and assert it == the cert's certified `CardanoTransactionsMerkleRoot` part (the
+  `match_message` trust-join, on Sextant's own code) — that binds inclusion to the genesis key.
 
-#[repr(C)] #[derive(Clone,Copy)]
-pub struct SextantHeaderView {
-  pub block_number: u64, pub slot: u64, pub opcert_sequence_number: u64, pub opcert_kes_period: u64,
-  pub block_hash: [u8;32], pub prev_hash: [u8;32] /* zero when has_prev_hash==0 */,
-  pub issuer_vkey: [u8;32], pub vrf_vkey: [u8;32], pub vrf_output: [u8;64], pub opcert_hot_vkey: [u8;32],
-  pub era: u8, pub has_prev_hash: u8 /* Option projected; [0;32] is a legal hash, not a sentinel */,
-  pub _reserved: [u8;6] /* explicit tail pad; zeroed by project_header */,
-}
-```
-DROPPED from the boundary struct: `header_body` (Vec), `vrf_proof`, `body_signature` — they
-are verification INPUTS consumed by `verify_segment`, not read fields; dropping `header_body`
-removes the only variable-length field and therefore every RustBuffer / two-call-sizing /
-free-fn class of bug. `VerifiedChain`'s hex Strings project into the two `[u8;64]` hex
-out-buffers + `*mut u64` length — no third boundary struct. Nothing beyond these two is
-exposed (`verify_segment_and_decode_tip`, granular nonce/vrf/kes helpers all DROPPED —
-redundant surface / mismatched-parameter footguns that don't clear the single-caller bar).
+### Build (3 Plan sub-slices; the checklist is in the Plan section above)
+- Part 1: harvest the real proof + its anchoring cert chain + the raw tx CBOR into fixtures; surface
+  the tip cert's certified root + `(epoch, block_number)` on `VerifiedChain` (verified today, not
+  returned) — RED against the fixture's known root `73d8885a…67a8b2` / block 4926569.
+- Part 2: the pure-Rust BLAKE2s-256 + MMR `MKMapProof<BlockRange>` verify in the DEFAULT wasm-safe
+  graph (NO blst — blst stays behind the `mithril` feature for STM cert-auth only);
+  `verify_tx_inclusion(proof, tx_hash, certified_root)`; oracle = the golden vector (recomputed root
+  == cert `merkle_root`) + a dev differential vs `ckb-merkle-mountain-range`; negatives (mutated node
+  -> `RootMismatch`, tx not in proof -> `NotIncluded`).
+- Part 3: `verify_utxo_read(tx_bytes, out_index, proof, certified_root, block_number) ->
+  VerifiedOutput{addr,value,datum,certified_at,spend_status: NotEstablished}` (hash the SUPPLIED tx
+  bytes -> H, NEVER a provider-supplied H); the named `tampered_utxo_claim_is_rejected` negative
+  (flip a lovelace/datum byte -> `RootMismatch`) + a substituted-bytes variant. CLOSES DoD line 5.
 
-### Panic safety — the shared cfg-split guard (a panic across `extern "C"` is UB)
-```
-#[cfg(not(target_arch="wasm32"))] #[inline]
-fn guard(f: impl FnOnce()->i32) -> i32 {
-  match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) { Ok(c)=>c, Err(_)=>SextantStatus::ErrPanic as i32 } }
-#[cfg(target_arch="wasm32")] #[inline]
-fn guard(f: impl FnOnce()->i32) -> i32 { f() } // wasm compiles panic=abort; catch_unwind is a no-op — a panic traps to a JS RuntimeError, a safe liveness-only failure (a verifier can never false-accept on a trap).
-```
-Identical signatures → every body is `guard(|| ...)` with no cfg at the call site.
-HARD RULE: Cargo.toml must keep the DEFAULT native `panic="unwind"` — a `[profile.*]
-panic="abort"` would silently no-op the guard and re-open the abort-the-host hole (add a
-harness grep asserting no `panic = "abort"` in Cargo.toml). `AssertUnwindSafe` is sound
-BECAUSE every export writes each out-param exactly ONCE on its terminal path (the whole
-output path is caller-allocated fixed-width — no `Box::into_raw`, no half-done alloc), so
-no half-mutated state survives a catch. RULE (red-team check every new export): write
-out-params once, last.
+### Feature-gate / wasm (HARD constraint)
+The inclusion verifier is pure BLAKE2s + MMR — it MUST live in the default build and compile to
+wasm32 (no blst, no mithril-stm). The blst-bearing STM cert-auth stays behind the existing `mithril`
+feature; the verified certified-root is passed INTO the wasm-safe verifier as an input. The harness
+`cargo build --release --target wasm32-unknown-unknown` (mithril OFF) must include the verifier.
 
-### Trust-input semantics survive the boundary (unchanged safety argument)
-`eta0` and `genesis_vkey` are BYTE INPUTS, not verdicts; the FFI copies neither and trusts
-neither. A wrong `eta0` can only make a genuine proof REJECT (liveness), never make an
-invalid one ACCEPT (safety holds). `genesis_vkey` is the caller's pinned per-network root.
+### Open risks for the red-team
+(1) THE UNSPENT GAP — a proven output since spent still verifies; `SpendStatus::NotEstablished` must
+be uncoercible (no code path narrows it to a positive claim) — add an honesty-guard test. (2) RECENCY
+— every verdict carries `certified_at`; no caller may read it as tip state. (3) LEAF/NODE
+DOMAIN-SEPARATION FIDELITY — the reimplemented BLAKE2s+MMR merge / leaf / peak-bagging MUST match
+mithril-merkle-tree byte-for-byte or a valid proof falsely rejects or a tampered one falsely passes;
+pin with the real golden vector + the ckb-merkle differential. (4) TX-BYTES->H BINDING — hash the
+supplied bytes, never a provider H, else tx-A's proof pairs with tx-B's bytes (guard with the
+substituted-bytes negative). (5) PROVIDER availability (censorship) is a liveness risk, not soundness
+(the root is recomputed + genesis-bound).
 
-### Feature gating — blst/mithril-stm never reach default or wasm; header `#ifdef`s the fn
-Rust: the mithril export + its `#[cfg(mithril)]` mapping fns mirror `#[cfg(feature="mithril")]
-pub mod mithril;`; the enum + its Mithril* variants stay UNGATED. Cargo.toml is already
-correct (`mithril = [dep:serde,serde_json,chrono,mithril-stm]`, all optional); ffi adds NO
-dep. Verify `cargo tree -e normal` = 0 blst/mithril-stm and the plain wasm build excludes
-them. Header: cbindgen `[defines] "feature = mithril" = "SEXTANT_MITHRIL"` turns the cfg
-into `#if defined(SEXTANT_MITHRIL) … #endif` around the mithril prototype; the enum emits
-unconditionally. A harness grep asserts the `#if defined(SEXTANT_MITHRIL)` guard is present
-AND no `blst`/`mithril_stm` token appears anywhere in the header.
-
-### cbindgen — PLAIN (stable, no nightly). parse.expand is a fallback only.
-Our exports are plain `#[no_mangle] extern "C"` fns + `#[repr(C)]` structs — NO
-macro-generated FFI — so cbindgen's `syn` parser sees every item (incl. the `#[cfg]`-gated
-mithril fn) and maps the cfg to `#if` via `[defines]` WITHOUT `parse.expand`. This keeps CI
-and the local loop entirely on stable `rust:1.93` (no nightly, no `cargo expand`). Pin
-`cbindgen ^0.28` (parses edition-2024 `#[unsafe(no_mangle)]`); the harness installs it if
-missing (`command -v cbindgen || cargo install cbindgen --version ^0.28 --locked`).
-`cbindgen.toml` (repo root): `language="C"`, `pragma_once=true`, `sys_includes=["stdint",
-"stddef"]`, `cpp_compat=true`, `style="type"`, `after_includes="#define SEXTANT_ABI_VERSION
-1"`, `[export] prefix=""`, `[defines] "feature = mithril" = "SEXTANT_MITHRIL"`,
-`[parse] parse_deps=false`. Invocation (a `make header` target + the CI drift step):
-`cbindgen --config cbindgen.toml --crate sextant --lang c --output include/sextant.h`.
-ONLY IF the header comes out wrong on stable (e.g. the cfg fn is dropped): fall back to
-`[parse.expand] crates=["sextant"] features=["mithril"]` + a host-only nightly toolchain in
-the drift step — documented, not the default. Commit `include/sextant.h`; C consumers vendor
-it with no Rust toolchain.
-
-### Where each check runs — harness (local+CI) vs CI-only (justified split)
-The harness (`scripts/harness.sh --full`, local loop-gate AND CI) gains, after the existing
-steps: (a) the header DRIFT gate — regenerate to `sextant.h.check`, `git diff --no-index
---exit-code` vs the committed header (stale → red); (b) the feature-leak grep above. It does
-NOT run the C smoke test: Windows-MSVC Rust emits `sextant.lib` + needs `link.exe` (not
-`libsextant.a` + `cc`), so a cross-platform local C-link is fragile. FFI LOGIC is proven
-locally by `tests/ffi.rs` calling the same `extern "C"` fns in-process; EXTERNAL C LINKAGE +
-symbol retention + artifact production are CI-only (Linux, the real artifact target), run on
-every push, and are a merge gate — an intentional split, not a coverage gap.
-
-### CI artifacts (part 2) — `.woodpecker`, Woodpecker-native (no GitHub-style `artifacts:`)
-New step (push): `cargo build --release` (→ `target/release/libsextant.a` + cdylib) and
-`cargo build --release --target wasm32-unknown-unknown` (→ `sextant.wasm`), then assemble
-`dist/{libsextant.a, sextant.h, sextant.wasm}` and `ls -l dist` — the green pipeline run link
-IS the "produced in CI" proof. C smoke step: `cc -I include tests/smoke/smoke.c
-target/release/libsextant.a -o dist/smoke -lpthread -ldl -lm && ./dist/smoke` (built WITHOUT
-`-DSEXTANT_MITHRIL` to prove the default lib needs no mithril symbol). STATICLIB SYMBOL
-STRIPPING guard: the smoke test link-references the exports, so a dropped `#[no_mangle]`
-symbol becomes a LINK FAILURE, not a silent gap — RULE: every new export must gain a smoke.c
-reference or it is not proven retained. OPERATOR SEAM (deferred): a durable downloadable
-release (`woodpeckerci/plugin-release` attaching `dist/*` to the GitHub Releases page, or a
-local/`gh release create`) needs a CI secret (`forge_release_token` / a token) — the operator
-decides whether to enable it; the secret-free `dist/` + run link satisfies DoD line 6's proof.
-
-### Files
-NEW: `src/ffi.rs`, `cbindgen.toml`, `include/sextant.h` (committed), `tests/ffi.rs`,
-`tests/smoke/smoke.c`, `Makefile` (`header:` target). CHANGED: `src/lib.rs` (`pub mod ffi;`),
-`scripts/harness.sh` (drift gate + leak grep; NOT the C smoke test), `.woodpecker/harness.yml`
-(artifacts step + CI smoke step). Cargo.toml deps UNCHANGED; never add a native `[profile.*]
-panic="abort"`; `crate-type` is already `["lib","cdylib","staticlib"]`.
-
-### TDD — RED first; every Rust assertion runs under `scripts/harness.sh --full`
-RED anchor (write first, watch it fail to compile): `tests/ffi.rs::verify_segment_good`
-calls `sextant_verify_segment` on a known-good `tests/vectors` segment, asserts 0 +
-`out_detail{index:-1}`. Then, in `tests/ffi.rs` (`cargo test --all-features`): tampered-link
-→ `ChainBrokenLink(201)` + `index==k` (the negative-test spine: status AND offending index);
-tampered-vrf → `ChainVrf(203)` + `index==k` + `detail∈110..=113`; null `eta0` → `ErrNullPointer`,
-`count==0` → `ErrEmptyInput`; header fields match `header::decode`; a genesis/first header →
-`has_prev_hash==0` + zeroed `prev_hash`; malformed CBOR → `100`, unsupported-era → `101` with
-`detail==era`; a `#[cfg(test)]` hidden `sextant_test_panic()` that `panic!()`s inside `guard`
-→ `ErrPanic(-9)` (proves the guard converts, never aborts); `status_message` non-empty +
-sizing on null buf; `abi_version()==1`; and `#[cfg(feature="mithril")]` — anchor good → 0 +
-64-hex root/tip + length; tampered multi-sig → `326` + rising index; broken link → `302` +
-cert index (proves flattening); bad JSON at i → `327` + `index==i`. Header-drift + leak-grep
-run in the harness. The C smoke test (`tests/smoke/smoke.c`, CI): `#include "sextant.h"`,
-assert `sextant_abi_version()==SEXTANT_ABI_VERSION`, a deliberately-broken 2-block segment →
-nonzero code + `out_detail.index>=0` — proving link + symbol retention + ABI + negative path
-across a real C boundary. `cargo build --release --target wasm32-unknown-unknown` (already in
-`--full`) is the wasm evidence (FFI compiles to wasm, mithril fn excluded); trap-on-panic
-parity is DOCUMENTED (a wasm trap is uncatchable in-process by design).
-
-### Open risks for the red-team to watch
-(1) staticlib symbol stripping — only smoke-referenced exports are proven retained; every new
-export needs a smoke ref. (2) `AssertUnwindSafe` — depends on write-once-last out-params; a
-future export that writes then panics leaks a half-written detail after `ErrPanic`. (3) a
-later native `panic="abort"` silently defeats the guard (grep-guarded). (4) feature-gate leak
-— an ungated path referencing a mithril type re-admits blst (wasm build + `cargo tree` + header
-grep guard it). (5) Standard index is 1-based (root=0 reserved) — a consumer mixing chain
-(0-based) and standard indices without reading the code band could misattribute (documented).
-(6) cbindgen version/edition-2024 attribute parsing — if `^0.28` can't read `#[unsafe(no_mangle)]`,
-bump it before reaching for parse.expand.
-
-Infra: Woodpecker CI green through the Mithril epic (pipeline 100+); trust-substrate
-normal-dep graph unchanged (ffi adds no dep; feature-gate keeps mithril-stm/blst out of
-default+wasm).
+Infra: Woodpecker CI green through DoD lines 2/3/4/6; the `mithril` feature keeps blst out of
+default+wasm and the inclusion verifier MUST preserve that.
