@@ -211,7 +211,7 @@ needs a row in Evidence.
       near the u64 overflow (Merkle verify never terminates), both → `ImplausibleAvk` promptly.
       No new crate (composes existing ed25519/mithril-stm); mithril feature keeps it out of
       default+wasm.
-- [ ] Artifacts part 1 of 2 — C-ABI FFI surface + cbindgen header (DoD line 6):
+- [x] Artifacts part 1 of 2 — C-ABI FFI surface + cbindgen header (DoD line 6):
       `src/ffi.rs` exposes the read-path verdicts over a minimal, allocation-free
       `extern "C"` surface — `sextant_abi_version`, `sextant_verify_segment` (the
       composed block-chain verdict), `sextant_header_decode` (fills a fixed
@@ -309,9 +309,50 @@ needs a row in Evidence.
 | 2026-07-11 22:20 UTC | Part-4 red-team hardening + adversarial DoS closure: the hostile-input tests surfaced real mithril-stm DoS vectors; `verify_standard` fails closed on ALL of them | `verify_standard` guards: (1) degenerate threshold `k==0`/`m==0`/`phi_f∉(0,1)` → `WeakParameters` — **phi_f=1.0 is REJECTED** (makes every claimed lottery win → a lone signer clears the quorum); (2) `guard_stm_bounds` → `ImplausibleAvk` for `stake>total_stake` (eligibility Taylor exponent >1 diverges), `nr_leaves∉[1,2²⁴]` (Merkle arithmetic overflows near 2⁶⁴), `signatures.len()>2¹⁶`, and total lottery `indexes>2¹⁸` (mithril-stm evaluates one lottery/index BEFORE the k-count check); (3) blob-hex length caps at 4 MiB → `MalformedAvk`/`MalformedSignature` (bounds `serde_json` allocation). A thread-timeout probe CONFIRMED stock mithril-stm hangs on total_stake=1 and nr_leaves=u64::MAX (>12s; guarded <20ms). `verify_standard_rejects_hostile_stm_inputs` (bounded-time worker thread → regression fails clean, not a stuck suite) + `verify_standard_rejects_weak_parameters`. `scripts/harness.sh --full` exit 0, 70 tests |
 | 2026-07-11 22:40 UTC | Red-team of the part-5 diff returned VERDICT BLOCK (HIGH + MEDIUM); both closed, re-verified green | `fluxpoint-loop:red-team-reviewer` (read the vendored mithril-stm 0.10.5 verify path): NO false-accept in `verify_chain_anchored`, but standalone `verify_standard` was still hangable/OOM-able — HIGH: unbounded `indexes`/`signatures` array or `m` drives `check_indices` before the k-count check; MEDIUM: `phi_f==1.0` → unconditional lottery win (lone-signer forge). Fixes: `guard_stm_bounds` now caps `signatures.len()`/total `indexes`/blob size, and the threshold guard rejects `phi_f>=1.0` — real preprod certs (phi_f=0.65, kilobyte blobs, k winning indices) unaffected; new hostile tests (oversized blobs, 400k-element `indexes`) assert prompt `Err` in bounded time. Red-team also confirmed `MAX_AVK_LEAVES=2²⁴` provably below the overflow and `stake≤total_stake` keeps the eligibility exponent ≤1; length-2 genesis→child segment a defensible close. `scripts/harness.sh --full` exit 0 |
 | 2026-07-11 23:27 UTC | Independent red-team of the autonomously-merged genesis-anchored chain verify: VERDICT SHIP — DoD line 4 CLOSED | Fresh `fluxpoint-loop:red-team-reviewer` + operator 3× flaky-check: `verify_chain_anchored` requires a verified genesis root (un-anchored/omitted/tampered-genesis chains reject `Genesis(...)`), runs `verify_chain` integrity BEFORE STM (attacker-lowered k/m/phi_f caught by hash mismatch; degenerate thresholds → `WeakParameters`), enforces link/AVK/STM per cert, closes mithril-stm DoS paths (`guard_stm_bounds`), verifies the real preprod chain end-to-end naming tip `fc979366…`. No regression, feature-gate clean (0 blst in default+wasm), 3k fuzz no panic. **Trust-establishment core complete: DoD lines 3 + 4 checked, line 2 substantive; 14 slices incl. a 5-part Mithril epic** |
+| 2026-07-12 00:40 UTC | Artifacts part 1 (DoD line 6): the verified core is exposed over a minimal, allocation-free C ABI (`src/ffi.rs`) whose in-process verdicts equal the Rust path on real vectors, with a committed cbindgen header the harness drift-gates | `scripts/harness.sh --full` exit 0 — 4 core exports (`sextant_abi_version`/`_verify_segment`/`_header_decode`/`_status_message`) + `#[cfg(mithril)] sextant_mithril_verify_chain_anchored`; `tests/ffi.rs` (14) + `src/ffi.rs` unit (4): good preprod segment → `Ok{index:-1}`; dropped block → `ChainBrokenLink(201)`+index; tampered VRF → `ChainVrf(203)`+index+`detail∈110..=113`; null eta0 → `ErrNullPointer`; count==0 → `ErrEmptyInput`; header fields byte-match `HeaderView`; malformed→`100`, era→`101`+`detail==era`; mithril anchor good → `0`+64-hex root `69bc3bdf…`/tip `fc979366…`+len 2, bad-json@i → `327`+`index==i`, wrong vkey → `313`, resealed broken-link → `302`+idx1, resealed tampered-sig → 320-band+idx1; `guard` unit test panic→`ErrPanic(-9)`, genesis projection `has_prev_hash==0`. Header drift-gate (`cbindgen` regen + `diff`) clean, `#if defined(SEXTANT_MITHRIL)` present, 0 `blst`/`mithril_stm` tokens; `cargo tree -e normal` = 0 blst/mithril-stm in default+wasm; wasm32 build green (guard is a no-op trap there). No new crate (ffi adds no dep); no `panic="abort"` (grep-guarded) |
+| 2026-07-12 00:55 UTC | Red-team of the part-1 diff: VERDICT SHIP — no false-accept at the boundary, no memory/panic/feature-leak hole; the one actionable MEDIUM (panic=abort guard missed the single-quoted TOML form) closed + proven | `fluxpoint-loop:red-team-reviewer` across 7 attack surfaces: `Ok`(0) emitted only inside `Ok` arms (success writes strictly gated), bands disjoint from 0; every `from_raw_parts`/`&*` null-checked incl. each `block_ptrs[i]`/`cert_json_ptrs[i]` + `count==0` guard, `write_hex64`/`status_message` clamp `.min(64)`/`.min(cap)`; `guard` on all fallible exports, `AssertUnwindSafe` sound (writes only after the verifier, on the terminal arm); `cargo tree -e normal` (default + wasm) = 0 blst/mithril-stm; drift gate proven RED-on-change. MEDIUM fix: `header_gate` panic-abort grep now matches `['\"]abort['\"]` (both TOML string forms) — proven old regex matched 1/2 fixture lines (missed `panic = 'abort'`), new matches 2/2; `scripts/harness.sh --full` exit 0 after the fix. LOWs (index→i64 wrap unreachable; `ErrBufferTooSmall` reserved for part-2 sizing) documented, non-blocking |
 
 ## Notes for the next iteration
-State (2026-07-11): **Mithril GENESIS-ANCHORED WALK shipped — DoD line 4 is CLOSED**
+State (2026-07-12): **Artifacts part 1 shipped — the C-ABI FFI surface + drift-gated
+cbindgen header (DoD line 6, part 1 of 2)**. `src/ffi.rs` turns the verified core into
+the consumable primitive: 4 core `extern "C"` exports (`sextant_abi_version`,
+`sextant_verify_segment`, `sextant_header_decode`, `sextant_status_message`) + a
+`#[cfg(feature="mithril")] sextant_mithril_verify_chain_anchored`, each fallible body in a
+cfg-split `guard()` (native `catch_unwind`, wasm no-op) so no panic crosses the boundary.
+One flat `#[repr(i32)] SextantStatus` (all bands defined unconditionally — feature-invariant
+numbering; only the mithril FN is `#[cfg]`-gated) + a nullable `SextantErrorDetail{index,detail}`
+carry every verdict + offending index with zero allocation; two caller-allocated `#[repr(C)]`
+structs (`SextantErrorDetail`, `SextantHeaderView`) and hex out-buffers carry the results —
+no owned buffer / RustBuffer / two-call-sizing crosses the boundary. `tests/ffi.rs` (14) +
+`src/ffi.rs` unit (4) exercise every export on real vectors; the harness gained the header
+drift-gate (regen + `diff`), the `#if defined(SEXTANT_MITHRIL)` + no-`blst`/`mithril_stm`
+leak grep, and a no-`panic="abort"` grep. `cbindgen 0.28` on stable (no nightly/parse.expand)
+maps the cfg fn to `#if defined(SEXTANT_MITHRIL)` via `[defines]`; `[export] include` forces
+the enum (no fn signature references it) and `exclude` drops the leaked `SLOTS_PER_KES_PERIOD`.
+No new crate (ffi adds no dep); feature-gate keeps mithril-stm/blst out of default+wasm.
+
+**Attacking next — DoD line 6 part 2 of 2 (CLOSES the line): CI artifact production.**
+The pinned spec is the "### CI artifacts (part 2)" block below. `.woodpecker` builds + retains
+`dist/{libsextant.a, sextant.h, sextant.wasm}` with a listing (green pipeline run link = the
+"produced in CI" proof), plus a CI-only C smoke test (`tests/smoke/smoke.c`) that `#include`s
+`sextant.h`, links `libsextant.a`, and calls through the boundary (abi_version match + a
+tampered segment → nonzero + `out_detail.index>=0`) — proving external C linkage + `#[no_mangle]`
+symbol retention on the Linux artifact target (Windows-MSVC local link is fragile, so this is
+CI-only by design, run on every push, a merge gate). RULE the red-team flagged for part 2: every
+new export must gain a smoke.c reference or it is not proven retained. A durable downloadable
+release (plugin-release / `gh release`) needs a CI secret — deferred to the operator.
+
+**Carried for the part-2 red-team (part-1 self-review):** (1) the drift gate installs
+`cbindgen ^0.28` via `cargo install` if missing — a future 0.28.x formatting change could
+spuriously fail the gate; fix is `make header` + recommit (fail-closed, never a false-accept).
+(2) `SextantStatus::ErrBufferTooSmall(-3)` is reserved ABI (in the message table, never
+produced by a part-1 export) — a real producer arrives with a sizing-buffer export or it can be
+dropped. (3) `chain_status`/`anchored_status`/`project_header` are single-call-site ABI-mapping
+helpers (like `chain::verify_header`) kept separate to keep the unsafe exports short and the
+write-once-last invariant auditable; `decode_status`/`kes_code`/`write_detail`/`write_hex64`/
+`guard` all have genuine fan-in.
+
+Prior state (2026-07-11): **Mithril GENESIS-ANCHORED WALK shipped — DoD line 4 is CLOSED**
 (part 5 of 5). `src/mithril.rs::verify_chain_anchored(certs, genesis_vkey)` is the read
 path's trust terminus: given a genesis-anchored segment (oldest first), it composes the
 three verifiers built across parts 2–4 into one bytes-in/verdict-out control flow —

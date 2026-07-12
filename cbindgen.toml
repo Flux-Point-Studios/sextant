@@ -1,0 +1,18 @@
+language = "C"
+pragma_once = true
+cpp_compat = true
+style = "type"
+
+[export]
+prefix = ""
+# The status enum is not referenced by any function signature (the exports return a
+# raw int32_t), so force it in — it is the banding contract C consumers switch on.
+include = ["SextantStatus"]
+# Internal Rust pub consts are not part of the C ABI surface.
+exclude = ["SLOTS_PER_KES_PERIOD"]
+
+[defines]
+"feature = mithril" = "SEXTANT_MITHRIL"
+
+[parse]
+parse_deps = false
