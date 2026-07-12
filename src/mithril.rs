@@ -167,33 +167,10 @@ impl Certificate {
     }
 }
 
-/// The Cardano-transactions commitment a certificate certifies: the Merkle root
-/// of the signed transaction set at a certified `(epoch, block_number)`. Present
-/// only on a `CardanoTransactions` certificate — a stake-distribution certificate
-/// commits to no transaction set. This is the root a proof-based UTxO inclusion
-/// check recomputes against (never trusting a provider-supplied root); when it
-/// comes off a `verify_chain_anchored`-verified tip it is authenticated back to
-/// the genesis key. `block_number` is the recency `certified_at` a caller must
-/// carry — the certified set trails tip, so it proves creation, never unspent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CertifiedTransactions {
-    /// The `cardano_transactions_merkle_root` protocol-message part (hex).
-    pub merkle_root: String,
-    /// The epoch the transaction set is certified for.
-    pub epoch: u64,
-    /// The highest block number the certified transaction set covers.
-    pub block_number: u64,
-}
-
-impl CertifiedTransactions {
-    /// The certified transaction Merkle root as 32 raw bytes, ready to pass as the
-    /// `certified_root` of a UTxO inclusion check. `None` when the hex root is not
-    /// exactly 32 bytes — a malformed certificate, rejected fail-closed rather than
-    /// yielding a partial or garbage root.
-    pub fn merkle_root_bytes(&self) -> Option<[u8; 32]> {
-        decode_hex(&self.merkle_root)?.try_into().ok()
-    }
-}
+/// The Cardano-transactions commitment a certificate certifies — surfaced here from a
+/// verified certificate, but defined in the default (wasm-safe) graph so the windowed
+/// read path shares one anchor type. See [`crate::utxo::CertifiedTransactions`].
+pub use crate::utxo::CertifiedTransactions;
 
 /// A hash-linked, AVK-bound certificate chain segment verified on Sextant's own
 /// path. Names the endpoints so a caller can anchor on the tip certificate hash.
