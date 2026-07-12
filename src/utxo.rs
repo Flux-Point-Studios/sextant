@@ -19,9 +19,10 @@
 //! transaction-set membership is a monotone "created" predicate, no Cardano
 //! commitment exists to prove unspent against, and the verdict trails tip by ~100
 //! blocks. Unspent is the ledger's to decide, atomically, at submission. That
-//! honesty is enforced in the return type: [`SpendStatus`] has a single inhabitant,
-//! `NotEstablished`, uncoercible to a positive-liveness claim, and every verdict
-//! carries `certified_at` so no caller may read it as tip state.
+//! honesty is enforced in the return type: [`SpendStatus`] carries today only
+//! `NotEstablished` (a `#[non_exhaustive]` trust-tier ladder, uncoercible to a
+//! positive-liveness claim), and every verdict carries `certified_at` so no caller
+//! may read it as tip state.
 //!
 //! ## The bytes are hashed here, never trusted from a provider
 //! `verify_utxo_read` hashes the *supplied* `tx_bytes` to obtain `H`
@@ -47,12 +48,30 @@ pub enum Datum {
     Inline(Vec<u8>),
 }
 
-/// Whether an output is spent. Deliberately a single-inhabitant type: the read
-/// path CANNOT establish liveness (see the module docs), so there is no `Unspent`
-/// or `Spent` variant to coerce a verdict into.
+/// The spend verdict a read-path verifier can make. Deliberately has no `Unspent`
+/// variant today: the read path CANNOT establish liveness (see the module docs), so
+/// no code path can coerce a verdict into a positive-liveness claim.
+///
+/// `#[non_exhaustive]` marks this as a forward-compatible TRUST-TIER LADDER — a
+/// future tier is additive (a new variant), never a layout break, and an external
+/// `match` must carry a wildcard so a new tier can never be silently read as
+/// `NotEstablished`:
+/// * **Tier 1 — [`SpendStatus::NotEstablished`] (today).** Inclusion + provenance are
+///   proven; liveness is not, and cannot be, established by this path.
+/// * **Tier 2 — `CertifiedUnspent { epoch }` (reserved, CRYPTOGRAPHIC).** A future
+///   Mithril ledger-state certificate + Merkle proof of unspent-ness as of `epoch`.
+/// * **Tier 3 — `Attested { committee, at }` (reserved, ECONOMIC).** A Materios /
+///   Witness-Network committee attestation of liveness.
+///
+/// LOAD-BEARING INVARIANT: an economic tier (3) is NEVER coercible into a
+/// cryptographic one (2). A consumer must always see the trust basis and can never
+/// mistake an attestation for a proof — which is why the tiers are distinct variants
+/// (and, at the C ABI, distinct code bands), not a shared boolean. The future tiers
+/// are documented, not defined: no empty variant exists until its proof does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpendStatus {
-    /// Spend state is not established, and cannot be by this path.
+    /// Spend state is not established, and cannot be by this path (Tier 1).
     NotEstablished,
 }
 
@@ -290,6 +309,18 @@ fn read_hash32(d: &mut Decoder<'_>) -> Result<[u8; 32], UtxoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compile-time honesty tripwire: `SpendStatus` has exactly one inhabitant
+    /// today. This same-crate exhaustive match (no wildcard) fails to compile the
+    /// moment a liveness tier is added, forcing the author to consciously wire it
+    /// and update the honest-scope docs — `#[non_exhaustive]` relaxes matching only
+    /// for *external* crates, never here.
+    #[test]
+    fn spend_status_has_a_single_inhabitant_today() {
+        match SpendStatus::NotEstablished {
+            SpendStatus::NotEstablished => {}
+        }
+    }
 
     /// A minimal tx body `{1: [output]}` around a single output.
     fn body_with_output(output_cbor: &[u8]) -> Vec<u8> {
