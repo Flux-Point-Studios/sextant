@@ -17,11 +17,18 @@
 //! ## Windowed-unspent verdict ([`verify_watched_window`])
 //! Cardano commits to no UTxO-set root, so *absolute* unspent is unprovable. The
 //! honest read is *windowed*: no input spending the watched outpoint appears in any
-//! body of a header-verified, hash-linked, gap-free, body-committed segment from the
-//! Mithril anchor to a verified tip — under Mithril-quorum + data-completeness, as of
-//! that tip. The adversary's only evasion, withholding the spending block, cannot
-//! advance the verified tip, so it collapses to [`WatchVerdict::Stalled`], never a
-//! false [`WatchVerdict::Unspent`].
+//! body of a header-verified, hash-linked, gap-free, body-committed segment that
+//! observed the outpoint's creation and reached the caller's required coverage height
+//! — under Mithril-quorum + data-completeness, as of the verified tip.
+//!
+//! Two evasions a hostile provider can attempt, and how each is closed: (1) *drop a
+//! block inside the window* — the hash chain breaks, so it collapses to
+//! [`WatchVerdict::Stalled`]; (2) *truncate the window one block before the spend* —
+//! nothing in the chain forbids a short window, so the caller MUST assert a hard lower
+//! bound (`require_through`) on the tip it is answered as of; a window that does not
+//! reach it is [`StallReason::WindowTooShort`], never a false [`WatchVerdict::Unspent`].
+//! Freshness alone cannot close (2): the `max_lag` needed to admit the honestly
+//! tip-trailing Mithril window also admits a spend hidden just under the tip.
 
 use core::ops::Range;
 
@@ -155,6 +162,12 @@ pub enum StallReason {
     /// The watched outpoint's creation was not observed inside the window — the
     /// "start the window after the spend" evasion.
     CreationNotObserved,
+    /// The verified tip did not reach the caller's required coverage height — the
+    /// "truncate the window one block before the spend" evasion. Freshness alone
+    /// cannot close it: a loose enough `max_lag` to admit the honestly ~100-block-
+    /// trailing Mithril window also admits a spend hidden just under the tip, so the
+    /// caller MUST assert a hard lower bound on the tip it is answered as of.
+    WindowTooShort,
     /// The window tip is above the certified anchor height: outside the
     /// Mithril-vouched region, so data-completeness is not quorum-backed.
     TipAboveAnchor,
@@ -218,13 +231,21 @@ pub enum WatchVerdict {
 /// on (its `block_number` is the certified height); `eta0` is the segment's epoch
 /// nonce; `freshness` is the caller's recency bound.
 ///
-/// FAIL-CLOSED: any gap, broken link, body-commitment mismatch, unobserved creation,
-/// tip above the anchor, or stale tip yields [`WatchVerdict::Stalled`], NEVER a false
-/// [`WatchVerdict::Unspent`]. A spend observed in the window is a definite
-/// [`WatchVerdict::SpentObserved`], returned as soon as it is seen.
+/// `require_through` is the caller's HARD lower bound on the verified tip: the window's
+/// tip block number MUST be at least this, or the verdict is [`StallReason::WindowTooShort`].
+/// It closes the truncation evasion — a provider serving a valid window that simply ends
+/// before the spend. The caller sets it to the height it needs no-spend coverage through
+/// (e.g. a recent tip estimate, or the certified anchor height for a fully-quorum-backed
+/// window); Sextant then proves "no spend through `as_of >= require_through`".
+///
+/// FAIL-CLOSED: any gap, broken link, body-commitment mismatch, unobserved creation, a tip
+/// short of `require_through`, a tip above the anchor, or a stale tip yields
+/// [`WatchVerdict::Stalled`], NEVER a false [`WatchVerdict::Unspent`]. A spend observed in
+/// the window is a definite [`WatchVerdict::SpentObserved`], returned as soon as it is seen.
 pub fn verify_watched_window(
     watch: OutPoint,
     anchor: &CertifiedTransactions,
+    require_through: u64,
     blocks: &[impl AsRef<[u8]>],
     eta0: &[u8; 32],
     freshness: Freshness,
@@ -307,6 +328,11 @@ pub fn verify_watched_window(
     }
     if !create_seen {
         return stalled(verified_through, StallReason::CreationNotObserved);
+    }
+    // The tip must reach the caller's required coverage height — else a provider hides
+    // a spend by ending the window just under it (freshness is a soft floor only).
+    if tip.block_number < require_through {
+        return stalled(verified_through, StallReason::WindowTooShort);
     }
     if tip.block_number > anchor.block_number {
         return stalled(verified_through, StallReason::TipAboveAnchor);
