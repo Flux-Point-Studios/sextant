@@ -554,8 +554,9 @@ pub enum AnchoredError {
     Chain(ChainError),
     /// The segment's root is not a valid genesis anchor.
     Genesis(GenesisError),
-    /// The standard certificate at `index` (0-based, oldest = root) is not
-    /// authorized by a valid STM multi-signature.
+    /// The standard certificate at `index` (1-based absolute segment position;
+    /// the genesis root is index 0) is not authorized by a valid STM
+    /// multi-signature.
     Standard {
         /// Position of the offending standard certificate in the segment.
         index: usize,
