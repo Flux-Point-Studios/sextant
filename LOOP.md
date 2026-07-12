@@ -419,50 +419,45 @@ needs a row in Evidence.
 | 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
 ## Notes for the next iteration
-State (2026-07-12): **UTxO part 2 shipped — the pure-Rust BLAKE2s-256 MMR inclusion
-verifier** (DoD line 5, the load-bearing crypto core). `src/inclusion.rs` (DEFAULT
-non-`mithril`, no-blst, wasm-safe graph) reproduces mithril's `MKMapProof<BlockRange>` verify on
-Sextant's own path — a verbatim port of `ckb-merkle-mountain-range`'s `calculate_root` (peak walk
-+ per-peak recompute + right-to-left bagging) over the `MergeMKTreeNode` merge
-`BLAKE2s-256(left‖right)`, with checked arithmetic + a `MAX_MMR_SIZE = 2⁴⁰` cap + a 8 MiB proof
-cap so untrusted `inner_proof_size`/positions never overflow, underflow, or diverge, and serde's
-compiled-in recursion limit bounds the nesting. `verify_tx_inclusion(proof_hex, tx_hash,
-certified_root)`: hex→JSON decode, assert the tx's 64-byte lowercase-hex ASCII leaf is present
-(`NotIncluded` else), recompute every sub-tree root and require it bind into its parent master
-tree as `merge("{start}-{end}", sub_root)` (the empirically-pinned MKMap master-leaf transform),
-recompute the master root (NEVER the proof's stated `inner_root`), and assert it == the supplied
-`certified_root` (`RootMismatch` else). Proven on the REAL preprod `mithril-txproof.json` (tx
-`242f2037…a636` recomputes master root `83c012fd…5d774129`), tied to the STM-authenticated cert
-`b3582978…deea` root via `verify_standard` + `certified_transactions()`, plus a
-`ckb-merkle-mountain-range` differential across 1..100-leaf shapes and the tamper/absent/wrong-root
-negatives. serde/serde_json promoted to normal deps (0 new lock crates; ckb dev-only). DoD line 5
-stays UNCHECKED (part 3 remains — the honest verdict type).
+State (2026-07-12): **UTxO part 3 shipped — DoD line 5 is CLOSED** (PR #20, merged main
+`26328ae`). `src/utxo.rs` `verify_utxo_read(tx_bytes, out_index, proof_hex, certified_root,
+block_number) -> Result<VerifiedOutput, UtxoError>` is the read path's terminal verdict, in the
+DEFAULT wasm-safe graph (0 blst, 0 new deps): it hashes the SUPPLIED body → H
+(`hash::blake2b256`, NEVER a provider-supplied H), composes the shipped
+`inclusion::verify_tx_inclusion(H, …)` (root recomputed, never the proof's `inner_root`), then
+decodes the Conway `TxOut` at `out_index` on Sextant's own minicbor path — map form
+`{0:addr,1:value,2:datum_option,3:script_ref}` + legacy array `[addr,value(,datum_hash)]`; value =
+bare coin OR `[coin,multiasset]` (lovelace only, multiasset skipped); inline datum
+`[1,#6.24(bytes)]` and datum-hash options → `Datum::{Inline,Hash}`. Returns `{address, lovelace,
+datum, certified_at, spend_status}`. The honesty is TYPE-level: `SpendStatus` has the single
+inhabitant `NotEstablished` — the read path CANNOT and does not claim unspent (Cardano commits to
+no UTxO-set accumulator; the certified transaction set trails tip ~100 blocks). Proven on the real
+golden tx `242f2037…a636`: both outputs decode (idx 0 = script addr + 5 ADA + inline datum; idx 1
+= base addr + 4_867_657_971 lovelace, no datum); NAMED negative `tampered_utxo_claim_is_rejected`
+(flip an output lovelace byte → H changes → `Err(Inclusion(NotIncluded))` before any decode) +
+substituted-bytes variant + exhaustive honesty guard + a mithril-gated end-to-end test binding the
+read to a `verify_standard`-authenticated (genesis-anchorable via `verify_chain_anchored`) root.
+Independent red-team VERDICT SHIP (0 findings); all 4 Woodpecker contexts green (pipeline 148).
 
-**Attacking next — UTxO part 3 of 3 (CLOSES DoD line 5): `verify_utxo_read` + the honest
-verdict.** The design is pinned in the "## Attacking next — DoD line 5" spec below. Compose the
-shipped `verify_tx_inclusion` into `verify_utxo_read(tx_bytes, out_index, proof_bytes,
-certified_root, block_number) -> VerifiedOutput{addr,value,datum,certified_at,spend_status:
-SpendStatus::NotEstablished}`: hash the SUPPLIED `tx_bytes` → H (Blake2b-256, NEVER a
-provider-supplied H — the substituted-bytes guard), `verify_tx_inclusion(H)`, then decode
-`TxOut[out_index]` from the certified `tx_bytes` (CBOR, the minicbor path already in
-`src/header.rs`), and return the output with an uncoercible `SpendStatus::NotEstablished` (the
-type-level honesty — proves provenance/inclusion, NOT unspent). NAMED DoD negative
-`tampered_utxo_claim_is_rejected`: flip one lovelace/datum byte in the `TxOut` → H changes →
-`verify_tx_inclusion` → `NotIncluded`/`RootMismatch`; variant: tx-B's bytes under tx-A's proof →
-rejected. Likely also the FFI export (`sextant_verify_utxo_read`) + `smoke.c` reference (the
-red-team "every export gains a smoke reference" rule) + cbindgen header regen.
+**Attacking next — OPERATOR-STEERED (do NOT auto-derive): DoD line 7 (Live) is the only
+remaining DoD line.** The verify core is COMPLETE — consensus (leader-VRF + opcert + KES on
+preprod AND mainnet), chain-following + nonce, the Mithril genesis-anchored trust root, the
+proof-based certified UTxO read, AND the consumable C-ABI/WASM artifacts primitive: **DoD lines 2,
+3, 4, 5, 6 all CLOSED.** Line 7 is a different character and needs an operator decision — it
+requires *a downstream consumer*: "the first downstream consumer's execution path performs one
+verified UTxO read on preview against a real order before a spend decision, and rejects a spoofed
+RPC response in the same test." Checkpoint the operator before attacking it.
 
-**BLOCKER for part 3 — the raw tx CBOR fixture is a fresh network harvest** (BlockFetch the block
-carrying tx `242f2037…a636` off a relay + decode its `TxOut` with pallas), and network egress is
-permission-gated in this non-interactive loop (a plain `curl`/`cargo run -p harvest` is denied).
-Two paths: **(A)** build part 3's `verify_utxo_read` + `SpendStatus` type + the honest-scope
-harness against a SYNTHETIC `TxOut` fixture whose Blake2b-256 hash is inserted as a constructed
-MKMap leaf (self-contained, no network — proves the tx-bytes→H binding + the tampered-claim
-negative + the uncoercible spend_status without the real block), and pin the REAL-tx-CBOR golden
-when an operator harvest lands — RECOMMENDED, closes the DoD crypto with the named negative now;
-**(B)** park part 3 until an operator harvest session. Attack (A) next: the DoD proof
-(`tampered_utxo_claim_is_rejected`) is a crypto property that a synthetic-but-real-shaped `TxOut`
-+ constructed proof proves as rigorously as a harvested block.
+**Prerequisite sub-slice for line 7 (the compounding-leverage payoff): the FFI export
+`sextant_verify_utxo_read` + `smoke.c` reference + cbindgen header regen.** Deliberately deferred
+from part 3 (which did NOT touch the C-ABI — header drift-gate stayed clean). Unlike the existing
+allocation-free exports, `VerifiedOutput` carries a variable-length `address` and an optional
+variable-length inline `datum`, so the export needs the caller-allocated-buffer ABI pattern
+(caller passes `addr_buf`/`addr_cap` + `datum_buf`/`datum_cap` + out-lengths; `SpendStatus` maps
+to a fixed `#[repr(i32)]`; `certified_at` is a `u64` out-param). The red-team "every export gains
+a smoke.c reference or it is not proven retained" rule applies. This is the natural first step of
+line 7: it turns the verified read into the primitive the downstream consumer calls through
+C-ABI/WASM, then line 7 wires a real preview order + a spoofed-RPC-rejection test on top.
 
 **DoD line 6 remains CLOSED — the C-ABI/WASM artifacts primitive shipped
 (parts 1 + 2 of 2, PRs #15 + #16).** Part 1 (`src/ffi.rs`) turns the verified core into
@@ -491,16 +486,6 @@ findings); all Woodpecker contexts green on the PR and on merged main. A durable
 release (plugin-release / `gh release`) needs a CI publish secret — DEFERRED to the operator.
 RULE (red-team-flagged): every new export must gain a `smoke.c` reference or it is not proven
 retained.
-
-**Attacking next — OPERATOR-STEERED (do NOT auto-derive).** The consensus core (leader-VRF +
-opcert + KES on preprod AND mainnet), chain-following + nonce, the Mithril trust root, AND the
-consumable C-ABI/WASM primitive are all done — **DoD lines 2, 3, 4, 6 CLOSED**. Remaining DoD is a
-different character and needs an operator decision: line 5 (UTxO — a DESIGN slice first:
-snapshot-anchored vs proof-based, anchored to the now-verified Mithril snapshot; see the deferred
-UTxO note above) and line 7 (Live — needs a downstream consumer). Checkpoint the operator before
-attacking either. (2026-07-12: DoD line 2 closed by the mainnet harvest — `tools/harvest` gained a
-`Network`-parameterized `mainnet`/`mainnet-eta0` mode; 24 real epoch-642 mainnet blocks verify
-leader-VRF + opcert + KES byte-identical to the independent oracles.)
 
 **Carried notes (the part-2 red-team returned 0 findings):** (1) the drift gate installs
 `cbindgen ^0.28` via `cargo install` if missing — a future 0.28.x formatting change could
@@ -563,9 +548,10 @@ it lands as two Plan sub-slices (FFI surface + cbindgen header; then CI artifact
 This is the compounding-leverage payoff — the verified core (header→VRF→opcert→KES→nonce→
 chain→Mithril) becomes the consumable C-ABI/WASM primitive every downstream consumer calls.
 
-**Deferred — DoD line 5: UTxO verification (design slice first).** Not dropped, just sequenced
-after Artifacts per operator choice. When it comes up: decide snapshot-anchored vs proof-based
-in a design slice, then implement with a tampered-claim negative. The Mithril chain of trust is
+**[CLOSED 2026-07-12 — historical] DoD line 5: UTxO verification (design slice first).** Was
+sequenced after Artifacts per operator choice; closed proof-based (parts 1–3, PRs #18–#20). The
+design rationale, recorded here as history: decide snapshot-anchored vs proof-based in a design
+slice, then implement with a tampered-claim negative. The Mithril chain of trust is
 the natural anchor — a snapshot certificate's `protocol_message` commits (via `SnapshotDigest` /
 `CardanoTransactionsMerkleRoot`) to signed Cardano state, and `verify_chain_anchored` now
 authenticates that certificate back to the genesis key, so a snapshot-anchored UTxO proof =
