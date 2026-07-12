@@ -267,17 +267,16 @@ needs a row in Evidence.
       certificates_hashed_content` + `stake_distribution_certificate_surfaces_no_transaction_
       root` (→ `None`). The spec's `73d8885a…`/block 4926569 was the live-artifact sample;
       pinned to the real in-tree cert instead (loop honesty — pin to what is proven).
-- [ ] UTxO part 1b of 3 — harvest the real tx-inclusion proof + tx CBOR fixtures
-      (NETWORK; needed by parts 2 & 3, parked — aggregator egress is permission-gated in the
-      non-interactive loop). Extend `tools/harvest` with a `mithril-tx-proof <txhash>` mode:
-      GET `/proof/cardano-transaction?transaction_hashes=<h>` (release-preprod;
-      `CardanoTransactionsProofs` JSON), fetch its `certificate_hash` cert + walk toward
-      genesis (reuse the genesis walk) as the anchoring chain, and capture the raw tx CBOR
-      (extract from the tx's block via pallas). Commit as `tests/vectors/` fixtures. Write
-      the mode ONLY when it can be run live (unrun harvest code = dead code). Part 2's crypto
-      core can be developed first against a synthetic golden + the `ckb-merkle` differential;
-      the real-proof golden (recomputed root == the surfaced `4409e1c7…`/`73d8885a…` cert
-      root) ties in when this harvest lands.
+- [x] UTxO part 1b of 3 — harvest done (proof + cert; raw tx CBOR deferred to part 3).
+      Operator ran the aggregator egress (parked for the non-interactive loop) and committed
+      the golden fixtures: `tests/vectors/mithril-txproof.json` (a real `CardanoTransactionsProofs`
+      for tx `242f2037…a636`, `non_certified_transactions` empty) + `tests/vectors/
+      mithril-txproof-cert.json` (its certifying cert `b3582978c8ae855f…deea` =
+      `CardanoTransactions(300, 4927469)`, `cardano_transactions_merkle_root`
+      `83c012fdc3e756fb…5d774129`; `cert.hash == proof.certificate_hash`; a real STM *standard*
+      cert, `verify_standard`-authenticatable, NOT matching the `mithril-cert-*` 12-cert glob).
+      The raw tx CBOR (part 3's `TxOut` decode) is a separate BlockFetch+pallas harvest, deferred
+      to part 3.
 - [ ] UTxO part 2 of 3 — the MKMap/MMR inclusion verify (the crypto core, wasm-safe
       default build). Implement, in the DEFAULT (non-`mithril`, no-blst, wasm-safe) graph,
       a ~200-LOC pure-Rust BLAKE2s-256 Merkle-Mountain-Range verifier reproducing Mithril's
@@ -287,10 +286,15 @@ needs a row in Evidence.
       master MMR proof (range-root → master root), recompute the root via `compute_root()`
       (NEVER trust the input `inner_root`), and `contains(tx_hash)`. `verify_tx_inclusion(
       proof_bytes, tx_hash, certified_root) -> Result<(), InclusionError>` asserts the
-      recomputed root == `certified_root`. Oracle: the golden vector (recomputed root ==
-      the surfaced cert `merkle_root` on the real fixture) + a dev-only differential vs
-      `ckb-merkle-mountain-range` (the crate mithril rides). Negatives: a mutated
-      proof-path node → `RootMismatch`; a tx-hash not in the proof → `NotIncluded`.
+      recomputed root == `certified_root`. Oracle (fixtures now committed by part 1b): the golden
+      vector `tests/vectors/mithril-txproof.json` — its `certified_transactions[0].proof`
+      (hex→JSON `MKMapProof`) must recompute to
+      `83c012fdc3e756fb5230d1a6554fbf743ccea171b37d536a64350c4f5d774129`, which ==
+      `Certificate::from_json(mithril-txproof-cert.json).certified_transactions().unwrap().merkle_root`
+      (compose `verify_standard` on that cert to STM-authenticate the root before trusting it) —
+      so the positive test is `verify_tx_inclusion(proof, 242f2037…a636, that_root) == Ok`; plus a
+      dev-only differential vs `ckb-merkle-mountain-range` (the crate mithril rides). Negatives: a
+      mutated proof-path node → `RootMismatch`; a tx-hash not in the proof → `NotIncluded`.
 - [ ] UTxO part 3 of 3 — `verify_utxo_read` + the honest verdict (CLOSES DoD line 5).
       `verify_utxo_read(tx_bytes, out_index, proof_bytes, certified_root, block_number) ->
       Result<VerifiedOutput, _>`: hash the SUPPLIED `tx_bytes` → H (never trust a
