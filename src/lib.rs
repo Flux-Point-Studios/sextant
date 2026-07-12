@@ -14,4 +14,5 @@ pub mod kes;
 #[cfg(feature = "mithril")]
 pub mod mithril;
 pub mod nonce;
+pub mod utxo;
 pub mod vrf;
