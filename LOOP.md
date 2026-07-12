@@ -420,8 +420,16 @@ needs a row in Evidence.
 | 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
 ## Notes for the next iteration
-State (2026-07-12): **UTxO part 3 shipped — DoD line 5 is CLOSED** (PR #20, merged main
-`26328ae`). `src/utxo.rs` `verify_utxo_read(tx_bytes, out_index, proof_hex, certified_root,
+State (2026-07-12): **DoD line 5 is CLOSED and hardened** (part 3 = PR #20 `26328ae`;
+independent-red-team LOW closed = PR #21 `e628bdf`, a pallas cross-decoder differential so the
+TxOut decode carries the same independent-oracle discipline as every other verdict). **DoD lines
+2, 3, 4, 5, 6 are all CLOSED — the full read-path verification core + the consumable C-ABI/WASM
+primitive are done. Only line 7 (Live) remains, and it needs a downstream consumer to exist.** The
+UTxO epic proved the loop's value AND the independent-red-team gate's: part 2's MMR verifier hid a
+CRITICAL false-accept behind a green harness + green CI + a green ckb differential (a duplicate/
+unconsumed leaf smuggled an arbitrary tx past membership under a real STM-authenticated root); only
+adversarial malleability testing caught it. Every autonomous crypto merge still needs the
+independent red-team + flaky check before it can be trusted. `src/utxo.rs` `verify_utxo_read(tx_bytes, out_index, proof_hex, certified_root,
 block_number) -> Result<VerifiedOutput, UtxoError>` is the read path's terminal verdict, in the
 DEFAULT wasm-safe graph (0 blst, 0 new deps): it hashes the SUPPLIED body → H
 (`hash::blake2b256`, NEVER a provider-supplied H), composes the shipped
