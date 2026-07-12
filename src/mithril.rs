@@ -120,6 +120,30 @@ impl Certificate {
         self.signed_message == self.protocol_message.compute_hash()
     }
 
+    /// The Cardano-transactions commitment this certificate certifies, if it is a
+    /// `CardanoTransactions` certificate: the `cardano_transactions_merkle_root`
+    /// protocol-message part bound to the `(epoch, block_number)` its
+    /// `signed_entity_type` names. `None` for any other signed entity — those
+    /// commit to no transaction set. Both fields are read from the certificate's
+    /// own hashed content, so on a verified certificate they cannot disagree with
+    /// what it signed.
+    pub fn certified_transactions(&self) -> Option<CertifiedTransactions> {
+        let (epoch, block_number) = match self.signed_entity_type {
+            SignedEntityType::CardanoTransactions(epoch, block_number) => (epoch, block_number),
+            _ => return None,
+        };
+        let merkle_root = self
+            .protocol_message
+            .message_parts
+            .get(&ProtocolMessagePartKey::CardanoTransactionsMerkleRoot)?
+            .clone();
+        Some(CertifiedTransactions {
+            merkle_root,
+            epoch,
+            block_number,
+        })
+    }
+
     /// Recompute the certificate's content hash (lowercase hex), byte-identical
     /// to `mithril-common`'s `Certificate::compute_hash`.
     pub fn compute_hash(&self) -> String {
@@ -143,6 +167,24 @@ impl Certificate {
     }
 }
 
+/// The Cardano-transactions commitment a certificate certifies: the Merkle root
+/// of the signed transaction set at a certified `(epoch, block_number)`. Present
+/// only on a `CardanoTransactions` certificate — a stake-distribution certificate
+/// commits to no transaction set. This is the root a proof-based UTxO inclusion
+/// check recomputes against (never trusting a provider-supplied root); when it
+/// comes off a `verify_chain_anchored`-verified tip it is authenticated back to
+/// the genesis key. `block_number` is the recency `certified_at` a caller must
+/// carry — the certified set trails tip, so it proves creation, never unspent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertifiedTransactions {
+    /// The `cardano_transactions_merkle_root` protocol-message part (hex).
+    pub merkle_root: String,
+    /// The epoch the transaction set is certified for.
+    pub epoch: u64,
+    /// The highest block number the certified transaction set covers.
+    pub block_number: u64,
+}
+
 /// A hash-linked, AVK-bound certificate chain segment verified on Sextant's own
 /// path. Names the endpoints so a caller can anchor on the tip certificate hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +196,15 @@ pub struct VerifiedChain {
     pub tip_hash: String,
     /// Number of certificates verified.
     pub length: usize,
+    /// The tip certificate's Cardano-transactions commitment, when it certifies
+    /// one — the Merkle root (and its certified height) a UTxO inclusion proof is
+    /// recomputed against. `None` when the tip certifies a stake distribution
+    /// rather than a transaction set. Genesis-authenticated **only** when this
+    /// `VerifiedChain` came from [`verify_chain_anchored`]; from a plain
+    /// [`verify_chain`] the root is chain-integrity-checked but NOT genesis-anchored
+    /// (a self-consistent cert with a resealed hash survives), so a caller wiring
+    /// this into a UTxO read must anchor the chain to the genesis key first.
+    pub certified_transactions: Option<CertifiedTransactions>,
 }
 
 /// Why a certificate-chain segment failed to verify. Each variant carries the
@@ -217,6 +268,11 @@ impl std::error::Error for ChainError {}
 /// The AVK binding is what stops a self-consistent forged child — one that links
 /// correctly but carries an attacker's signer set — from being accepted; it is
 /// the chain of trust the genesis anchor terminates and the multi-signature signs.
+///
+/// The returned [`VerifiedChain::certified_transactions`] carries integrity only,
+/// NOT genesis-authentication: this function does not check the root is the genesis
+/// anchor, so a self-consistent cert (its own hash resealed) surfaces the root it
+/// claims. Use [`verify_chain_anchored`] before trusting that root in a UTxO read.
 pub fn verify_chain(certs: &[Certificate]) -> Result<VerifiedChain, ChainError> {
     if certs.is_empty() {
         return Err(ChainError::Empty);
@@ -247,10 +303,12 @@ pub fn verify_chain(certs: &[Certificate]) -> Result<VerifiedChain, ChainError> 
             return Err(ChainError::AvkBinding { index });
         }
     }
+    let tip = &certs[certs.len() - 1];
     Ok(VerifiedChain {
         root_hash: certs[0].hash.clone(),
-        tip_hash: certs[certs.len() - 1].hash.clone(),
+        tip_hash: tip.hash.clone(),
         length: certs.len(),
+        certified_transactions: tip.certified_transactions(),
     })
 }
 
