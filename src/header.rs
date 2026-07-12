@@ -48,6 +48,12 @@ pub struct HeaderView {
     pub vrf_output: [u8; 64],
     /// The 80-byte ECVRF proof pi = Gamma(32) || c(16) || s(32).
     pub vrf_proof: [u8; 80],
+    /// The header's commitment to its block body (header_body index 7): the
+    /// `hashAlonzoSegWits` over the block's four raw body segments. Binding the
+    /// scanned transaction bodies to a header-verified chain requires recomputing
+    /// this from the raw block spans and matching it — see
+    /// [`crate::window::verify_body_commitment`].
+    pub block_body_hash: [u8; 32],
     /// The operational certificate (header_body index 8) binding the hot KES
     /// key to the cold `issuer_vkey`.
     pub opcert: OpCert,
@@ -76,6 +82,25 @@ pub struct OpCert {
     /// The cold key's Ed25519 signature over
     /// `hot_vkey ‖ BE64(sequence_number) ‖ BE64(kes_period)`.
     pub sigma: [u8; 64],
+}
+
+/// The raw CBOR spans of a block's four body segments (block array indices
+/// 1..=4) as byte ranges into the original block CBOR: `transaction_bodies`,
+/// `transaction_witness_sets`, `auxiliary_data_set`, and `invalid_transactions`.
+///
+/// These are the exact wire bytes the header's `block_body_hash` commits to.
+/// Cardano block CBOR is non-canonical, so the body-commitment bind hashes these
+/// spans *verbatim* — a re-encode could differ byte-for-byte and break the bind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockBodySpans {
+    /// `transaction_bodies` (block index 1): the sequence of raw tx bodies.
+    pub tx_bodies: core::ops::Range<usize>,
+    /// `transaction_witness_sets` (block index 2).
+    pub tx_witness_sets: core::ops::Range<usize>,
+    /// `auxiliary_data_set` (block index 3): the tx-index → auxiliary-data map.
+    pub auxiliary_data: core::ops::Range<usize>,
+    /// `invalid_transactions` (block index 4): the tx-index array.
+    pub invalid_transactions: core::ops::Range<usize>,
 }
 
 /// Why a header failed to decode. Byte providers are untrusted, so every
@@ -111,6 +136,14 @@ impl HeaderView {
     /// Decode the read-path fields from ledger `[era, block]` CBOR for the
     /// Praos eras (Babbage, Conway). Any structural deviation is rejected.
     pub fn from_block_cbor(bytes: &[u8]) -> Result<Self, DecodeError> {
+        Self::decode_block(bytes).map(|(view, _)| view)
+    }
+
+    /// Decode the header ([`HeaderView`]) and the raw spans of the block's four
+    /// body segments ([`BlockBodySpans`]) in one pass. The spans are byte ranges
+    /// into `bytes`, so the body-commitment bind can hash the wire bytes verbatim
+    /// without a re-encode. Any structural deviation is rejected.
+    pub fn decode_block(bytes: &[u8]) -> Result<(Self, BlockBodySpans), DecodeError> {
         let mut d = Decoder::new(bytes);
 
         expect_array(&mut d, 2)?; // [era, block]
@@ -145,7 +178,7 @@ impl HeaderView {
         let vrf_output = read_bytes_exact::<64>(&mut d)?;
         let vrf_proof = read_bytes_exact::<80>(&mut d)?;
         d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 6: block_body_size
-        d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 7: block_body_hash
+        let block_body_hash = read_bytes_exact::<32>(&mut d)?; // idx 7: block_body_hash
         let opcert = read_opcert(&mut d)?; // idx 8: operational_cert
         d.skip().map_err(|_| DecodeError::MalformedCbor)?; // idx 9: protocol_version
         let header_body = bytes[body_start..d.position()].to_vec();
@@ -155,30 +188,50 @@ impl HeaderView {
         // The header CBOR is now fully consumed; hash it for the chain link.
         let block_hash = crate::hash::blake2b256(&bytes[header_start..d.position()]);
 
-        // Consume the remainder so trailing or malformed bytes anywhere in the
-        // input are rejected, not silently ignored.
-        for _ in 0..(BLOCK_LEN - 1) {
-            d.skip().map_err(|_| DecodeError::MalformedCbor)?; // rest of block
-        }
+        // Capture the raw spans of the block's four body segments (block indices
+        // 1..=4) verbatim; the body-commitment bind hashes these exact bytes. This
+        // also consumes the remainder, so trailing or malformed bytes anywhere in
+        // the input are rejected, not silently ignored.
+        let tx_bodies = capture_span(&mut d)?;
+        let tx_witness_sets = capture_span(&mut d)?;
+        let auxiliary_data = capture_span(&mut d)?;
+        let invalid_transactions = capture_span(&mut d)?;
         if d.position() != bytes.len() {
             return Err(DecodeError::TrailingBytes);
         }
 
-        Ok(Self {
-            era: era as u8, // validated to 6 | 7 above
-            block_number,
-            slot,
-            prev_hash,
-            block_hash,
-            issuer_vkey,
-            vrf_vkey,
-            vrf_output,
-            vrf_proof,
-            opcert,
-            header_body,
-            body_signature,
-        })
+        Ok((
+            Self {
+                era: era as u8, // validated to 6 | 7 above
+                block_number,
+                slot,
+                prev_hash,
+                block_hash,
+                issuer_vkey,
+                vrf_vkey,
+                vrf_output,
+                vrf_proof,
+                block_body_hash,
+                opcert,
+                header_body,
+                body_signature,
+            },
+            BlockBodySpans {
+                tx_bodies,
+                tx_witness_sets,
+                auxiliary_data,
+                invalid_transactions,
+            },
+        ))
     }
+}
+
+/// Skip one CBOR item and return the byte range it occupied. Used to capture a
+/// block-body segment's raw wire span for the body-commitment bind.
+fn capture_span(d: &mut Decoder<'_>) -> Result<core::ops::Range<usize>, DecodeError> {
+    let start = d.position();
+    d.skip().map_err(|_| DecodeError::MalformedCbor)?;
+    Ok(start..d.position())
 }
 
 /// Read a definite CBOR array header and require exactly `want` elements,

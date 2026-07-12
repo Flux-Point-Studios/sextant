@@ -494,7 +494,7 @@ needs a row in Evidence.
         `inputs`+`collateral` sets byte-for-byte (the same cross-decoder oracle discipline
         `decode_output` carries; closes open-risk #3 tag-258/collateral → missed-spend on REAL bytes).
         No FFI change (header drift-gate clean). Next: slice 2 (body-commitment bind).
-  - [ ] Tier1 slice 2 — body-commitment BIND. In `src/header.rs`: stop `d.skip()`-ing header_body
+  - [x] Tier1 slice 2 — body-commitment BIND. In `src/header.rs`: stop `d.skip()`-ing header_body
         idx 7 (`block_body_hash`), capture its 32 bytes + the RAW spans of block[1..4]. New bind
         (in `src/window.rs` or `src/chain.rs`): recompute `hashAlonzoSegWits =
         blake2b256(blake2b256(raw tx_bodies) ‖ blake2b256(raw witness_sets) ‖ blake2b256(raw aux) ‖
@@ -502,6 +502,30 @@ needs a row in Evidence.
         the verified chain (hash the RAW block[1..4] spans VERBATIM, never a re-encode; Cardano CBOR
         is non-canonical). Tests: `authentic_block_body_binds_to_its_header_commitment`,
         `swapped_body_fails_the_bind`. Uses existing committed preprod block fixtures.
+        SHIPPED (harness-green locally; CI pending on the PR): `HeaderView` gains
+        `block_body_hash: [u8;32]` (idx 7, was skipped) and a new `HeaderView::decode_block(bytes)
+        -> Result<(HeaderView, BlockBodySpans), DecodeError>` that captures the four raw block-body
+        segment spans (block indices 1..=4) as byte ranges VERBATIM in one pass; `from_block_cbor`
+        is now a thin wrapper over it. New `src/window.rs` (DEFAULT wasm-safe graph — blake2b +
+        minicbor only, 0 blst, 0 new deps): `verify_body_commitment(block_bytes) -> Result<HeaderView,
+        BindError>` recomputes `hashAlonzoSegWits` over the verbatim spans (fixed-128B preimage of
+        the four inner Blake2b-256 segment hashes, concatenated in block order) and requires it to
+        equal the committed `block_body_hash`, else `BindError::BodyCommitmentMismatch`; decode
+        failures fail closed to `BindError::Decode`. ORACLE = cardano-node ground truth: `recompute
+        == committed` on ALL 32+ real fixtures (22 preprod + 10 boundary + 24 mainnet, every one
+        minted+accepted on-chain), which pins the formula — all four segments, in block order, hashed
+        verbatim (a misordered/omitted/re-encoded segment would diverge on the real blocks with
+        non-empty tx_bodies AND witness_sets; the empty aux/invalid segments are still present in the
+        preimage or the positive would fail). NON-VACUOUS negatives in `tests/window.rs`:
+        `swapped_body_fails_the_bind` (splice block B's tx_bodies into block A's authentic header →
+        `BodyCommitmentMismatch` — the real-headers+swapped-bodies attack), `tampered_commitment_
+        fails_the_bind` (flip a data byte of the committed hash in place → mismatch, the header side),
+        `malformed_block_fails_closed_to_decode` (truncated → `Decode`). MUTATION check: inverting the
+        bind comparison (`!=`→`==`) flips 3/4 window tests red (authentic → mismatch, swapped/tampered
+        → wrongly Ok), proving the check is load-bearing. No FFI change (header drift-gate clean — no
+        new `extern "C"` export; `SextantHeaderView` unchanged, that's slice 5); no Cargo/dep change;
+        default+wasm graph untouched. Next: slice 3 (`verify_watched_window` — the verdict types + the
+        core, composing verify_segment → this bind → decode_spends).
   - [ ] Tier1 slice 3 — the verdict types + `verify_watched_window` (the core). New `src/window.rs`:
         `WatchVerdict = Unspent{as_of: WatchedTip, basis: WatchedWindow(WindowAssumptions)} |
         SpentObserved{at, spending_txid} | Stalled{verified_through, reason: StallReason}`;
@@ -618,9 +642,31 @@ needs a row in Evidence.
 
 | 2026-07-12 20:05 UTC | BEYOND-DoD v0.2 Tier1 slice 1 (DoD stays DONE): `decode_spends` — the tx-INPUT decoder, the forward spend-scan signal — decodes a Conway body's consumed outpoints (key 0 inputs ∪ key 13 collateral, excluding key 18 reference inputs) on Sextant's own minicbor path, tag-258/bare-array duality handled, fail-closed | TDD: added the 5 named unit tests referencing not-yet-existing `decode_spends`/`OutPoint`/`SpendSet` → RED (`cargo test --lib utxo`: `cannot find type SpendSet` / `cannot find struct OutPoint`), then the minimum impl → GREEN. `pub struct OutPoint{tx_id:[u8;32], index:u16}` + `pub type SpendSet=BTreeSet<OutPoint>` + `pub fn decode_spends(&[u8])->Result<SpendSet,UtxoError>` in `src/utxo.rs`, DEFAULT wasm-safe graph (0 blst, 0 new deps, reuses `read_hash32`): scans the definite body map, key 0∪13 → `decode_input_set` (peeks `Type::Tag`==258 OR a bare array, both decode identically) → `decode_outpoint` (`u16::try_from` rejects an index wider than `uint .size 2`); key 18 + every other field `d.skip()`ped. Unit tests GREEN: `tag258_and_bare_array_decode_to_the_same_outpoint`, `collateral_key13_is_a_spend`, `reference_input_key18_is_not_a_spend` (only the spent input, not the referenced one), `malformed_input_body_is_malformed_tx` (a bare-uint set element), `overwide_index_is_malformed_tx` (65536→`MalformedTx`, 65535→Ok at `u16::MAX`) — the spec's uppercase `NOT`/`MalformedTx` normalized to snake_case for the `-D warnings` `non_snake_case` lint, intent unchanged. PLUS an added real-fixture differential `tests/utxo.rs::decode_spends_matches_pallas_inputs_on_the_golden_tx`: the golden `mithril-tx-body.cbor`'s consumed outpoints equal pallas's own decoded `inputs`+`collateral` sets byte-for-byte (non-empty; the same cross-decoder oracle every sibling decoder in this file carries — closes open-risk #3 tag-258/collateral → missed-spend on REAL bytes, the cardinal false-Unspent source). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy `--all-targets --all-features -D warnings`, release, `cargo test --all-features` = 15 suites incl. `utxo`=8 (+1) and lib `utxo::tests`=13 (+5), wasm32 build, header drift-gate + leak/honest-scope greps; 0 failure markers). One clippy fix (`cloned_ref_to_slice_refs` → `std::slice::from_ref`). No FFI/`Cargo`/`.woodpecker`/header change (drift-gate clean); default+wasm graph untouched. PR + red-team next |
 | 2026-07-12 20:35 UTC | Tier1 slice 1 merged to main with red-team SHIP; all four Woodpecker contexts green | PR #24 squash-merged (`f87b65b`); `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (pipeline 172/173). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH/MEDIUM: a 21-case hostile-CBOR probe harness compiled against `decode_spends` confirms EVERY deviation fails closed to `MalformedTx` — there is NO `Ok`-with-a-dropped-spend path (the one outcome that could produce a false `Unspent`). Verified: indefinite body/set + tag-258-over-indefinite → `Err` (not mis-parsed); malformed set element after a valid one + under-claimed array count → `Err` (no partial keep); map/array count `2^64-1` → `Err` (no OOM/hang, count never sizes an allocation); tag-258-wrapped reference set (key 18) correctly `skip`ped; duplicate key 0 → union (over-counts, never under); index 65536→`Err`, 65535→`Ok` at `u16::MAX` (exact boundary); golden `mithril-tx-body.cbor` (definite `a9` map, `d90102` tag-258 input set) pallas differential passes (3 spends byte-for-byte). Two LOW observations, NO fix required for this slice (both fail closed, neither reachable): indefinite-length rejection (Cardano CBOR is definite; matches shipped `decode_output`) + no stream-end assert (unreachable — `verify_utxo_read` hashes the exact `KeepRaw` body span + gates on inclusion before any decode, so a padded body has a different txid → not-included). Scope verified: diff = `LOOP.md`/`src/utxo.rs`/`tests/utxo.rs` only; 0 dependency/FFI/header/CI change; default+wasm32 graphs clean (0 blst/mithril_stm/serde). `scripts/harness.sh --full` exit 0 on merged main |
+| 2026-07-12 21:10 UTC | BEYOND-DoD v0.2 Tier1 slice 2 (DoD stays DONE): the body-commitment BIND — a block's transaction bodies bind to its header's `block_body_hash` commitment on Sextant's own path, closing the "real headers + swapped bodies → false Unspent" hole before any spend scan | TDD: added `tests/window.rs` referencing not-yet-existing `verify_body_commitment`/`BindError`/`HeaderView::decode_block` → the byte-flip negative first landed on a CBOR structural byte (`Decode(MalformedCbor)` not `BodyCommitmentMismatch`), replaced with a deterministic header-side negative → GREEN. `src/header.rs`: `HeaderView` gains `block_body_hash: [u8;32]` (idx 7, was `d.skip()`ped) + `HeaderView::decode_block(bytes) -> Result<(HeaderView, BlockBodySpans), DecodeError>` capturing the four raw block-body segment spans (block indices 1..=4) as verbatim byte ranges in one pass (`from_block_cbor` now wraps it). New `src/window.rs` (DEFAULT wasm-safe graph, 0 blst, 0 new deps): `verify_body_commitment(block_bytes) -> Result<HeaderView, BindError>` recomputes `hashAlonzoSegWits = blake2b256( blake2b256(tx_bodies) ‖ blake2b256(witness_sets) ‖ blake2b256(aux) ‖ blake2b256(invalid_txs) )` over the verbatim spans (fixed-128B preimage) and requires `== block_body_hash`, else `BindError::BodyCommitmentMismatch`; decode fails closed to `BindError::Decode`. ORACLE = cardano-node ground truth: `authentic_block_body_binds_to_its_header_commitment` proves `recompute == committed` on ALL 32+ real fixtures (22 preprod + 10 boundary + 24 mainnet, every one minted+accepted on-chain) — non-circular (a wrong span/order/omitted-segment/hash diverges on the real non-empty-body blocks). NON-VACUOUS negatives: `swapped_body_fails_the_bind` (splice block B's tx_bodies into block A's authentic header → `BodyCommitmentMismatch`), `tampered_commitment_fails_the_bind` (flip a data byte of the committed hash in place → mismatch), `malformed_block_fails_closed_to_decode` (truncated → `Decode`). MUTATION: inverting `!=`→`==` in the bind flips 3/4 window tests red (authentic→mismatch, swapped/tampered→wrongly Ok) — the check is load-bearing. `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy `--all-targets --all-features -D warnings`, release, `cargo test --all-features` incl. `tests/window.rs`=4, wasm32 build, header drift-gate + blst/mithril_stm leak + honest-scope `(un)?spent` greps). No FFI/Cargo/`.woodpecker`/header change (cbindgen drift-gate clean — no new `extern "C"` export); default+wasm graph untouched. PR + red-team next |
 
 ## Notes for the next iteration
-State (2026-07-12, latest — beyond-DoD Tier1 slice 1 `decode_spends` shipped): **STATUS: DONE holds.**
+State (2026-07-12, latest — beyond-DoD Tier1 slice 2 body-commitment BIND shipped): **STATUS: DONE holds.**
+This iteration shipped Tier1 slice 2 of the BEYOND-DoD v0.2 flagship (Windowed-unspent Tier 1): the
+body-commitment BIND — THE CRUX / main red-team surface. `chain::verify_segment` authenticates block
+HEADERS only; the spend signal a windowed-unspent verdict scans lives in the tx BODIES, which a header
+does not carry, so a hostile provider could hand authentic hash-linked headers with SWAPPED bodies.
+This slice closes that: `src/window.rs::verify_body_commitment` recomputes the header's committed
+`block_body_hash` (`hashAlonzoSegWits`) from the block's four RAW body segment spans (captured verbatim
+by the new `HeaderView::decode_block`, never re-encoded — Cardano CBOR is non-canonical) and requires
+the match. Proven on ALL 32+ real fixtures (cardano-node ground truth); non-vacuous swap/tamper
+negatives; mutation-checked load-bearing. Default wasm-safe graph (blake2b + minicbor, 0 blst, 0 new
+deps); no FFI/header change. **Next slice = Tier1 slice 3 — the verdict types + `verify_watched_window`
+(the core).** New `src/window.rs` additions: `WatchVerdict = Unspent{as_of,basis:WatchedWindow(
+WindowAssumptions)} | SpentObserved{at,spending_txid} | Stalled{verified_through,reason}` (only ONE
+Unspent shape; `WindowAssumptions{mithril_quorum,data_complete}` MANDATORY non-Option); `verify_watched_
+window(watch, anchor, blocks, eta0, freshness)` composing `chain::verify_segment` → per-block
+`verify_body_commitment` (this slice) → `utxo::decode_spends` (slice 1) → membership test → the CHECKED
+invariant `tip.n − start.n + 1 == len` + creation-observed-at/above-start + freshness lag; FAIL-CLOSED
+(any gap/broken-link/body-mismatch/stale-tip → `Stalled`, NEVER `Unspent`). HARVEST needed (operator,
+network seam): a contiguous preprod segment with a real create+spend of one outpoint + a not-spent
+outpoint. See the "## Attacking next" spec (### THE CRUX + ### open risks). Slice 2 gives slice 3 the
+two primitives it composes: `verify_body_commitment` returns the authenticated `HeaderView` and, via
+`decode_block`, the `tx_bodies` span slice 3 iterates to feed `decode_spends` per tx.
 This iteration shipped the first build slice of the operator-ratified BEYOND-DoD v0.2 flagship
 (Windowed-unspent Tier 1): `decode_spends`, the tx-INPUT decoder, in the default wasm-safe graph.
 It decodes a Conway tx body's consumed outpoints — key 0 inputs ∪ key 13 collateral, EXCLUDING key 18
