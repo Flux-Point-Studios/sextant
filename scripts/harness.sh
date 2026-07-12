@@ -37,7 +37,9 @@ full() {
 #  * the mithril prototype stays behind its #ifdef and no feature-gated crate's
 #    symbols leak into the header.
 header_gate() {
-  if grep -Eq '^[[:space:]]*panic[[:space:]]*=[[:space:]]*"abort"' Cargo.toml; then
+  # Match both TOML string forms — basic ("abort") and literal ('abort') are
+  # semantically identical, so the guard must reject either.
+  if grep -Eq "^[[:space:]]*panic[[:space:]]*=[[:space:]]*['\"]abort['\"]" Cargo.toml; then
     echo "harness: Cargo.toml sets panic=abort, which defeats the FFI panic guard" >&2
     exit 1
   fi
