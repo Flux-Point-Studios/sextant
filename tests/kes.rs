@@ -45,6 +45,15 @@ struct KesCase {
 /// signing period — unlike pallas's synthetic mainnet decode-fixtures, whose
 /// hand-set slots do not.
 fn kes_cases() -> Vec<KesCase> {
+    kes_cases_with_prefix("preprod-")
+}
+
+/// Every freshly-harvested vector for `prefix`, marked by its `.eta0` sidecar —
+/// which excludes the synthetic mainnet decode-fixtures whose hand-set slots do
+/// not obey the Shelley `slotsPerKESPeriod` rule — decoded into a KES case, sorted
+/// by slot. The eta0 value is unused here; its presence certifies a real block
+/// harvested off a live relay, so `verify_header_kes` derives the true period.
+fn kes_cases_with_prefix(prefix: &str) -> Vec<KesCase> {
     let mut cases = Vec::new();
     for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
         let path = entry.expect("dir entry").path();
@@ -52,9 +61,10 @@ fn kes_cases() -> Vec<KesCase> {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
-        if !name.starts_with("preprod-")
-            || path.extension().and_then(|e| e.to_str()) != Some("block")
-        {
+        if !name.starts_with(prefix) || path.extension().and_then(|e| e.to_str()) != Some("block") {
+            continue;
+        }
+        if !path.with_extension("eta0").exists() {
             continue;
         }
         let view =
@@ -91,6 +101,36 @@ fn real_preprod_kes_body_sigs_verify() {
                 c.slot, c.period
             )
         });
+    }
+}
+
+/// The "from mainnet" half of DoD line 2 (KES): every freshly-harvested mainnet
+/// header's body signature verifies on Sextant's own recursive `Sum6Kes` path at
+/// the slot-derived period (cardano-node ground truth), and the independent
+/// `pallas` `Sum6Kes` oracle accepts the same signature on the same message.
+#[test]
+fn real_mainnet_kes_body_sigs_verify() {
+    let cases = kes_cases_with_prefix("mainnet-");
+    assert!(
+        cases.len() >= 20,
+        "DoD line 2 requires ≥20 mainnet KES-verify vectors, found {}",
+        cases.len(),
+    );
+    for c in &cases {
+        kes::verify_header_kes(&c.view).unwrap_or_else(|e| {
+            panic!(
+                "mainnet slot {} (period {}) rejected a genuine KES body signature: {e:?}",
+                c.slot, c.period
+            )
+        });
+        let pk = PublicKey::from_bytes(&c.view.opcert.hot_vkey).expect("valid KES root key");
+        let osig =
+            Sum6KesSig::from_bytes(&c.view.body_signature).expect("valid Sum6 KES signature");
+        assert!(
+            osig.verify(c.period, &pk, &c.view.header_body).is_ok(),
+            "mainnet slot {}: independent oracle rejected a genuine signature",
+            c.slot,
+        );
     }
 }
 

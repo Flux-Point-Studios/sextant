@@ -35,6 +35,13 @@ struct OpCertCase {
 /// Every preprod vector, decoded into an opcert case, sorted by slot for a
 /// deterministic anchor (`fs::read_dir` order is platform-dependent).
 fn opcert_cases() -> Vec<OpCertCase> {
+    opcert_cases_with_prefix("preprod-")
+}
+
+/// Every freshly-harvested vector for `prefix`, marked by its `.eta0` sidecar
+/// (which excludes the synthetic mainnet decode-fixtures), decoded into an opcert
+/// case, sorted by slot for a deterministic anchor.
+fn opcert_cases_with_prefix(prefix: &str) -> Vec<OpCertCase> {
     let mut cases = Vec::new();
     for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
         let path = entry.expect("dir entry").path();
@@ -42,9 +49,10 @@ fn opcert_cases() -> Vec<OpCertCase> {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
-        if !name.starts_with("preprod-")
-            || path.extension().and_then(|e| e.to_str()) != Some("block")
-        {
+        if !name.starts_with(prefix) || path.extension().and_then(|e| e.to_str()) != Some("block") {
+            continue;
+        }
+        if !path.with_extension("eta0").exists() {
             continue;
         }
         let view =
@@ -78,6 +86,38 @@ fn real_preprod_opcerts_verify() {
                 c.slot
             )
         });
+    }
+}
+
+/// The "from mainnet" half of the cold→hot delegation: every freshly-harvested
+/// mainnet operational certificate verifies on Sextant's own Ed25519 path (the
+/// pool's cold key genuinely signed the hot KES key, sequence, and period), and
+/// pallas-crypto's independent cryptoxide Ed25519 agrees on the same inputs.
+#[test]
+fn real_mainnet_opcerts_verify() {
+    let cases = opcert_cases_with_prefix("mainnet-");
+    assert!(
+        cases.len() >= 20,
+        "DoD line 2 requires ≥20 mainnet opcert-verify vectors, found {}",
+        cases.len(),
+    );
+    for c in &cases {
+        kes::verify_opcert(&c.cold_vkey, &c.view.opcert).unwrap_or_else(|e| {
+            panic!(
+                "mainnet slot {} rejected a genuine operational certificate: {e:?}",
+                c.slot
+            )
+        });
+        let msg = kes::opcert_signable(&c.view.opcert);
+        let pk = PublicKey::from(c.cold_vkey);
+        let sextant = sextant::ed25519::verify(&c.cold_vkey, &msg, &c.view.opcert.sigma);
+        let oracle = pk.verify(msg, &Signature::from(c.view.opcert.sigma));
+        assert_eq!(sextant, oracle, "mainnet slot {}: verdict ≠ oracle", c.slot);
+        assert!(
+            sextant,
+            "mainnet slot {}: genuine opcert must be accepted",
+            c.slot
+        );
     }
 }
 
