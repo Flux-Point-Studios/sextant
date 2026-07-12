@@ -338,6 +338,36 @@ needs a row in Evidence.
       `VerifiedOutput` live in the DEFAULT wasm-safe graph (no blst); the Conway TxOut decode is
       Sextant's own minicbor path. See the "## Attacking next" spec for the honest-scope statement
       (proves authentic-bytes + certified-inclusion + provenance, NOT unspent/liveness).
+- [ ] Live — first-consumer genesis-anchored verified read + spoof-reject (CLOSES DoD line 7,
+      the LAST line). Operator-ratified: FULL genesis-anchored + a Rust consumer now (C-ABI export
+      a follow-on slice). HARVEST DONE (operator, network seam): `tools/harvest mithril-anchor-chain`
+      walked the tx cert `b3582978…` (epoch 300) down `previous_hash` to the genesis anchor
+      (epoch 196) and committed the whole 106-cert contiguous chain, oldest-first, as one array
+      `tests/vectors/mithril-anchor-chain.json` (630 KB); PROVEN `verify_chain_anchored(&certs,
+      &genesis_vkey)` Ok over it (105 AVK-bindings + STM multi-sigs), tip `b3582978…`,
+      `certified_transactions.merkle_root == 83c012fd…`, block 4927469. Build a Rust consumer
+      (an example binary `examples/verified_read_gate.rs` + a `tests/consumer.rs` integration test —
+      a keeper/batcher stand-in for the out-of-scope write-path) that runs, from UNTRUSTED provider
+      bytes, ONE control flow: parse the 106-cert chain + the pinned genesis vkey → `verify_chain_
+      anchored` → `VerifiedChain.certified_transactions` (root+height from the AUTHENTICATED cert,
+      NEVER a provider root) → `hex::decode` the root → `verify_utxo_read(mithril-tx-body.cbor, 0,
+      mithril-txproof.json proof, &certified_root, block_number)` → `VerifiedOutput` → a boolean
+      SPEND GATE `proceed = out.lovelace >= 5_000_000 && out.datum == Some(Datum::Inline(EXPECTED))`.
+      Named tests: `consumer_proceeds_on_the_authentic_certified_order` (PROCEED on tx `242f2037…`#0,
+      the log line carries `certified_at=4927469` + the mandatory NotEstablished note) +
+      `consumer_refuses_a_spoofed_tampered_utxo` (SAME run: flip an output coin byte → the SAME
+      consumer gate → `verify_utxo_read` → `Err(Inclusion(NotIncluded))` → REFUSE, fail-closed) +
+      `consumer_refuses_an_unanchored_cert_chain` (swap the genesis vkey → `AnchoredError::Genesis`
+      → REFUSE). The DoD proof = the example binary's stdout showing BOTH the PROCEED and the
+      spoofed-REFUSE paths from one run + the UTxO ref `242f2037…a636#0`. HONEST SCOPE (enforced in
+      the gate + the log + docs): proves authentic genesis-certified transaction INCLUSION +
+      provenance; the gate MUST NOT read `spend_status` as unspent and MUST NOT claim PROCEED means
+      the spend will succeed — unspent is the ledger's to decide atomically at submission. See the
+      "## Attacking next" spec for the full pinned design. Then set `STATUS: DONE` (every DoD line
+      checked). NEXT (a follow-on slice, NOT part of this): export `sextant_verify_utxo_read` in
+      `src/ffi.rs` (+ `SextantVerifiedOutput` `#[repr(C)]`, a UtxoError status band, cbindgen header,
+      smoke.c) so a C/WASM consumer proves the C-ABI primitive end-to-end (closes the deferred FFI
+      export too).
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -748,73 +778,97 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — DoD line 5: UTxO read verification (proof-based certified-inclusion)
-Design derived by a spec workflow (Mithril-source + Cardano-CDDL research, cursed-problem reframing,
-adversarial synthesis) and OPERATOR-RATIFIED. The real aggregator vector is confirmed live. USE THIS.
+## Attacking next — DoD line 7: Live / first-consumer genesis-anchored verified read + spoof-reject
+Design derived by a spec workflow (real-consumer-pattern research + the exact composed-verify
+pipeline + spoof matrix + Rust-vs-C-ABI decision) and OPERATOR-RATIFIED: FULL genesis-anchored,
+Rust consumer now (C-ABI export a follow-on). This CLOSES the LAST DoD line; then STATUS: DONE.
 
-### The honest scope (state it plainly, ENFORCE it in the type)
-Cardano commits to NO UTxO-set state root (the Conway header carries only `block_body_hash`, a
-per-block tx-merkle root — no ledger-state hash / accumulator). Mithril certifies TRANSACTIONS
-(`CardanoTransactionsMerkleRoot`, ~100 blocks behind tip) and immutable-file digests — NOT a UTxO
-set. So this slice PROVES: the bytes of output `(H, i)` = {addr, value, datum} are the authentic
-on-chain bytes of tx `H`, and `H` is a member of the Mithril-certified transaction set at certified
-height X, authenticated end-to-end back to the genesis key. It DOES NOT and CANNOT prove `(H,i)` is
-currently UNSPENT (tx-set membership is a monotone "created" predicate; no Cardano commitment exists
-to prove unspent against; the verdict trails tip ~100 blocks). Unspent is deferred to the ledger,
-which atomically rejects a double-spend at submission — NEVER launder that into a "verified unspent"
-claim. Enforce the honesty in the return type: `spend_status: SpendStatus::NotEstablished`,
-uncoercible to "unspent", and `certified_at: block_number` travels with every verdict.
+### The honest framing (state it plainly; there is NO real write-path consumer)
+Sextant is the READ-PATH library; the real downstream consumer is the separate WRITE-PATH layer
+(transaction building — explicitly out of scope per Constraints). So the deliverable is legitimately
+an EXAMPLE/harness consumer of Sextant's read VERDICT — a keeper/batcher stand-in — that runs the
+real composed verify path against REAL committed preprod data and refuses a spoofed provider
+response. Line 7's wording ("the first downstream consumer's execution path performs one verified
+UTxO read … before a spend decision, and rejects a spoofed RPC response in the same test") is met
+literally by this: the read, the gate, and the same-run spoof-refuse.
 
-### The primitive (confirmed live on release-preprod)
-Aggregator `https://aggregator.release-preprod.api.mithril.network/aggregator` — CardanoTransactions
-IS enabled. `GET /artifact/cardano-transactions` -> `{merkle_root, epoch, block_number, hash,
-certificate_hash}` (sample: root `73d8885a…67a8b2`, block 4926569, epoch 300, cert `b91da12f…857e53`).
-`GET /proof/cardano-transaction?transaction_hashes=<h>` -> `CardanoTransactionsProofs
-{certificate_hash, certified_transactions:[{transactions_hashes, proof}], non_certified_transactions,
-latest_block_number}`. The `proof` field is HEX(JSON) of `MKMapProof<BlockRange>` =
-`{master_proof: MKProof, sub_proofs}` where `MKProof = {inner_root:{hash:[32 u8]}, inner_leaves:
-[[block_range,{hash}]], inner_proof_size:<MMR node count>, inner_proof_items:[{hash},...]}`. Node
-merge = BLAKE2s-256(left‖right); leaf = tx-hash bytes; MMR semantics = `ckb-merkle-mountain-range`.
-A real sample is captured in the session scratchpad (tx `242f2037…a636`, block 4925999, cert
-`b91da12f…857e53`, recompute target `73d8885a…67a8b2`, inner_proof_size 629099, 12 proof items).
+### The verified-read pipeline (untrusted bytes in → genesis-anchored verdict → spend gate)
+One control flow, composing only SHIPPED functions:
+1. `certs: Vec<Certificate> = serde_json::from_slice(&fs::read("tests/vectors/mithril-anchor-chain.json")?)?`
+   — the 106-cert genesis→tip chain (UNTRUSTED provider bytes; oldest-first).
+2. `genesis_vkey: [u8;32]` from `tests/vectors/mithril-genesis.vkey` — the ONE pinned trust root
+   (hardcode/pin it at the call site; it is the only trusted input).
+3. `let v = mithril::verify_chain_anchored(&certs, &genesis_vkey)?;` — authenticates the chain back
+   to the genesis Ed25519 key (105 AVK-bindings + STM multi-sigs; PROVEN Ok on this fixture).
+4. `let ct = v.certified_transactions.ok_or(NotATxCert)?;` → `CertifiedTransactions{merkle_root,
+   epoch, block_number}` — the STM-authenticated Cardano-transactions root + height, sourced from
+   the AUTHENTICATED cert, NEVER from the provider. (tip cert = `b3582978…`, root `83c012fd…`,
+   block 4927469.)
+5. `let mut certified_root=[0u8;32]; hex::decode_to_slice(&ct.merkle_root, &mut certified_root)?;`
+6. `tx_bytes = fs::read` the hex of `tests/vectors/mithril-tx-body.cbor` (UNTRUSTED provider bytes,
+   blake2b256 == tx `242f2037…a636`); `proof_hex` = the `proof` field of `mithril-txproof.json`.
+7. `let out = utxo::verify_utxo_read(&tx_bytes, 0, &proof_hex, &certified_root, ct.block_number)?;`
+   → `VerifiedOutput{address, lovelace, datum, certified_at, spend_status: NotEstablished}`.
+   (Internally: H = blake2b256(tx_bytes) NEVER a provider H; verify_tx_inclusion recomputes the
+   Merkle root and asserts == certified_root; then the Conway TxOut decode.)
+8. SPEND GATE (a boolean over the VERIFIED output — the only decision the consumer makes):
+   `proceed = out.lovelace >= 5_000_000 && out.datum == Some(Datum::Inline(EXPECTED_ORDER_DATUM))`
+   where EXPECTED_ORDER_DATUM = the golden inline datum `d8799f…4417` (out0 = a real on-chain order:
+   script addr `7015e93b…` holding 5 ADA + inline datum). The gate MUST NOT branch on
+   `spend_status`. It stops at the boolean — never builds or submits a tx.
 
-### COMPOSE the existing trust root; compute the verdict on Sextant's own path
-- The cert (`certificate_hash`) is authenticated by the EXISTING `verify_chain_anchored` (genesis
-  anchor + AVK-binding + STM multi-sig). The provider is trusted for proof BYTES ONLY, never a verdict.
-- Recompute the Merkle-forest root from the proof (`compute_root()`, NEVER trust the input
-  `inner_root`) and assert it == the cert's certified `CardanoTransactionsMerkleRoot` part (the
-  `match_message` trust-join, on Sextant's own code) — that binds inclusion to the genesis key.
+### The spoof-reject leg (same test, same gate — the DoD's "rejects a spoofed RPC" clause)
+Feed a forged provider response back through the SAME consumer gate and assert REFUSE (fail-closed —
+on any spoof `verify_*` returns Err BEFORE a VerifiedOutput exists, so the gate is never reached):
+- (a) TAMPERED UTxO bytes: flip an output coin byte → H changes → `verify_utxo_read` →
+  `Err(UtxoError::Inclusion(InclusionError::NotIncluded))` → REFUSE. (REQUIRED leg.)
+- (c) UNANCHORED cert chain: swap in a wrong genesis vkey (or re-rooted chain) → `verify_chain_
+  anchored` → `Err(AnchoredError::Genesis(..))` → REFUSE. (REQUIRED leg — proves the anchor is
+  load-bearing at consumer altitude.)
+- (invariant) the consumer only ever passes `v.certified_transactions.merkle_root` to
+  `verify_utxo_read`, NEVER a provider-supplied root — assert this structurally.
 
-### Build (3 Plan sub-slices; the checklist is in the Plan section above)
-- Part 1: harvest the real proof + its anchoring cert chain + the raw tx CBOR into fixtures; surface
-  the tip cert's certified root + `(epoch, block_number)` on `VerifiedChain` (verified today, not
-  returned) — RED against the fixture's known root `73d8885a…67a8b2` / block 4926569.
-- Part 2: the pure-Rust BLAKE2s-256 + MMR `MKMapProof<BlockRange>` verify in the DEFAULT wasm-safe
-  graph (NO blst — blst stays behind the `mithril` feature for STM cert-auth only);
-  `verify_tx_inclusion(proof, tx_hash, certified_root)`; oracle = the golden vector (recomputed root
-  == cert `merkle_root`) + a dev differential vs `ckb-merkle-mountain-range`; negatives (mutated node
-  -> `RootMismatch`, tx not in proof -> `NotIncluded`).
-- Part 3: `verify_utxo_read(tx_bytes, out_index, proof, certified_root, block_number) ->
-  VerifiedOutput{addr,value,datum,certified_at,spend_status: NotEstablished}` (hash the SUPPLIED tx
-  bytes -> H, NEVER a provider-supplied H); the named `tampered_utxo_claim_is_rejected` negative
-  (flip a lovelace/datum byte -> `RootMismatch`) + a substituted-bytes variant. CLOSES DoD line 5.
+### Named tests (tests/consumer.rs; TDD RED first) + the example binary
+- `examples/verified_read_gate.rs`: `fn main()` runs the accept path then the spoof path, emits the
+  structured log lines, exits NONZERO on any unexpected outcome (fail-closed). Its stdout IS the DoD
+  "service log excerpt".
+- `tests/consumer.rs` mirrors the assertions so CI judges "done":
+  * `consumer_proceeds_on_the_authentic_certified_order` — `Decision::Proceed` on `242f2037…a636#0`;
+    the PROCEED log line carries `certified_at=4927469` + the mandatory NotEstablished note.
+  * `consumer_refuses_a_spoofed_tampered_utxo` — SAME run: tampered bytes → the SAME gate →
+    `Decision::Refuse` + a WARN line naming `reason=NotIncluded`.
+  * `consumer_refuses_an_unanchored_cert_chain` — wrong genesis vkey → `Decision::Refuse` via
+    `AnchoredError::Genesis`.
+Log excerpt shape (the DoD proof, both paths from one run):
+`INFO read.verify utxo=242f2037…a636#0 certified_at=4927469 anchored=genesis lovelace=5000000
+datum=inline` → `INFO spend.gate 242f2037…a636#0 -> PROCEED  note=spend_status=NotEstablished
+(authenticity+inclusion proven; unspent deferred to the ledger at submission)`; then
+`WARN read.verify utxo=242f2037…a636#0 provider=spoofed reason=NotIncluded` → `INFO spend.gate
+242f2037…a636#0 -> REFUSE (no verified output; spend not submitted)`.
 
-### Feature-gate / wasm (HARD constraint)
-The inclusion verifier is pure BLAKE2s + MMR — it MUST live in the default build and compile to
-wasm32 (no blst, no mithril-stm). The blst-bearing STM cert-auth stays behind the existing `mithril`
-feature; the verified certified-root is passed INTO the wasm-safe verifier as an input. The harness
-`cargo build --release --target wasm32-unknown-unknown` (mithril OFF) must include the verifier.
+### Honest scope (mandatory, verbatim in the PROCEED log note + module docs)
+"This verified read proves authentic, genesis-certified transaction INCLUSION (the output was
+created and is certified as of block certified_at, ~100 blocks behind tip); it does NOT and cannot
+prove the output is currently UNSPENT — that is deferred to the ledger at spend submission." The
+consumer MUST NOT claim: unspent/live/spendable-now; tip state (it is certified_at); that PROCEED
+means the spend will succeed; that the multi-asset bundle was verified (lovelace/coin only).
+
+### Feature-gate / build
+The consumer uses `verify_chain_anchored` (mithril feature) so `tests/consumer.rs` is
+`#[cfg(feature="mithril")]` and the example builds under `--features mithril`; no change to the
+default/wasm graph, no new dep (serde_json + hex already available). No `src/` verify change — the
+consumer only COMPOSES shipped functions. `scripts/harness.sh --full` must stay green.
 
 ### Open risks for the red-team
-(1) THE UNSPENT GAP — a proven output since spent still verifies; `SpendStatus::NotEstablished` must
-be uncoercible (no code path narrows it to a positive claim) — add an honesty-guard test. (2) RECENCY
-— every verdict carries `certified_at`; no caller may read it as tip state. (3) LEAF/NODE
-DOMAIN-SEPARATION FIDELITY — the reimplemented BLAKE2s+MMR merge / leaf / peak-bagging MUST match
-mithril-merkle-tree byte-for-byte or a valid proof falsely rejects or a tampered one falsely passes;
-pin with the real golden vector + the ckb-merkle differential. (4) TX-BYTES->H BINDING — hash the
-supplied bytes, never a provider H, else tx-A's proof pairs with tx-B's bytes (guard with the
-substituted-bytes negative). (5) PROVIDER availability (censorship) is a liveness risk, not soundness
-(the root is recomputed + genesis-bound).
+(1) THE UNSPENT GAP misread as spend-safety — the single largest risk; the NotEstablished note on
+the PROCEED line + docs is non-negotiable, and the gate must never branch on `spend_status`.
+(2) PROVIDER-TRUST RESIDUE — the certified_root MUST come from the authenticated cert
+(`v.certified_transactions.merkle_root`), never a provider root; assert structurally. (3) The spoof
+leg must be driven THROUGH the consumer's decision function (not just `verify_utxo_read` directly),
+so "rejects a spoofed RPC in the same test" is met at consumer altitude. (4) Keep the MVP on
+committed fixtures — no live network in the DoD-proof path (a live-fetch variant is a separate
+ignored/networked test). (5) Overclaiming "verified spend/UTxO" when only certified INCLUSION of the
+coin (not the multi-asset bundle, not tip state) is proven.
 
-Infra: Woodpecker CI green through DoD lines 2/3/4/6; the `mithril` feature keeps blst out of
-default+wasm and the inclusion verifier MUST preserve that.
+Infra: Woodpecker CI green through DoD lines 2/3/4/5/6; the anchor chain + fixtures are committed so
+the consumer + its tests are hermetic.
