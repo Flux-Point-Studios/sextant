@@ -463,6 +463,57 @@ needs a row in Evidence.
       proven value). `gate.rs` uses the new `CertifiedTransactions::merkle_root_bytes()` (2nd caller).
       No `.woodpecker` change (rides the existing cc+./smoke line). All under `scripts/harness.sh
       --full` exit 0.
+- [ ] BEYOND-DoD v0.2 flagship — Windowed-unspent Tier 1 (`Unspent{WatchedWindow}`), operator-ratified,
+      BUILD SLICE-BY-SLICE (red-team gate each). Design pinned by a spec workflow (see the full
+      "## Attacking next" spec). The honest verdict: no input spending a watched outpoint appears in
+      any block body of a header-verified, hash-linked, GAP-FREE, BODY-COMMITTED segment from the
+      Mithril anchor to a verified tip, under (a) Mithril-quorum + (b) data-completeness assumptions,
+      follower live — NEVER absolute/eternal/tip-state. The adversary's only evasion (withhold the
+      spending block) STRUCTURALLY collapses to `Stalled` (can't advance the tip), never a false
+      `Unspent`. Build core over committed fixtures; DEFER the live relay follower (transport, a
+      provider-of-bytes never a verdict). Slices:
+  - [ ] Tier1 slice 1 — `decode_spends` (tx-INPUT decoder). In `src/utxo.rs`, sibling of
+        `decode_output`: decode Conway tx body key 0 (`set<transaction_input>`, each `[tx_id:hash32,
+        index:uint]`) AND key 13 (collateral) into a `SpendSet`; handle the TAG-258 DUALITY
+        (`#6.258([..])` OR bare array — accept both), reject an index wider than u16, fail closed to
+        `MalformedTx` on any deviation. Tests: `tag258_and_bare_array_decode_to_the_same_outpoint`,
+        `collateral_key13_is_a_spend`, `reference_input_key18_is_NOT_a_spend`,
+        `malformed_input_body_is_MalformedTx`, `overwide_index_is_MalformedTx`. No harvest (synthetic
+        CBOR + existing fixtures).
+  - [ ] Tier1 slice 2 — body-commitment BIND. In `src/header.rs`: stop `d.skip()`-ing header_body
+        idx 7 (`block_body_hash`), capture its 32 bytes + the RAW spans of block[1..4]. New bind
+        (in `src/window.rs` or `src/chain.rs`): recompute `hashAlonzoSegWits =
+        blake2b256(blake2b256(raw tx_bodies) ‖ blake2b256(raw witness_sets) ‖ blake2b256(raw aux) ‖
+        blake2b256(raw invalid_txs))` and require `== header idx 7` — binding the scanned bodies to
+        the verified chain (hash the RAW block[1..4] spans VERBATIM, never a re-encode; Cardano CBOR
+        is non-canonical). Tests: `authentic_block_body_binds_to_its_header_commitment`,
+        `swapped_body_fails_the_bind`. Uses existing committed preprod block fixtures.
+  - [ ] Tier1 slice 3 — the verdict types + `verify_watched_window` (the core). New `src/window.rs`:
+        `WatchVerdict = Unspent{as_of: WatchedTip, basis: WatchedWindow(WindowAssumptions)} |
+        SpentObserved{at, spending_txid} | Stalled{verified_through, reason: StallReason}`;
+        `WatchedTip{anchor_height, as_of_height, as_of_slot}` (NO `now` field); `WindowAssumptions
+        {mithril_quorum, data_complete}` (MANDATORY non-Option — unconstructable without them).
+        `verify_watched_window(watch, anchor: CertifiedTransactions, blocks, eta0, freshness{slot_now,
+        max_lag}) -> WatchVerdict` composes `chain::verify_segment` (headers authentic + linked +
+        gap-free) → per-block body-bind (slice 2) → `decode_spends` (slice 1) → membership test →
+        the CHECKED invariant `tip.n − start.n + 1 == len` + creation-of-H observed at/above start →
+        freshness lag. FAIL-CLOSED: any gap/broken-link/body-mismatch/stale-tip → `Stalled`, NEVER
+        `Unspent`. HARVEST (operator, network seam): a contiguous preprod segment with a real
+        create+spend of one outpoint + a not-spent outpoint, committed as fixtures. Named tests:
+        `unspent_outpoint_in_verified_window_yields_Unspent_as_of_tip`,
+        `spending_block_in_window_yields_SpentObserved_at_block`,
+        `dropped_spending_block_yields_Stalled_never_Unspent`,
+        `window_starting_after_the_spend_yields_Stalled` (the "start after the spend" evasion),
+        `stale_tip_yields_Stalled_TipTooOld`.
+  - [ ] Tier1 slice 4 — `SpendStatus::Unspent{as_of, basis}` variant + the `#[non_exhaustive]`
+        tripwire update, wiring the WatchVerdict into the ladder; honest-scope doc.
+  - [ ] Tier1 slice 5 — C-ABI additive: `SextantWatchVerdict` (sibling struct) + banded constants
+        (`SEXTANT_SPEND_UNSPENT_WATCHED_WINDOW=1` cryptographic-with-assumptions band; `SEXTANT_WATCH_
+        SPENT_OBSERVED=2`/`_STALLED=3`; stall-reason codes; economic ATTESTED band reserved far at
+        100+) + `sextant_verify_watched_window` export + `SEXTANT_ABI_VERSION` 2→3 + header regen +
+        a C smoke leg. NO absolute/eternal/unqualified-unspent constant ever defined. A honest gate
+        example (`examples/windowed_spend_gate`) whose PROCEED line names basis+anchor+as_of+lag+
+        assumptions. See the "## Attacking next" spec for the full pinned design.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -925,173 +976,107 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — BEYOND-DoD: C-ABI sextant_verify_utxo_read export + end-to-end C consumer
-Design pinned by a spec workflow (FFI-inventory survey + variable-length-output-marshalling
-research + adversarial synthesis). USE THIS. The DoD is already DONE; this is a beyond-DoD
-primitive slice that proves the C-ABI/WASM primitive is genuinely consumable end-to-end (and
-closes the deferred FFI export). Leave `STATUS: DONE`.
+## Attacking next — BEYOND-DoD v0.2: Windowed-unspent Tier 1 (Unspent{WatchedWindow})
+Design pinned by a spec workflow (follower-mechanism research + verdict/consumer/C-ABI research +
+adversarial synthesis), OPERATOR-RATIFIED, build SLICE-BY-SLICE (red-team gate each). The Plan
+lists the 5 slices; THIS is the shared design + the load-bearing invariants every slice must hold.
+CURRENT slice = Tier1 slice 1 (`decode_spends`, the tx-INPUT decoder). The DoD stays DONE.
 
-### The core export (UNGATED — wasm-safe, no blst)
-`utxo::verify_utxo_read`'s type graph is blake2b256 + `inclusion::verify_tx_inclusion`(blake2s) +
-minicbor only — no blst/mithril_stm/chrono — and `pub mod utxo`/`pub mod inclusion` are
-feature-invariant. So `sextant_verify_utxo_read` is a CORE export (no `#[cfg]`), present in the
-default lib AND the wasm32 build.
-```
-#[unsafe(no_mangle)] pub unsafe extern "C" fn sextant_verify_utxo_read(
-    tx_bytes: *const u8, tx_bytes_len: usize,
-    out_index: usize,
-    proof_hex: *const u8, proof_hex_len: usize,
-    certified_root: *const u8,          // 32 readable bytes
-    block_number: u64,
-    out: *mut SextantVerifiedOutput,
-    address_buf: *mut u8, address_cap: usize,
-    datum_buf: *mut u8, datum_cap: usize,
-    out_detail: *mut SextantErrorDetail,
-) -> i32
-```
-Inside `guard()`: null-check tx_bytes/proof_hex/certified_root/out then ErrNullPointer
-(address_buf/datum_buf may be null iff their cap==0); `tx_bytes_len==0` then ErrEmptyInput (do NOT
-pre-reject proof_hex_len==0 — `decode_hex` returns None then MalformedProof=402); borrow slices +
-`&*(certified_root as *const [u8;32])`; call `utxo::verify_utxo_read`. On Err then `write_detail(-1,0)`
-+ return `utxo_status(&e)`. On Ok(v) then compute `address_len`, `datum_kind`+`datum_len`; if
-`address_cap<address_len || datum_cap<datum_len` then write the FULL struct (scalars + true lengths +
-kind + spend_status=0 + zeroed `_reserved`), `write_detail(-1,0)`, copy ZERO variable bytes, return
-ErrBufferTooSmall(-3). Else `copy_min` address then datum into the bufs, THEN `*out = struct`, THEN
-`write_detail(-1,0)`, return Ok. `copy_min(dst,cap,src)` clamps to `min(len,cap)` and only derefs a
-non-null buf. This is the FIRST live producer of `-3`.
+### The honest verdict (enforced by TYPE, not comment)
+`WatchVerdict` has THREE terminal shapes and only ONE is Unspent — collapsing SpentObserved vs
+Stalled is the cardinal honesty sin:
+- `Unspent { as_of: WatchedTip, basis: WatchedWindow(WindowAssumptions) }` — no input spending the
+  watched outpoint appears in any block body of a header-verified, hash-linked, GAP-FREE,
+  BODY-COMMITTED segment from the Mithril anchor to a verified tip, under (a) Mithril-quorum +
+  (b) data-completeness, follower live. `WatchedTip{anchor_height, as_of_height, as_of_slot}` — NO
+  `now` field (the read path has no notion of current). `WindowAssumptions{mithril_quorum,
+  data_complete}` are MANDATORY non-Option data (an Unspent is unconstructable without stamping its
+  scope — a red-team asserting "assumptions surfaced" checks a field, not a docstring).
+- `SpentObserved { at_height, at_slot, spending_txid }` — a DEFINITE refuse: a verified,
+  body-committed block in the window carries a `transaction_input == the watched outpoint`.
+- `Stalled { verified_through, reason }` — the NON-ANSWER; EVERY non-ideal condition lands here:
+  `MissingBlock` (gap), `BodyCommitmentMismatch` (a body didn't hash to its header commitment),
+  `BrokenSegment` (verify_segment BrokenLink), `TipTooOld` (tip older than the caller's lag bound).
 
-### The struct (caller-allocated, fixed-width; variable bytes go to caller buffers)
-```
-#[repr(C)] #[derive(Clone,Copy)]
-pub struct SextantVerifiedOutput {
-    pub lovelace: u64,
-    pub certified_at: u64,        // the Mithril-certified height; NOT tip state, NOT liveness
-    pub address_len: usize,       // true len; may exceed address_cap (then retry)
-    pub datum_len: usize,         // 0=none, 32=hash, variable=inline; may exceed datum_cap
-    pub datum_kind: u8,           // 0=none, 1=Hash (32B in datum_buf), 2=Inline (datum_len B)
-    pub spend_status: u8,         // ALWAYS SEXTANT_SPEND_NOT_ESTABLISHED (0) — never gate on it
-    pub _reserved: [u8; 6],       // zeroed on write
-}
-```
-ONE datum channel discriminated by `datum_kind` (both Hash-32 and Inline flow through `datum_buf` —
-DRYer than a second `datum_hash[32]` scalar). Variable bytes (address, datum) NEVER go in the
-struct. `datum_kind==inline` delivers RAW plutus-data CBOR (the `#6.24`-unwrapped bytes) — the
-header notes the caller decodes it.
+### The cursed move (why it's honest)
+Reframe the impossible "prove eternal-unspent" into "scan tx INPUTS forward over a cryptographically-
+bound gap-free window." The adversary's only evasion — withhold the spending block — STRUCTURALLY
+collapses to `Stalled`: withholding cannot advance the verified tip, and a non-advancing tip is
+exactly what stall detection catches. There is NO code path by which withholding yields a fresher
+`Unspent`. `verified_through`/`as_of` travels with every verdict (like `certified_at`) so no caller
+reads a stale window as current.
 
-### Status bands (append after MithrilStdMalformedCertJson=327; NO renumbering)
-```
-UtxoInclusionNotIncluded = 400, UtxoInclusionRootMismatch = 401, UtxoInclusionMalformedProof = 402,
-UtxoMalformedTx = 410, UtxoOutputIndexOutOfRange = 411,
-```
-`utxo_status(&UtxoError)` flatten helper (UNGATED, beside chain_status): `Inclusion(NotIncluded|
-RootMismatch|MalformedProof)` to 400/401/402; `MalformedTx` to 410; `OutputIndexOutOfRange` to 411.
-Add the 5 matching `STATUS_MESSAGES` rows (each non-empty — `status_message_is_defined_for_every_code`
-exercises them). The extended mithril export needs NO new band: certified-tx absence then `out_has_ct=0`
-(rc stays Ok).
+### The anchor (existence at anchor)
+Existence rests on CERTIFIED CREATION via inclusion (`verify_utxo_read` — a monotone "created"
+predicate pinning the outpoint's BIRTH), NOT a ledger-state snapshot (that's Tier 2, needs a
+full-ledger replay + a Mithril ledger-state cert that does not exist). The window START = the
+creating block, identified INSIDE the verified body stream as the first block whose tx_bodies
+contains a tx hashing to H; `create_seen` is a POSITIVE precondition (the window is valid only once
+creation is observed inside it) — this closes the "start the window AFTER the spend" evasion.
 
-### Extend the mithril anchor export (certified root ONLY from the authenticated verify)
-EXTEND `sextant_mithril_verify_chain_anchored` (stays `#[cfg(feature="mithril")]`) with three
-trailing out-params, NOT a sibling (a sibling `certified_root(certs)` would re-open the
-provider-injects-a-root hole): `out_ct_root: *mut u8` (32 RAW bytes of
-`certified_transactions.merkle_root`, ready to pass straight as `certified_root`; zeroed when no
-tx-cert), `out_ct_block: *mut u64`, `out_has_ct: *mut u8`. Fill on Ok from `v.certified_transactions`
-(Some then `hex::decode_to_slice` the merkle_root into 32 raw bytes, fail CLOSED to an error code if
-malformed; None then zero root, block 0, has_ct 0). Null-check the 3 new ptrs. This changes the
-signature so bump `SEXTANT_ABI_VERSION` 1 to 2 (thread to ALL abi assertions: tests/ffi.rs,
-tests/smoke/smoke.c). WHY: a C consumer is then PHYSICALLY unable to obtain a certified root without
-having authenticated the chain to genesis — honest by construction, matching `gate.rs`'s
-root-only-from-authenticated-cert property.
+### THE CRUX / the load-bearing new crypto (slice 2 — the main red-team surface)
+`chain::verify_segment` authenticates HEADERS only; the spend signal is in the tx BODIES, and
+`src/header.rs` currently `d.skip()`s header_body idx 7 (`block_body_hash`). A hostile provider could
+hand real headers + SWAPPED bodies → a false Unspent. THE BIND: recompute `block_body_hash =
+hashAlonzoSegWits = blake2b256( blake2b256(raw tx_bodies) ‖ blake2b256(raw witness_sets) ‖
+blake2b256(raw aux_data) ‖ blake2b256(raw invalid_txs) )` over the RAW block[1..4] spans VERBATIM
+(never a re-encode — Cardano CBOR is non-canonical; same "hash the exact bytes" rule the header_body
+KES path follows) and require `== header idx 7`. Contiguity/gap is FREE from verify_segment
+(BrokenLink on any reorder/gap/splice — Blake2b256 collision-resistance). Both endpoints PINNED:
+anchor-end = the segment's low block reaches the creation + creation observed inside; tip-end = the
+segment chains up to/through `certified_at` (below = Mithril+header agree; above, toward live tip
+~100 blocks, only the header chain vouches and `as_of` says so). CHECKED invariant: `tip.n −
+start.n + 1 == segment.len()` AND `verify_segment == Ok` AND creation observed at/above start.
 
-### The sizing protocol (no free fn, allocation-free)
-Each variable field has a `(buf, cap)` pair; the TRUE length lives in the struct. ONE call decodes
-once and services both buffers (you must decode the Conway output to learn either length, so a
-mandatory two-pass would redundantly re-verify). On success copy `min(len,cap)` + write true len.
-`-3` if EITHER cap short: write the struct (true lengths — the sizing sub-result) but ZERO variable
-bytes; caller reads `out.address_len`/`out.datum_len`, resizes, retries (idempotent — the fn
-rehashes + recomputes). A caller MAY pass `buf=NULL, cap=0` as a pure sizing probe. NO `sextant_free`
-— the caller owns every buffer (critical on wasm: no free callback crosses back in). Address ~29-57B
-(a 128B first buffer usually one-shots); inline datum unbounded (to ~16 KB) — which is exactly why -3
-sizing is mandatory and a fixed datum cap is unacceptable.
+### The consumer contract (Masumi escrow / ADAM spend-gate)
+A three-clause AND, and clause C is the one naive impls forget: PROCEED iff (A) escrow funded at the
+certified anchor [inclusion Ok]; AND (B) no spend through the verified tip [`Unspent{as_of,
+WatchedWindow}`]; AND (C) the tip is recent enough FOR THE CALLER [`now_slot_estimate − as_of_slot ≤
+max_lag`, enforced BY THE CONSUMER — Sextant proves "no spend through as_of", only the consumer knows
+how stale is too stale for ITS economics]. MUST NOT: read `Unspent{as_of}` as tip-state or eternal;
+fold `Stalled` into "probably fine" (a non-answer is a REFUSE); `SpentObserved` → definite refuse.
+The honest gate (`examples/windowed_spend_gate`, slice 5) prints basis+anchor+as_of+lag+assumptions
+on the SAME line as PROCEED — no bare `-> PROCEED` for a windowed verdict.
 
-### Panic-safety + write-once-last (reuse guard() + write_detail() verbatim)
-Null-check ALL required ptrs FIRST. Run `verify_utxo_read` FULLY inside guard() BEFORE any out write
-(Err/panic then out + buffers UNTOUCHED). The fixed struct and the detail are written LAST on every
-terminal path, after any variable-byte copy that path performs — the struct is the caller's commit
-point (it reads `datum_kind`/`*_len` to interpret the buffers), so an observably-populated struct
-ALWAYS corresponds to buffers already fully written (Ok) or deliberately untouched-with-true-lengths
-(-3). Single struct assignment; `copy_nonoverlapping` with no early return between the two copies —
-a caught unwind can only occur BEFORE the writes begin, never mid-commit.
+### C-ABI additive (slice 5) — the ladder banding
+Additive only: new banded constant `SEXTANT_SPEND_UNSPENT_WATCHED_WINDOW=1` (the CRYPTOGRAPHIC-WITH-
+ASSUMPTIONS band 1..=9; Tier-2 ledger-state reserved in the same band's free slots), outcome codes
+`SEXTANT_WATCH_SPENT_OBSERVED=2`/`_STALLED=3` + stall-reason codes, a SIBLING `SextantWatchVerdict`
+struct (never mutating `SextantVerifiedOutput` — its spend_status stays always 0), a
+`sextant_verify_watched_window` export, `SEXTANT_ABI_VERSION` 2→3, header regen. The economic
+ATTESTED band stays RESERVED + numerically FAR (100+), so an attestation can never be numerically
+mistaken for a proof. NEVER define `SEXTANT_SPEND_UNSPENT` (unqualified) / `_ABSOLUTE` / `_ETERNAL`.
 
-### Honest scope across the boundary + the SpendStatus TIER LADDER (operator direction)
-`spend_status` crosses as a `u8` ALWAYS written 0. `pub const SEXTANT_SPEND_NOT_ESTABLISHED: u8 = 0;`
-(beside SEXTANT_ABI_VERSION, emitted as a `#define`). The export writes ONLY 0; NO
-`SEXTANT_SPEND_UNSPENT`/`_SPENT` is EVER defined — no wire value means "unspent". Header banner on
-the struct + the `spend_status` field + above the fn (mirroring utxo.rs:8-24 / gate.rs:197-203): a
-genuine Ok proves the returned {address, lovelace, datum} are AUTHENTIC on-chain bytes of a
-Mithril-certified output (inclusion + provenance anchored to genesis at `certified_at`) and NOTHING
-MORE — NOT unspent (no Cardano commitment for it; trails tip ~100 blocks; the ledger decides at
-submission); `spend_status` is always `SEXTANT_SPEND_NOT_ESTABLISHED`, never gate a spend on it. A
-red-team must grep the header and confirm NO "unspent"/"spent" token exists.
+### Honest scope (the plain statement the tier carries)
+`Unspent{WatchedWindow}` proves ONLY "no input spending the watched outpoint appears in any body of a
+header-verified, hash-linked, gap-free, body-committed segment from the certified anchor to a
+verified tip, under Mithril-quorum + data-completeness, as of the VERIFIED TIP." It is NOT absolute /
+eternal / tip-state unspent, NOT a cryptographic proof of the negative, NOT a `CertifiedUnspent`
+(Tier 2). The SPV lesson made precise: absence is only provable RELATIVE to a verified complete data
+window under an availability assumption — Tier 1 SURFACES that assumption (as data + `as_of`) instead
+of hiding it. Any gap / failed body-commitment / broken link / stale tip → `Stalled`, NEVER a false
+`Unspent`.
 
-TIER LADDER (forward-compat — DESIGN the shape, do NOT add empty variants): make the Rust
-`utxo::SpendStatus` `#[non_exhaustive]` and document the ladder in its doc: Tier 1 `NotEstablished`
-(today) then Tier 2 `CertifiedUnspent { epoch }` (CRYPTOGRAPHIC, from a Mithril ledger-state cert +
-Merkle proof, when it ships) then Tier 3 `Attested { committee, at }` (ECONOMIC trust, a Materios /
-Witness-Network committee), with the LOAD-BEARING INVARIANT that an economic tier is NEVER coercible
-into a cryptographic one. At the ABI, document `spend_status` as a BANDED code space: `0 =
-NotEstablished`; a reserved CRYPTOGRAPHIC band (future `SEXTANT_SPEND_CERTIFIED_UNSPENT`) kept
-DISTINCT from a reserved ECONOMIC/ATTESTED band (future `SEXTANT_SPEND_ATTESTED`), so a consumer
-switching on the byte always sees the trust basis and can never read an attestation as a proof. A
-future tier is ADDITIVE (a new constant + a `sextant_abi_version` bump), never a layout break. Do
-NOT define the future constants now — only document the reserved bands + the invariant. (See the
-`spend-status-tier-ladder` memory.)
+### Buildable-now vs deferred
+The ENTIRE verify core is buildable now over committed preprod fixtures, no network: body-bind +
+input-decode + forward spend-scan + the fail-closed verdict. DEFERRED (explicitly, not diluted):
+the live relay follower — the TRANSPORT that sources the contiguous body stream from the anchor to
+the LIVE tip in real time (a chain-sync client / provider feed — a provider of BYTES, never a
+verdict; Sextant re-verifies every block) + real-time `slot_now` from a clock + long-window
+streaming performance.
 
-### cbindgen / header (stable, no nightly)
-`SextantVerifiedOutput` surfaces automatically (referenced by the signature — no cbindgen.toml
-`include`); the 5 enum variants ride SextantStatus's forced include; `SEXTANT_SPEND_NOT_ESTABLISHED`
-surfaces as a `#define` (pub const, NOT in `exclude`). `make header`, commit `include/sextant.h`.
-The core export + struct + const + variants emit UNCONDITIONALLY (outside `#if defined(SEXTANT_MITHRIL)`);
-the extended mithril export (now 3 more params) stays under the `#ifdef`. Harness gates: drift
-(`diff -u`), `#if defined(SEXTANT_MITHRIL)` present, NO `blst|mithril_stm` token — all satisfied
-(name no blst/mithril_stm type in any signature).
+### Open risks (per-slice red-team)
+(1) A GAP/STALL BECOMING A FALSE UNSPENT — the cardinal failure. Adversarial tests: a window missing
+block h+1 → `Stalled{MissingBlock}`; a window that STARTS AFTER the spend → `Stalled` (the Goodhart
+evasion), never `Unspent`. (2) BODY NOT BOUND — without slice 2's `hashAlonzoSegWits` bind, real
+headers + swapped bodies → false Unspent; test: swap a body → `Stalled{BodyCommitmentMismatch}`.
+Watch the raw-span-vs-re-encode subtlety. (3) TAG-258 DUALITY / COLLATERAL — a decoder accepting one
+set-encoding, or omitting key 13, misses a spend → false Unspent; decode both forms + key0∪key13.
+(4) WATCHEDWINDOW COERCED INTO CERTIFIEDUNSPENT/ABSOLUTE — distinct variant + basis-as-value +
+`#[non_exhaustive]` + no absolute/eternal constant + bands numerically apart; grep for any
+Unspent construction omitting `WindowAssumptions`. (5) ASSUMPTIONS HIDDEN — mandatory data + named
+on the PROCEED line. (6) WASM/FEATURE-GATE — the window core stays default+wasm32 (Blake2b + minicbor
+only, no feature-gated crypto); the panic guard wraps the new export.
 
-### The C end-to-end consumer (core-only) + the mithril compose test
-Extend `tests/smoke/smoke.c` (compiled WITHOUT -DSEXTANT_MITHRIL — links the default no-blst
-libsextant.a, UNCHANGED cc line): the C analogue of `examples/verified_read_gate`. Commit a tiny
-`tests/smoke/utxo_fixture.h` (tx-body bytes, proof-hex bytes, the 32-byte golden root
-`83c012fd…774129`, block 4927469, expected-datum bytes) as `static const` arrays to avoid CI path
-coupling. ACCEPT: sizing probe (caps=0) then CHECK rc==ErrBufferTooSmall, read lengths, resize, call
-again then CHECK rc==0, lovelace>=5000000, datum_kind==2, datum_len==79 + bytes match,
-spend_status==SEXTANT_SPEND_NOT_ESTABLISHED, certified_at==4927469. SPOOF-REFUSE: flip the output-0
-coin byte (as `gate::tamper_output0_coin`) then CHECK rc==UtxoInclusionNotIncluded(400). Null guard
-then ErrNullPointer. Update the abi check to 2. Link-reference `sextant_verify_utxo_read` (dead-strip
-then link error). The FULL mithril compose (anchored verify then `out_ct_root` then `verify_utxo_read`)
-is proven in `tests/ffi.rs` under `--all-features` (smoke.c structurally can't include the mithril
-proto). No `.woodpecker/artifacts.yml` change (rides the existing cc+./smoke line).
-
-### TDD test plan (RED first; every assertion in the harness/CI)
-tests/ffi.rs (ungated): `good_read_fills_struct_and_buffers` (golden values); `buffer_too_small_
-reports_true_lengths` (caps=0 then -3 + true lengths, buffers untouched; then exact caps then Ok;
-partial: address fits/datum short then -3); `sizing_query_null_bufs`; `tampered_bytes_not_included`
-(then 400); `out_of_range_index` (then 411); `null_guards` (+ tx_len==0 then ErrEmptyInput);
-`spend_status_constant` (==0, only constant defined). `#[cfg(mithril)]`: extend the anchored_ffi test
-with the 3 out-params (has_ct==1, ct_block==4927469, ct_root(32)==golden); a None-case (stake-dist
-tip then has_ct==0); the END-TO-END compose (anchored verify then feed ct_root then verify_utxo_read
-then gate predicate; then tamper then 400). smoke.c: the C accept + spoof-refuse. Header: `make header`
-+ drift/leak gates.
-
-### Open risks for the red-team
-(1) VARIABLE-LENGTH MARSHALLING UB — `copy_min` must copy NOTHING (not a truncated prefix) on the -3
-path; only deref a non-null buf when cap>0 and (Ok) len<=cap. (2) WRITE-ONCE-LAST — no path writes
-*out or a buffer twice; struct+detail strictly last. (3) ABI-STABILITY — usize is 4B on wasm32 / 8B
-native; consumers must use the cbindgen struct, never hardcoded offsets; `_reserved` zeroed. (4) THE
-HONEST-SCOPE CONSTANT MISREAD (the single greatest safety risk) — only `SEXTANT_SPEND_NOT_ESTABLISHED`
-defined, no unspent constant, header banner present; grep the header for any "unspent"/"spent"
-token. (5) FEATURE-GATE LEAK — `cargo build --release` (default) must contain `sextant_verify_utxo_read`
-(nm the .a) and NO blst/mithril_stm symbol; re-run the header leak grep; the core export names no
-blst type. (6) HEADER DRIFT — regenerate `include/sextant.h` in the SAME change. (7) ABI BUMP 1 to 2
-threaded to ALL assertions (tests/ffi.rs, smoke.c). (8) the extended mithril fill decodes merkle_root
-hex — fail CLOSED on a malformed root, never a partial/garbage out_ct_root with has_ct=1.
-
-Infra: Woodpecker CI green through the whole DoD; the default/wasm graph must stay blst-free and the
-committed header drift-free.
+Infra: Woodpecker CI green through the whole DoD + the C-ABI export; the window core must stay
+blst-free in default+wasm and the committed header drift-free.
