@@ -8,10 +8,17 @@ the outer loop only trust `scripts/harness.sh --full`; everything else
 needs a row in Evidence.
 
 - [ ] `scripts/harness.sh --full` exits 0
-- [ ] Header validation: decodes current-era headers and verifies leader
+- [x] Header validation: decodes current-era headers and verifies leader
       VRF + KES against ≥20 golden vectors pulled from preview and
       mainnet, byte-identical verdicts to pallas on the same inputs —
       proof: named differential test run in harness output
+      (PROVEN on merged main `3fb7d6a` — leader-VRF + opcert + KES verify
+      byte-identical to the independent oracles on ≥20 real PREPROD (operator-chosen
+      for preview, per Plan) AND 24 real MAINNET blocks (epoch 642, slots 192261567..
+      192262175): `tests/{vrf,kes,opcert}.rs::real_{preprod,mainnet}_*_verify` +
+      `*_verdict_matches_independent_oracle` + the all-`*.block` decode/output sweeps,
+      all under `scripts/harness.sh --full`. VRF oracle = `cardano-crypto` (pallas
+      ships no VRF); KES/opcert oracle = `pallas` Sum6Kes / cryptoxide Ed25519)
 - [x] Chain following: validates a stored preview header sequence across
       an epoch boundary, including nonce evolution — proof: test run
       naming the epoch and the evolved nonce value
@@ -318,6 +325,7 @@ needs a row in Evidence.
 | 2026-07-12 00:55 UTC | Red-team of the part-1 diff: VERDICT SHIP — no false-accept at the boundary, no memory/panic/feature-leak hole; the one actionable MEDIUM (panic=abort guard missed the single-quoted TOML form) closed + proven | `fluxpoint-loop:red-team-reviewer` across 7 attack surfaces: `Ok`(0) emitted only inside `Ok` arms (success writes strictly gated), bands disjoint from 0; every `from_raw_parts`/`&*` null-checked incl. each `block_ptrs[i]`/`cert_json_ptrs[i]` + `count==0` guard, `write_hex64`/`status_message` clamp `.min(64)`/`.min(cap)`; `guard` on all fallible exports, `AssertUnwindSafe` sound (writes only after the verifier, on the terminal arm); `cargo tree -e normal` (default + wasm) = 0 blst/mithril-stm; drift gate proven RED-on-change. MEDIUM fix: `header_gate` panic-abort grep now matches `['\"]abort['\"]` (both TOML string forms) — proven old regex matched 1/2 fixture lines (missed `panic = 'abort'`), new matches 2/2; `scripts/harness.sh --full` exit 0 after the fix. LOWs (index→i64 wrap unreachable; `ErrBufferTooSmall` reserved for part-2 sizing) documented, non-blocking |
 | 2026-07-12 01:20 UTC | Independent verification of the autonomously-merged FFI part-1 (DoD line 6, part 1): VERDICT SHIP — safe C-ABI boundary, honest ABI header, deterministic | Fresh `fluxpoint-loop:red-team-reviewer` (7 attack surfaces) + operator drift/flaky checks: every fallible export `guard`-wrapped (`AssertUnwindSafe` sound — out-params written once on the terminal arm, so a caught unwind → `ErrPanic(-9)`, never a half-written verdict); no false-accept (`Ok(0)` only inside `Ok` arms, bands disjoint from 0); every raw-ptr marshalling null-checked incl. per-element + `count==0`; taxonomy exhaustive with chain(200)/mithril(300) bands disjoint. Independent header regen = byte-identical to committed `include/sextant.h` (the drift gate is not hollow); `cargo test --all-features` ×3 = 88/88 deterministic; `cargo tree -e normal` default+wasm = 0 blst/mithril-stm; header 0-leak + `#if defined(SEXTANT_MITHRIL)`-guarded. One LOW closed here: `AnchoredError::Standard.index` doc said "0-based, oldest=root" but the value is `i+1` (1-based absolute; genesis root = index 0) — `src/mithril.rs` doc corrected to match the code + the already-correct FFI comment. Symbol-retention through linker dead-strip is deferred to part-2's CI C-smoke-test (pinned). Merged PR branch cleaned; remote = origin/main only |
 | 2026-07-12 02:10 UTC | Artifacts part 2 (CLOSES DoD line 6): the three artifacts are produced in CI and a C smoke test links the real static lib through the committed header on the Linux target | PR #16 squash-merged to main (`d743d9a`); `.woodpecker/artifacts.yml` runs `cargo build --release` (→ lean `libsextant.a`, no blst) + `cargo build --release --target wasm32` (→ `sextant.wasm`), then `cc -I include tests/smoke/smoke.c target/release/libsextant.a -lpthread -ldl -lm && ./smoke` (asserts `abi_version()==SEXTANT_ABI_VERSION`; garbage 2-block segment → non-zero `ChainDecode`+`index≥0`; null eta0 → `ErrNullPointer`; all 4 core exports link-referenced so a dead-stripped `#[no_mangle]` symbol is a LINK error), then assembles + lists `dist/{libsextant.a,sextant.h,sextant.wasm}`. All 4 Woodpecker contexts green on the PR (pipeline 122) AND on merged main `d743d9a` (`push/artifacts` + `push/harness` success). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP, 0 findings: proof non-vacuous (`CHECK` macro not `assert`; garbage genuinely decodes to `UnsupportedEra(0)`; a false-accept regression would turn smoke red), lean artifact (no `default=[mithril]`), fail-fast pipeline gates `./smoke`'s exit code. Durable downloadable release (publish secret) deferred to the operator. Run link: https://ci.fluxpointstudios.com/repos/15/pipeline/122/1 |
+| 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
 ## Notes for the next iteration
 State (2026-07-12): **DoD line 6 is CLOSED — the C-ABI/WASM artifacts primitive shipped
@@ -348,13 +356,15 @@ release (plugin-release / `gh release`) needs a CI publish secret — DEFERRED t
 RULE (red-team-flagged): every new export must gain a `smoke.c` reference or it is not proven
 retained.
 
-**Attacking next — OPERATOR-STEERED (do NOT auto-derive).** The consensus + trust-establishment
-core AND the consumable C-ABI/WASM primitive are done (DoD lines 2 substantive, 3, 4, 6).
-Remaining DoD is a different character and some needs an operator decision: line 5 (UTxO — a
-DESIGN slice first: snapshot-anchored vs proof-based, anchored to the now-verified Mithril
-snapshot; see the deferred UTxO note above), line 2 (a real mainnet block + eta0 harvest to tick
-the "from mainnet" wording), line 7 (Live — needs a downstream consumer). Checkpoint the operator
-before attacking any of these.
+**Attacking next — OPERATOR-STEERED (do NOT auto-derive).** The consensus core (leader-VRF +
+opcert + KES on preprod AND mainnet), chain-following + nonce, the Mithril trust root, AND the
+consumable C-ABI/WASM primitive are all done — **DoD lines 2, 3, 4, 6 CLOSED**. Remaining DoD is a
+different character and needs an operator decision: line 5 (UTxO — a DESIGN slice first:
+snapshot-anchored vs proof-based, anchored to the now-verified Mithril snapshot; see the deferred
+UTxO note above) and line 7 (Live — needs a downstream consumer). Checkpoint the operator before
+attacking either. (2026-07-12: DoD line 2 closed by the mainnet harvest — `tools/harvest` gained a
+`Network`-parameterized `mainnet`/`mainnet-eta0` mode; 24 real epoch-642 mainnet blocks verify
+leader-VRF + opcert + KES byte-identical to the independent oracles.)
 
 **Carried notes (the part-2 red-team returned 0 findings):** (1) the drift gate installs
 `cbindgen ^0.28` via `cargo install` if missing — a future 0.28.x formatting change could
