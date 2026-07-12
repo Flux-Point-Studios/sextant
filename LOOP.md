@@ -251,19 +251,33 @@ needs a row in Evidence.
       segment → nonzero code + `out_detail.index>=0`), proving external C linkage +
       symbol retention on the Linux artifact target. A durable downloadable release
       (plugin-release / `gh release`) needs a CI secret — deferred to the operator.
-- [ ] UTxO part 1 of 3 — harvest a real tx-inclusion proof + surface the certified
-      root (DoD line 5, proof-based certified-inclusion; operator-ratified). Extend
-      `tools/harvest` with a `mithril-tx-proof <txhash>` mode: GET the aggregator's
-      `/proof/cardano-transaction?transaction_hashes=<h>` (release-preprod;
+- [x] UTxO part 1a of 3 — SURFACE the certified transaction root (DoD line 5,
+      proof-based certified-inclusion; operator-ratified). `mithril::verify_chain_anchored`
+      / `VerifiedChain` (src/mithril.rs) already verify the tip cert but only returned
+      `{root_hash,tip_hash,length}`; now `VerifiedChain` also carries
+      `certified_transactions: Option<CertifiedTransactions{merkle_root, epoch, block_number}>`,
+      surfaced from the tip cert's own hashed content (`CardanoTransactions(epoch,block)`
+      signed-entity + the `cardano_transactions_merkle_root` protocol-message part) via a
+      new `Certificate::certified_transactions()`. The tip of the already-verified 12-cert
+      preprod chain (`tests/mithril_chain.rs`) IS a real `CardanoTransactions` cert
+      (`96602b8f…869795`, STM-verified per part 4), so the surfaced root is pinned to a real
+      in-tree, genesis-authenticatable value — no fresh harvest needed for the surfacing.
+      RED→GREEN: `verified_chain_surfaces_the_certified_transaction_root` (root
+      `4409e1c7…c319b5`, epoch 300, block 4924499) + `surfaced_root_comes_from_the_tip_
+      certificates_hashed_content` + `stake_distribution_certificate_surfaces_no_transaction_
+      root` (→ `None`). The spec's `73d8885a…`/block 4926569 was the live-artifact sample;
+      pinned to the real in-tree cert instead (loop honesty — pin to what is proven).
+- [ ] UTxO part 1b of 3 — harvest the real tx-inclusion proof + tx CBOR fixtures
+      (NETWORK; needed by parts 2 & 3, parked — aggregator egress is permission-gated in the
+      non-interactive loop). Extend `tools/harvest` with a `mithril-tx-proof <txhash>` mode:
+      GET `/proof/cardano-transaction?transaction_hashes=<h>` (release-preprod;
       `CardanoTransactionsProofs` JSON), fetch its `certificate_hash` cert + walk toward
-      genesis (reuse the genesis walk) as the anchoring chain, and capture the raw tx
-      CBOR (extract from the tx's block via pallas). Commit as `tests/vectors/`
-      fixtures. Then SURFACE the certified root: `mithril::verify_chain_anchored` /
-      `VerifiedChain` (src/mithril.rs) already verify the tip cert but only return
-      `{root_hash,tip_hash,length}` — add the tip cert's `CardanoTransactionsMerkleRoot`
-      + `(epoch, block_number)` (already-modelled `ProtocolMessagePartKey` parts) to the
-      returned struct. RED: a test asserting the fixture cert's surfaced root ==
-      `73d8885a…67a8b2` (the harvested artifact's `merkle_root`) + block 4926569.
+      genesis (reuse the genesis walk) as the anchoring chain, and capture the raw tx CBOR
+      (extract from the tx's block via pallas). Commit as `tests/vectors/` fixtures. Write
+      the mode ONLY when it can be run live (unrun harvest code = dead code). Part 2's crypto
+      core can be developed first against a synthetic golden + the `ckb-merkle` differential;
+      the real-proof golden (recomputed root == the surfaced `4409e1c7…`/`73d8885a…` cert
+      root) ties in when this harvest lands.
 - [ ] UTxO part 2 of 3 — the MKMap/MMR inclusion verify (the crypto core, wasm-safe
       default build). Implement, in the DEFAULT (non-`mithril`, no-blst, wasm-safe) graph,
       a ~200-LOC pure-Rust BLAKE2s-256 Merkle-Mountain-Range verifier reproducing Mithril's
@@ -363,10 +377,40 @@ needs a row in Evidence.
 | 2026-07-12 00:55 UTC | Red-team of the part-1 diff: VERDICT SHIP — no false-accept at the boundary, no memory/panic/feature-leak hole; the one actionable MEDIUM (panic=abort guard missed the single-quoted TOML form) closed + proven | `fluxpoint-loop:red-team-reviewer` across 7 attack surfaces: `Ok`(0) emitted only inside `Ok` arms (success writes strictly gated), bands disjoint from 0; every `from_raw_parts`/`&*` null-checked incl. each `block_ptrs[i]`/`cert_json_ptrs[i]` + `count==0` guard, `write_hex64`/`status_message` clamp `.min(64)`/`.min(cap)`; `guard` on all fallible exports, `AssertUnwindSafe` sound (writes only after the verifier, on the terminal arm); `cargo tree -e normal` (default + wasm) = 0 blst/mithril-stm; drift gate proven RED-on-change. MEDIUM fix: `header_gate` panic-abort grep now matches `['\"]abort['\"]` (both TOML string forms) — proven old regex matched 1/2 fixture lines (missed `panic = 'abort'`), new matches 2/2; `scripts/harness.sh --full` exit 0 after the fix. LOWs (index→i64 wrap unreachable; `ErrBufferTooSmall` reserved for part-2 sizing) documented, non-blocking |
 | 2026-07-12 01:20 UTC | Independent verification of the autonomously-merged FFI part-1 (DoD line 6, part 1): VERDICT SHIP — safe C-ABI boundary, honest ABI header, deterministic | Fresh `fluxpoint-loop:red-team-reviewer` (7 attack surfaces) + operator drift/flaky checks: every fallible export `guard`-wrapped (`AssertUnwindSafe` sound — out-params written once on the terminal arm, so a caught unwind → `ErrPanic(-9)`, never a half-written verdict); no false-accept (`Ok(0)` only inside `Ok` arms, bands disjoint from 0); every raw-ptr marshalling null-checked incl. per-element + `count==0`; taxonomy exhaustive with chain(200)/mithril(300) bands disjoint. Independent header regen = byte-identical to committed `include/sextant.h` (the drift gate is not hollow); `cargo test --all-features` ×3 = 88/88 deterministic; `cargo tree -e normal` default+wasm = 0 blst/mithril-stm; header 0-leak + `#if defined(SEXTANT_MITHRIL)`-guarded. One LOW closed here: `AnchoredError::Standard.index` doc said "0-based, oldest=root" but the value is `i+1` (1-based absolute; genesis root = index 0) — `src/mithril.rs` doc corrected to match the code + the already-correct FFI comment. Symbol-retention through linker dead-strip is deferred to part-2's CI C-smoke-test (pinned). Merged PR branch cleaned; remote = origin/main only |
 | 2026-07-12 02:10 UTC | Artifacts part 2 (CLOSES DoD line 6): the three artifacts are produced in CI and a C smoke test links the real static lib through the committed header on the Linux target | PR #16 squash-merged to main (`d743d9a`); `.woodpecker/artifacts.yml` runs `cargo build --release` (→ lean `libsextant.a`, no blst) + `cargo build --release --target wasm32` (→ `sextant.wasm`), then `cc -I include tests/smoke/smoke.c target/release/libsextant.a -lpthread -ldl -lm && ./smoke` (asserts `abi_version()==SEXTANT_ABI_VERSION`; garbage 2-block segment → non-zero `ChainDecode`+`index≥0`; null eta0 → `ErrNullPointer`; all 4 core exports link-referenced so a dead-stripped `#[no_mangle]` symbol is a LINK error), then assembles + lists `dist/{libsextant.a,sextant.h,sextant.wasm}`. All 4 Woodpecker contexts green on the PR (pipeline 122) AND on merged main `d743d9a` (`push/artifacts` + `push/harness` success). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP, 0 findings: proof non-vacuous (`CHECK` macro not `assert`; garbage genuinely decodes to `UnsupportedEra(0)`; a false-accept regression would turn smoke red), lean artifact (no `default=[mithril]`), fail-fast pipeline gates `./smoke`'s exit code. Durable downloadable release (publish secret) deferred to the operator. Run link: https://ci.fluxpointstudios.com/repos/15/pipeline/122/1 |
+| 2026-07-12 11:20 UTC | UTxO part 1a (DoD line 5): the verified certificate chain surfaces the tip cert's genesis-authenticatable Cardano-transactions Merkle root — the value a proof-based UTxO inclusion check recomputes against — from the tip's own hashed content, pinned to a real in-tree cert | `cargo test --features mithril` — `tests/mithril_chain.rs::verified_chain_surfaces_the_certified_transaction_root` (`verify_chain` over the 12-cert epoch-290→300 preprod segment; tip `96602b8f…869795` is a real STM-verified `CardanoTransactions(300,4924499)` cert; surfaced `VerifiedChain.certified_transactions == Some{merkle_root: 4409e1c7bb2e9fc6507d16393842daba385bb03a2d7c2b09f5bcede9b4c319b5, epoch: 300, block_number: 4924499}`), `surfaced_root_comes_from_the_tip_certificates_hashed_content` (surfaced == `tip.certified_transactions()`, so it cannot disagree with what the cert signed), `stake_distribution_certificate_surfaces_no_transaction_root` (a `MithrilStakeDistribution` cert → `None`, the honest absence a UTxO read must not read as an empty root). New `mithril::CertifiedTransactions` + `Certificate::certified_transactions()`; `VerifiedChain` gains `certified_transactions: Option<CertifiedTransactions>` populated from the tip in `verify_chain` (so `verify_chain_anchored` surfaces it genesis-authenticated). No new crate; mithril-feature-only (0 change to default+wasm graph); FFI untouched (reads only root/tip hashes). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN) — fmt, clippy --all-features, release, all tests incl. wasm32 + header drift-gate. `fluxpoint-loop:red-team-reviewer` VERDICT SHIP (anchored path cryptographically sound — `compute_hash` folds the whole protocol-message BTreeMap incl. the merkle-root part + the standard-cert `signed_entity_type` (epoch/block BE), and STM multi-sig is over `H(protocol_message)`, so a resealed-hash forgery is rejected by `verify_standard`; panic-free `match`/`.get()?`; 0 blst/mithril-stm in default+wasm). One MEDIUM (doc-only overclaim — the `VerifiedChain` field doc said "genesis-authenticated" unconditionally, but the struct is also returned by integrity-only `verify_chain`) closed: field + `verify_chain` fn docs now scope genesis-authentication to `verify_chain_anchored`, plus a 4th non-vacuous test `plain_verify_chain_does_not_genesis_authenticate_the_surfaced_root` (a self-consistent resealed-hash cert with a forged root passes plain `verify_chain` and surfaces the FORGED root — pins the honesty boundary). Part 1b (harvest the real tx-proof + tx CBOR fixtures for parts 2/3) is network-gated and parked |
 | 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
 ## Notes for the next iteration
-State (2026-07-12): **DoD line 6 is CLOSED — the C-ABI/WASM artifacts primitive shipped
+State (2026-07-12): **UTxO part 1a shipped — the verified chain now SURFACES the
+genesis-authenticatable certified transaction root** (DoD line 5, the first UTxO slice).
+`VerifiedChain` gained `certified_transactions: Option<CertifiedTransactions{merkle_root,
+epoch, block_number}>`, read from the tip cert via the new `Certificate::
+certified_transactions()` (returns `Some` only for a `CardanoTransactions` cert; `None` for
+stake-distribution). Because `verify_chain_anchored` returns the `verify_chain` result, the
+root arrives genesis-authenticated. Proven against the real in-tree tip `96602b8f…869795`
+(STM-verified `CardanoTransactions(300,4924499)`, root `4409e1c7…c319b5`) — NO fresh harvest
+was needed for the surfacing. DoD line 5 stays UNCHECKED (parts 2 + 3 remain).
+
+**Attacking next — UTxO part 2 (the MMR inclusion verifier — the crypto core, DEFAULT
+wasm-safe graph, NO blst).** This is the load-bearing slice and it is NOT network-blocked:
+implement the pure-Rust BLAKE2s-256 Merkle-Mountain-Range `MKMapProof<BlockRange>` verify
+(`verify_tx_inclusion(proof_bytes, tx_hash, certified_root)`) reproducing mithril's
+`compute_root()` (recompute, never trust the input `inner_root`) + `contains(tx_hash)`. Oracle
+per the design: a dev-only differential vs `ckb-merkle-mountain-range` (the crate mithril rides)
+on constructed proofs + the BLAKE2s leaf/node domain-separation pinned to mithril-merkle-tree.
+The REAL-proof golden (recomputed root == the surfaced `4409e1c7…`/spec `73d8885a…` cert root)
+ties in once part 1b's harvest lands — build the verifier + its constructed-vector goldens +
+negatives (`RootMismatch`, `NotIncluded`) first; it stands on its own crypto correctness.
+
+**BLOCKER — network egress is permission-gated in this non-interactive loop** (a plain
+`curl` to the aggregator was denied; `cargo run -p harvest` would hit the same gate). So the
+real-tx-proof + tx-CBOR harvest (part 1b) and any fresh block/cert harvest cannot run here.
+Two paths: **(A)** develop part 2's verifier against constructed/synthetic MMR vectors + the
+ckb-merkle differential now (no network), and defer the real-proof golden + part 1b harvest to
+an interactive/operator run — RECOMMENDED, keeps the crypto core moving; **(B)** park DoD line 5
+entirely until an operator harvest session. Attack (A) next.
+
+**DoD line 6 remains CLOSED — the C-ABI/WASM artifacts primitive shipped
 (parts 1 + 2 of 2, PRs #15 + #16).** Part 1 (`src/ffi.rs`) turns the verified core into
 the consumable primitive: 4 core `extern "C"` exports (`sextant_abi_version`,
 `sextant_verify_segment`, `sextant_header_decode`, `sextant_status_message`) + a
