@@ -13,7 +13,9 @@
 //! decodes the requested output on Sextant's own minicbor path.
 
 use sextant::inclusion::InclusionError;
-use sextant::utxo::{Datum, SpendStatus, UtxoError, verify_utxo_read};
+use sextant::utxo::{
+    Datum, OutPoint, SpendSet, SpendStatus, UtxoError, decode_spends, verify_utxo_read,
+};
 use std::fs;
 use std::path::PathBuf;
 
@@ -191,6 +193,47 @@ fn the_output_is_read_against_an_stm_authenticated_certified_root() {
     assert_eq!(out.lovelace, OUT0_LOVELACE);
     assert_eq!(out.certified_at, CERTIFIED_BLOCK);
     assert_eq!(out.spend_status, SpendStatus::NotEstablished);
+}
+
+/// Independent cross-decoder differential for the tx-INPUT decoder: pallas decodes
+/// the same golden transaction body and its own `inputs` + `collateral` sets are the
+/// oracle for `decode_spends`, on a code path independent of Sextant's minicbor. A
+/// spend the decoder silently drops (a set-encoding it doesn't accept, a collateral
+/// input it omits) is a spend a later watcher would wrongly read as unspent — so
+/// parity with the ledger's own decoder on real bytes is the guard that closes it.
+#[test]
+fn decode_spends_matches_pallas_inputs_on_the_golden_tx() {
+    use pallas_codec::minicbor;
+    use pallas_primitives::conway::TransactionBody;
+
+    let body_bytes = tx_body();
+    let body: TransactionBody = minicbor::decode(&body_bytes).expect("pallas decodes the body");
+
+    let mut expected = SpendSet::new();
+    for inp in body.inputs.iter() {
+        expected.insert(OutPoint {
+            tx_id: <[u8; 32]>::try_from(inp.transaction_id.as_ref()).unwrap(),
+            index: u16::try_from(inp.index).unwrap(),
+        });
+    }
+    if let Some(coll) = body.collateral.as_ref() {
+        for inp in coll.iter() {
+            expected.insert(OutPoint {
+                tx_id: <[u8; 32]>::try_from(inp.transaction_id.as_ref()).unwrap(),
+                index: u16::try_from(inp.index).unwrap(),
+            });
+        }
+    }
+
+    assert!(
+        !expected.is_empty(),
+        "the golden tx spends at least one input"
+    );
+    assert_eq!(
+        decode_spends(&body_bytes).expect("sextant decodes the spends"),
+        expected,
+        "decode_spends disagrees with pallas on the golden tx's consumed outpoints",
+    );
 }
 
 /// Independent cross-decoder differential: pallas decodes the same golden transaction
