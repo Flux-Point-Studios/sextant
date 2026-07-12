@@ -20,7 +20,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
 # no mithril-stm/blst wasm C-toolchain need). The harness exercises it on the
 # host via `--all-features`; the wasm and plain release builds exclude it.
-mithril = ["dep:serde", "dep:serde_json", "dep:chrono", "dep:mithril-stm"]
+mithril = ["dep:chrono", "dep:mithril-stm"]
 
 [dependencies]
 # `alloc` lets the decoder skip nested indefinite-length CBOR (real Conway tx
@@ -38,12 +38,14 @@ curve25519-dalek = { package = "amaru-curve25519-dalek", version = "3.2.0", defa
 # on the RustCrypto digest 0.9 family the dalek fork's `hash_from_bytes` expects.
 sha2 = { version = "0.9", default-features = false }
 blake2 = { version = "0.9", default-features = false }
-# Mithril-feature-only: parse the aggregator's JSON certificate on Sextant's own
-# path and compute `initiated_at`/`sealed_at` timestamp nanoseconds byte-exactly
-# to mithril-common (which uses chrono). All three are optional and gated by the
-# `mithril` feature, so they never enter the default/wasm trust-substrate graph.
-serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
-serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+# Parse the aggregator's JSON on Sextant's own path: the default-graph
+# Cardano-transactions inclusion proof (`src/inclusion.rs`, hex→JSON `MKMapProof`)
+# and — under the `mithril` feature — the certificate. Both are pure-Rust and
+# wasm-safe (`alloc`, no blst); serde_json's compiled-in recursion limit bounds
+# the nesting of a hostile proof. chrono is mithril-only (byte-exact
+# `initiated_at`/`sealed_at` timestamp nanoseconds to mithril-common's hasher).
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "alloc"], optional = true }
 # Mithril-feature-only: the STM (stake-based threshold multi-signature) verify
 # primitive that authorizes every *standard* certificate. Composed for the BLS
@@ -56,6 +58,14 @@ mithril-stm = { version = "0.10.5", default-features = false, features = ["num-i
 
 [dev-dependencies]
 hex = "0.4.3"
+# Load and adversarially mutate the golden `CardanoTransactionsProofs` fixture in
+# the inclusion tests (the library parses the proof on its own path via the
+# non-optional serde_json below; the test crate needs its own handle to build
+# mutated vectors). Independent MMR oracle for the inclusion differential — the
+# crate mithril's `MKProof` rides — cross-checks Sextant's recompute on
+# constructed multi-leaf/multi-peak trees the single real vector does not cover.
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+ckb-merkle-mountain-range = "0.5.2"
 pallas-traverse = "1.1.1"
 # Independent Ed25519 oracle for the operational-certificate differential: its
 # `key::ed25519` verify runs on cryptoxide (pure-Rust), not the dalek fork
