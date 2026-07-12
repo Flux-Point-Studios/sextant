@@ -423,7 +423,7 @@ needs a row in Evidence.
       `src/ffi.rs` (+ `SextantVerifiedOutput` `#[repr(C)]`, a UtxoError status band, cbindgen header,
       smoke.c) so a C/WASM consumer proves the C-ABI primitive end-to-end (closes the deferred FFI
       export too).
-- [ ] BEYOND-DoD — C-ABI `sextant_verify_utxo_read` export + end-to-end C consumer (proves the
+- [x] BEYOND-DoD — C-ABI `sextant_verify_utxo_read` export + end-to-end C consumer (proves the
       C-ABI/WASM primitive is genuinely consumable; closes the deferred FFI export). The DoD is
       already DONE (STATUS: DONE stays); this is a beyond-DoD primitive slice. Design pinned by a
       spec workflow (FFI-inventory survey + variable-length-output-marshalling research + adversarial
@@ -443,6 +443,26 @@ needs a row in Evidence.
       `verify_utxo_read`). All under `scripts/harness.sh --full` + CI. Red-team the variable-length
       marshalling (write-once-last, no partial copy on -3), the honest-scope constant (no "unspent"
       token in the header), and the feature-gate (core export pulls NO blst). See the full spec below.
+      SHIPPED (harness-green locally; CI pending on the PR): CORE ungated `sextant_verify_utxo_read`
+      (present in default lib + wasm32) marshals `VerifiedOutput` via the `-3`/`ErrBufferTooSmall`
+      caller-sizing protocol — fixed scalars in `#[repr(C)] SextantVerifiedOutput`, variable
+      `address`+`datum` to caller `(buf,cap)` pairs, true lengths in the struct, write-once-last, no
+      free fn; status bands 400/401/402 (flattened inclusion) + 410/411 (utxo) appended with NO
+      renumbering; `sextant_mithril_verify_chain_anchored` EXTENDED with `out_ct_root[32]`/
+      `out_ct_block`/`out_has_ct` (certified root obtainable ONLY from the genesis-authenticated
+      verify — honest by construction), `SEXTANT_ABI_VERSION` 1→2; `spend_status: u8` ALWAYS
+      `SEXTANT_SPEND_NOT_ESTABLISHED (0)` (only defined constant; NO unspent/spent token anywhere in
+      the header — new harness gate greps it); `utxo::SpendStatus` now `#[non_exhaustive]` with the
+      Tier-1/2/3 ladder documented (compile-time single-inhabitant tripwire moved to a same-crate
+      unit test). `include/sextant.h` regenerated (drift + leak + honest-scope gates green). Tests:
+      `tests/ffi.rs` +9 (ungated utxo_ffi: good/sizing-probe/exact+partial-`-3`/tampered-400/oob-411/
+      null+empty/const=0; mithril: has_ct surface + end-to-end anchored→ct_root→verify_utxo_read
+      compose + spoof-400); `tests/smoke/smoke.c` gains the core C consumer (sizing-probe→`-3`→resize→
+      Ok→accept; tamper coin byte→400 spoof-refuse; null guard; abi 2) over committed
+      `tests/smoke/utxo_fixture.h` (real golden order, datum 74B not the spec's 79 — pinned to the
+      proven value). `gate.rs` uses the new `CertifiedTransactions::merkle_root_bytes()` (2nd caller).
+      No `.woodpecker` change (rides the existing cc+./smoke line). All under `scripts/harness.sh
+      --full` exit 0.
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
@@ -526,7 +546,33 @@ needs a row in Evidence.
 | 2026-07-12 18:40 UTC | Independent verification of the STATUS: DONE / DoD-line-7 close — VERDICT SHIP, 0 findings; the whole project is legitimately DONE | Separate independent `fluxpoint-loop:red-team-reviewer` pass on merged `28d112c` + operator flaky/example checks (the loop's own red-team was ALSO SHIP; this is a second, independent pass — the discipline held on every autonomous merge). No overclaim (the gate's only decision is `lovelace>=min && datum==expected`; `spend_status` appears ONLY in a comment + the honest note string, never a branch; SpendStatus single-inhabitant never read as liveness; docs state "a Proceed never means the spend will succeed"). Provider-root injection TYPE-IMPOSSIBLE (`Request` has no `certified_root` field; the root is only `verify_chain_anchored(...).certified_transactions.merkle_root`; `genesis_vkey` the sole trusted input). Spoof driven THROUGH `evaluate()` (not just the primitive) and NON-VACUOUS (the reviewer traced the tamper to body offset 116, coin 5_000_000→21_777_216 which would STILL pass the `>=` predicate, so the `NotIncluded` refusal is the crypto hash-binding, not a predicate miss). No false-accept (every spoof vector → Refuse; root recompute load-bearing; the 106-cert chain genuinely authenticates genesis(196)→tip(300)). STATUS: DONE legitimate: all 8 checkboxes `[x]`, line-7 proof reproduced (operator ran the example → exit 0, the honest 4-line log excerpt), line 8 clean vs the diff, line 1 harness green. Operator flaky check: `--test consumer --test utxo --test inclusion --test mithril` ×3 = 34 tests deterministic; example binary reproduced the PROCEED-with-NotEstablished-note + spoofed-REFUSE(NotIncluded) log. All four Woodpecker contexts green on merged main. **The full read-path verifying Cardano client is DONE: DoD lines 1–8 all checked.** |
 | 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
+| 2026-07-12 19:40 UTC | BEYOND-DoD (DoD stays DONE): the C-ABI/WASM `sextant_verify_utxo_read` export + the extended anchored verify + an end-to-end C consumer make the verified read the primitive a non-Rust downstream calls — closes the deferred FFI export | `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy `--all-targets --all-features -D warnings`, release, `cargo test --all-features` incl. `tests/ffi.rs` (32, +9 new), wasm32 build, header drift-gate + blst/mithril_stm leak grep + NEW honest-scope `\b(un)?spent\b` grep). CORE ungated `sextant_verify_utxo_read` (in default lib AND wasm32; verifier = blake2b/blake2s + minicbor, 0 blst) marshals `VerifiedOutput` via the caller-sizing `-3`/`ErrBufferTooSmall` protocol (first live producer of `-3`): fixed scalars in `#[repr(C)] SextantVerifiedOutput`, variable `address`+`datum` to caller `(buf,cap)` pairs, TRUE lengths in the struct, write-once-last (struct+detail strictly last, no partial copy on `-3`), no free fn. Status bands 400/401/402 (flattened `InclusionError`) + 410/411 (`UtxoError`) appended after 327 with NO renumbering. `sextant_mithril_verify_chain_anchored` EXTENDED (not a sibling) with `out_ct_root[32]`/`out_ct_block`/`out_has_ct` (32 RAW bytes of the STM-authenticated `certified_transactions.merkle_root`, obtainable ONLY from the genesis-authenticated verify — a C consumer is physically unable to get a certified root without anchoring to genesis; malformed root fails CLOSED to 327), `SEXTANT_ABI_VERSION` 1→2. Honest scope at the ABI: `spend_status: u8` ALWAYS `SEXTANT_SPEND_NOT_ESTABLISHED (0)` — the ONLY defined constant, NO `unspent`/`spent` token anywhere in `include/sextant.h` (grep-gated in the harness); `utxo::SpendStatus` is now `#[non_exhaustive]` with the documented Tier-1 `NotEstablished` / Tier-2 `CertifiedUnspent` (cryptographic, reserved) / Tier-3 `Attested` (economic, reserved) ladder + the load-bearing "economic never coercible into cryptographic" invariant; the compile-time single-inhabitant tripwire moved to a same-crate unit test (external `tests/utxo.rs` now asserts equality). Named ffi tests: `utxo_ffi::{good_read_fills_struct_and_buffers, sizing_query_null_bufs, buffer_too_small_reports_true_lengths (exact→Ok + address-fits/datum-short→`-3` with NO partial copy), tampered_bytes_not_included (400), out_of_range_index (411), null_and_empty_guards, spend_status_constant_is_zero}`; `mithril_ffi::{anchored_surfaces_the_certified_transaction_root (has_ct=1, ct_block 4927469, ct_root 83c012fd…774129), anchored_root_feeds_a_verified_utxo_read (end-to-end: anchored verify→ct_root→`sextant_verify_utxo_read`→order predicate PROCEED, then spoofed body→400), anchored_good_names_root_and_tip (None branch: stake-dist tip→has_ct=0)}`. `tests/smoke/smoke.c` (CI-only, WITHOUT `-DSEXTANT_MITHRIL`) gains the core C consumer over committed `tests/smoke/utxo_fixture.h` (real golden order tx `242f2037…a636#0`; the inline datum is 74 B — the spec's "79" was wrong, pinned to the proven value; tamper offset 116 = the coin `1a 00 4c 4b 40`): sizing-probe→`-3`→resize→Ok (lovelace 5_000_000, datum_kind 2, spend_status 0, certified_at 4927469)→tamper coin byte→400 spoof-refuse→null guard; abi check 2. `gate.rs` now uses the new `CertifiedTransactions::merkle_root_bytes()` (2nd caller — DRY). No `.woodpecker` change (rides the existing `cc -I include tests/smoke/smoke.c … && ./smoke` line). CI (Woodpecker artifacts + harness) verifies the C linkage/consumer on the Linux target — PENDING on the PR |
+
 ## Notes for the next iteration
+State (2026-07-12, latest — beyond-DoD FFI export shipped): **STATUS: DONE holds.** This iteration
+shipped the last open Plan item — the beyond-DoD C-ABI `sextant_verify_utxo_read` export + the
+extended anchored verify (`out_ct_root`/`out_ct_block`/`out_has_ct`) + an end-to-end C consumer in
+`tests/smoke/smoke.c` — closing the deferred FFI export. The verified read is now the primitive a
+C/WASM downstream calls end-to-end (the compounding-leverage payoff): a consumer authenticates the
+Mithril chain to genesis through `sextant_mithril_verify_chain_anchored`, takes the certified root
+from the AUTHENTICATED tip (obtainable NO other way — honest by construction), and feeds it straight
+into `sextant_verify_utxo_read`. `SEXTANT_ABI_VERSION` is now 2. **Plan is now empty; the DoD (lines
+1–8) remains fully checked.** `scripts/harness.sh --full` is green locally (fmt, clippy
+--all-targets --all-features -D warnings, release, `cargo test --all-features`, wasm32, header
+drift + blst/mithril_stm leak + NEW `\b(un)?spent\b` honest-scope grep).
+**ONE proof is CI-only-outstanding:** the C smoke consumer (`tests/smoke/smoke.c` + committed
+`tests/smoke/utxo_fixture.h`) links `libsextant.a` through the committed header and is exercised
+ONLY in Woodpecker (Windows-MSVC emits `sextant.lib`, not `libsextant.a`, so it cannot link with
+`cc` locally). The local harness proves everything EXCEPT the real external C-linkage of the new
+export; that lands green on the PR's `push/artifacts` context. Ship path: open the PR, wait for all
+Woodpecker contexts green, red-team the diff, merge per policy. If a future iteration is requested
+with NO operator-directed slice, there is no derivable DoD work left — the read-path client is
+complete. Compounding follow-ons (operator's call, do NOT auto-derive): (a) a durable downloadable
+release artifact (needs a CI publish secret — deferred); (b) Tier-2 `CertifiedUnspent` spend-status
+when a Mithril ledger-state commitment ships (the `#[non_exhaustive]` ladder + the reserved ABI
+bands are already shaped for it — additive, never a layout break); (c) the Zig embedding layer (was
+out of scope until the Rust DoD; the C-ABI it targets is now complete incl. the UTxO read).
+
 State (2026-07-12): **STATUS: DONE — every Definition-of-Done line is checked with proof recorded.**
 DoD line 7 (Live) shipped as PR #22 (`28d112c`, red-team SHIP, all four Woodpecker contexts green):
 `examples/verified_read_gate/{main.rs,gate.rs}` (a keeper/batcher stand-in for the out-of-scope

@@ -141,15 +141,17 @@ pub fn evaluate(req: &Request) -> Outcome {
             return refuse(log, &reff, "NotATxCert", "tip certifies no transaction set");
         }
     };
-    let mut certified_root = [0u8; 32];
-    if hex::decode_to_slice(&ct.merkle_root, &mut certified_root).is_err() {
-        return refuse(
-            log,
-            &reff,
-            "MalformedRoot",
-            "certified root is not 32-byte hex",
-        );
-    }
+    let certified_root = match ct.merkle_root_bytes() {
+        Some(root) => root,
+        None => {
+            return refuse(
+                log,
+                &reff,
+                "MalformedRoot",
+                "certified root is not 32-byte hex",
+            );
+        }
+    };
 
     // 5. Verify the UTxO's certified inclusion against the AUTHENTICATED root, then
     // decode the requested output. `verify_utxo_read` rehashes the supplied bytes,

@@ -22,7 +22,9 @@ use std::slice;
 
 use crate::chain::{self, ChainError};
 use crate::header::{DecodeError, HeaderView};
+use crate::inclusion::InclusionError;
 use crate::kes::KesError;
+use crate::utxo::{self, Datum, UtxoError};
 use crate::vrf::VrfError;
 
 #[cfg(feature = "mithril")]
@@ -31,8 +33,21 @@ use crate::mithril::{
 };
 
 /// ABI contract version. A consumer asserts `sextant_abi_version() == SEXTANT_ABI_VERSION`
-/// at load; cbindgen emits it into the header as a `#define`.
-pub const SEXTANT_ABI_VERSION: u32 = 1;
+/// at load; cbindgen emits it into the header as a `#define`. Bumped 1→2 for the UTxO
+/// read export and the certified-transactions out-params on the anchored verify.
+pub const SEXTANT_ABI_VERSION: u32 = 2;
+
+/// The only defined `spend_status` value a verified read returns. The read path can
+/// NEVER establish that an output is currently available to spend (see
+/// [`SextantVerifiedOutput`]); no wire value means it is, and none is ever written.
+///
+/// `spend_status` is a BANDED code space: `0` = not established. A future
+/// CRYPTOGRAPHIC band (a Mithril ledger-state proof) and a future ECONOMIC/attested
+/// band (a committee attestation) are RESERVED and kept distinct, so a consumer
+/// switching on the byte always sees the trust basis and can never read an
+/// attestation as a proof. New tiers are additive (a new constant + an ABI-version
+/// bump), never a layout break. cbindgen emits this as a `#define`.
+pub const SEXTANT_SPEND_NOT_ESTABLISHED: u8 = 0;
 
 /// Every verdict the boundary can return, as one flat `#[repr(i32)]` enum. All bands
 /// are defined unconditionally (only the mithril *function* is feature-gated) so the
@@ -87,6 +102,12 @@ pub enum SextantStatus {
     MithrilStdMalformedSignature = 325,
     MithrilStdInvalidMultiSignature = 326,
     MithrilStdMalformedCertJson = 327,
+
+    UtxoInclusionNotIncluded = 400,
+    UtxoInclusionRootMismatch = 401,
+    UtxoInclusionMalformedProof = 402,
+    UtxoMalformedTx = 410,
+    UtxoOutputIndexOutOfRange = 411,
 }
 
 /// Per-verdict detail carried alongside the status code, so a caller can point at the
@@ -123,6 +144,43 @@ pub struct SextantHeaderView {
     /// `1` if `prev_hash` is present; `0` for a genesis header ([0;32] is a legal hash,
     /// so it cannot double as a sentinel).
     pub has_prev_hash: u8,
+    /// Explicit tail padding; zeroed on write so the struct is fully deterministic.
+    pub _reserved: [u8; 6],
+}
+
+/// A verified transaction output, projected into a caller-allocated fixed-width
+/// `#[repr(C)]` struct. The scalars live here; the variable-length `address` and
+/// `datum` bytes are delivered to the caller's `(buf, cap)` pairs, with the true
+/// lengths reported here so a caller can size a retry (the sizing protocol).
+///
+/// ## Honest scope — read before gating on the result
+/// A genuine `Ok` proves the returned `{address, lovelace, datum}` are the AUTHENTIC
+/// on-chain bytes of a Mithril-certified output: its certified INCLUSION and its
+/// provenance are anchored to the network genesis key as of `certified_at`, and
+/// NOTHING MORE. It is NOT a claim that the output is currently available to spend —
+/// Cardano commits to no UTxO-set accumulator, the verdict trails tip by ~100 blocks,
+/// and the ledger decides availability atomically at submission. `spend_status` is
+/// ALWAYS [`SEXTANT_SPEND_NOT_ESTABLISHED`]; never gate a spend on it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SextantVerifiedOutput {
+    /// The output's ADA amount in lovelace (its `coin`; any multi-asset is excluded).
+    pub lovelace: u64,
+    /// The Mithril-certified block height the output was attested at — NOT tip state,
+    /// NOT a liveness claim.
+    pub certified_at: u64,
+    /// The true length of the address bytes; may exceed `address_cap` (then retry).
+    pub address_len: usize,
+    /// The true length of the datum bytes: `0` = none, `32` = a datum hash, variable
+    /// = an inline datum; may exceed `datum_cap` (then retry).
+    pub datum_len: usize,
+    /// `0` = no datum, `1` = a 32-byte datum hash in `datum_buf`, `2` = an inline
+    /// datum (`datum_len` raw plutus-data CBOR bytes in `datum_buf`, `#6.24`-unwrapped
+    /// — the caller decodes it).
+    pub datum_kind: u8,
+    /// Always [`SEXTANT_SPEND_NOT_ESTABLISHED`] (`0`) — the read path cannot establish
+    /// liveness; never gate on it.
+    pub spend_status: u8,
     /// Explicit tail padding; zeroed on write so the struct is fully deterministic.
     pub _reserved: [u8; 6],
 }
@@ -435,6 +493,23 @@ const STATUS_MESSAGES: &[(SextantStatus, &str)] = {
             S::MithrilStdMalformedCertJson,
             "mithril: malformed certificate JSON",
         ),
+        (
+            S::UtxoInclusionNotIncluded,
+            "utxo read: transaction not included in the certified set",
+        ),
+        (
+            S::UtxoInclusionRootMismatch,
+            "utxo read: inclusion proof does not recompute the certified root",
+        ),
+        (
+            S::UtxoInclusionMalformedProof,
+            "utxo read: malformed inclusion proof",
+        ),
+        (S::UtxoMalformedTx, "utxo read: malformed transaction body"),
+        (
+            S::UtxoOutputIndexOutOfRange,
+            "utxo read: output index past end of transaction",
+        ),
     ]
 };
 
@@ -443,6 +518,147 @@ fn status_message(status: i32) -> &'static str {
         .iter()
         .find(|(s, _)| *s as i32 == status)
         .map_or("unknown status", |(_, msg)| *msg)
+}
+
+/// Flatten a [`UtxoError`] to its status band (UNGATED, beside [`chain_status`]).
+/// `Inclusion` splits into the 400 band; a malformed tx / out-of-range index map to
+/// the 410 band.
+fn utxo_status(e: &UtxoError) -> i32 {
+    use SextantStatus as S;
+    (match e {
+        UtxoError::Inclusion(InclusionError::NotIncluded) => S::UtxoInclusionNotIncluded,
+        UtxoError::Inclusion(InclusionError::RootMismatch) => S::UtxoInclusionRootMismatch,
+        UtxoError::Inclusion(InclusionError::MalformedProof) => S::UtxoInclusionMalformedProof,
+        UtxoError::MalformedTx => S::UtxoMalformedTx,
+        UtxoError::OutputIndexOutOfRange => S::UtxoOutputIndexOutOfRange,
+    }) as i32
+}
+
+/// Copy `min(src.len(), cap)` bytes into `dst`, but only when `dst` is non-null and
+/// the clamped count is non-zero. The variable-length marshalling contract: on the
+/// `-3` sizing path the caller passes `cap == 0` (buf may be null) so nothing is
+/// copied; on the `Ok` path `cap >= src.len()`, so the whole field is delivered. Two
+/// callers: the address and datum buffers.
+///
+/// # Safety
+/// When non-null, `dst` must point to at least `cap` writable bytes; `src` is a
+/// distinct slice, so the ranges do not overlap.
+unsafe fn copy_min(dst: *mut u8, cap: usize, src: &[u8]) {
+    let n = src.len().min(cap);
+    if dst.is_null() || n == 0 {
+        return;
+    }
+    // SAFETY: `dst` is non-null with `cap >= n` writable bytes; `src` is distinct.
+    unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, n) };
+}
+
+/// Verify that output `out_index` of the transaction whose body is `tx_bytes` is a
+/// genesis-anchored, Mithril-certified on-chain output, and marshal its
+/// `{address, lovelace, datum}` back to the caller.
+///
+/// This is a CORE export — present in the default library and the wasm32 build (its
+/// verifier composes only Blake2b/Blake2s + minicbor, no feature-gated crypto crate).
+/// `certified_root` is
+/// the 32-byte certified transaction Merkle root; obtain it ONLY from a
+/// genesis-authenticated certificate (see the mithril anchored verify) so a provider
+/// cannot inject one. The supplied `tx_bytes` are hashed here, never a
+/// provider-supplied hash, so substituted/tampered bytes are rejected as not-included.
+///
+/// ## The sizing protocol (allocation-free; caller owns every buffer)
+/// The fixed scalars land in `*out`; the variable-length `address` and `datum` bytes
+/// go to `address_buf`/`datum_buf`, whose true lengths are reported in
+/// `out.address_len`/`out.datum_len`. If EITHER buffer is too small the call writes
+/// the full struct (true lengths, no variable bytes) and returns
+/// [`SextantStatus::ErrBufferTooSmall`] (`-3`); the caller reads the lengths, resizes,
+/// and retries (idempotent). A `(NULL, 0)` pair is a pure sizing probe. There is no
+/// free function — on wasm no free callback can cross back in.
+///
+/// ## Honest scope
+/// A genuine `Ok` proves authentic bytes + certified inclusion + provenance anchored
+/// to genesis as of `certified_at`, NOTHING MORE; it is NOT a liveness claim, and
+/// `out.spend_status` is always [`SEXTANT_SPEND_NOT_ESTABLISHED`]. Never gate on it.
+///
+/// # Safety
+/// `tx_bytes` must point to `tx_bytes_len` readable bytes; `proof_hex` to
+/// `proof_hex_len` readable bytes; `certified_root` to 32 readable bytes; `out` to a
+/// writable [`SextantVerifiedOutput`]. `address_buf`/`datum_buf` must each be null
+/// (permitted iff its cap is 0) or point to `address_cap`/`datum_cap` writable bytes.
+/// `out_detail` must be null or point to a writable [`SextantErrorDetail`]. All
+/// borrows live only for the duration of the call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn sextant_verify_utxo_read(
+    tx_bytes: *const u8,
+    tx_bytes_len: usize,
+    out_index: usize,
+    proof_hex: *const u8,
+    proof_hex_len: usize,
+    certified_root: *const u8,
+    block_number: u64,
+    out: *mut SextantVerifiedOutput,
+    address_buf: *mut u8,
+    address_cap: usize,
+    datum_buf: *mut u8,
+    datum_cap: usize,
+    out_detail: *mut SextantErrorDetail,
+) -> i32 {
+    guard(|| {
+        if tx_bytes.is_null() || proof_hex.is_null() || certified_root.is_null() || out.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        if tx_bytes_len == 0 {
+            return SextantStatus::ErrEmptyInput as i32;
+        }
+        // SAFETY: each pointer is non-null (checked) and, by contract, points to the
+        // stated number of readable bytes; the borrows live only inside this closure.
+        let tx = unsafe { slice::from_raw_parts(tx_bytes, tx_bytes_len) };
+        let proof = unsafe { slice::from_raw_parts(proof_hex, proof_hex_len) };
+        let root = unsafe { &*(certified_root as *const [u8; 32]) };
+
+        let v = match utxo::verify_utxo_read(tx, out_index, proof, root, block_number) {
+            Ok(v) => v,
+            Err(e) => {
+                write_detail(out_detail, -1, 0);
+                return utxo_status(&e);
+            }
+        };
+
+        let address_len = v.address.len();
+        let (datum_kind, datum_bytes): (u8, &[u8]) = match &v.datum {
+            None => (0, &[]),
+            Some(Datum::Hash(h)) => (1, h.as_slice()),
+            Some(Datum::Inline(bytes)) => (2, bytes.as_slice()),
+        };
+        let datum_len = datum_bytes.len();
+        let projected = SextantVerifiedOutput {
+            lovelace: v.lovelace,
+            certified_at: v.certified_at,
+            address_len,
+            datum_len,
+            datum_kind,
+            spend_status: SEXTANT_SPEND_NOT_ESTABLISHED,
+            _reserved: [0u8; 6],
+        };
+
+        if address_cap < address_len || datum_cap < datum_len {
+            // Sizing sub-result: publish the true lengths, copy no variable bytes.
+            // SAFETY: `out` is non-null (checked); written once on this path.
+            unsafe { *out = projected };
+            write_detail(out_detail, -1, 0);
+            return SextantStatus::ErrBufferTooSmall as i32;
+        }
+
+        // Both buffers fit: fill them, THEN commit the struct (the caller reads
+        // `*_len`/`datum_kind` to interpret already-written buffers), THEN the detail.
+        // SAFETY: caps are ≥ the true lengths, so `copy_min` writes the full fields.
+        unsafe {
+            copy_min(address_buf, address_cap, &v.address);
+            copy_min(datum_buf, datum_cap, datum_bytes);
+            *out = projected;
+        }
+        write_detail(out_detail, -1, 0);
+        SextantStatus::Ok as i32
+    })
 }
 
 /// Verify a genesis-anchored Mithril certificate chain (each entry the aggregator's
@@ -454,11 +670,23 @@ fn status_message(status: i32) -> &'static str {
 /// with its index; any verification failure flattens `AnchoredError` to its leaf band +
 /// offending certificate index.
 ///
+/// The tip's certified transaction set (when the tip is a `CardanoTransactions`
+/// certificate) is surfaced through `out_ct_root` (the 32 RAW bytes of the certified
+/// Merkle root, ready to pass straight as the `certified_root` of
+/// [`sextant_verify_utxo_read`]), `out_ct_block` (the certified height), and
+/// `out_has_ct` (`1` present, `0` absent — root zeroed, block `0`). Because the root
+/// is obtainable ONLY from this genesis-authenticated verify, a consumer is
+/// physically unable to obtain a certified root without having anchored the chain to
+/// genesis. A tip whose certified Merkle root is not 32-byte hex fails CLOSED to
+/// [`SextantStatus::MithrilStdMalformedCertJson`] (never a partial `out_ct_root`).
+///
 /// # Safety
 /// `cert_json_ptrs`/`cert_json_lens` must each point to `count` readable entries, each
 /// pointer to its length in readable bytes; `genesis_vkey` to 32 readable bytes;
 /// `out_root_hex` and `out_tip_hex` to 64 writable bytes each; `out_length` to a
-/// writable `u64`; `out_detail` must be null or point to a writable [`SextantErrorDetail`].
+/// writable `u64`; `out_ct_root` to 32 writable bytes; `out_ct_block` to a writable
+/// `u64`; `out_has_ct` to a writable `u8`; `out_detail` must be null or point to a
+/// writable [`SextantErrorDetail`].
 #[cfg(feature = "mithril")]
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
@@ -470,6 +698,9 @@ pub unsafe extern "C" fn sextant_mithril_verify_chain_anchored(
     out_root_hex: *mut u8,
     out_tip_hex: *mut u8,
     out_length: *mut u64,
+    out_ct_root: *mut u8,
+    out_ct_block: *mut u64,
+    out_has_ct: *mut u8,
     out_detail: *mut SextantErrorDetail,
 ) -> i32 {
     guard(|| {
@@ -479,6 +710,9 @@ pub unsafe extern "C" fn sextant_mithril_verify_chain_anchored(
             || out_root_hex.is_null()
             || out_tip_hex.is_null()
             || out_length.is_null()
+            || out_ct_root.is_null()
+            || out_ct_block.is_null()
+            || out_has_ct.is_null()
         {
             return SextantStatus::ErrNullPointer as i32;
         }
@@ -507,12 +741,37 @@ pub unsafe extern "C" fn sextant_mithril_verify_chain_anchored(
         let vkey = unsafe { &*(genesis_vkey as *const [u8; 32]) };
         match mithril::verify_chain_anchored(&certs, vkey) {
             Ok(v) => {
-                // SAFETY: both out buffers are caller-allocated with ≥64 bytes; each
-                // hash is exactly 64 lowercase hex chars.
+                // The certified transaction set from the AUTHENTICATED tip. A tip that
+                // certifies a set with a non-32-byte-hex root is a malformed cert:
+                // fail closed rather than surface a partial/garbage root with has_ct=1.
+                let ct = match &v.certified_transactions {
+                    Some(ct) => match ct.merkle_root_bytes() {
+                        Some(root) => Some((root, ct.block_number)),
+                        None => {
+                            write_detail(out_detail, -1, 0);
+                            return SextantStatus::MithrilStdMalformedCertJson as i32;
+                        }
+                    },
+                    None => None,
+                };
+                // SAFETY: all out pointers are non-null (checked); the hex hashes are
+                // exactly 64 chars, `out_ct_root` has ≥32 writable bytes. Written once.
                 unsafe {
                     write_hex64(out_root_hex, &v.root_hash);
                     write_hex64(out_tip_hex, &v.tip_hash);
                     *out_length = v.length as u64;
+                    match ct {
+                        Some((root, block)) => {
+                            ptr::copy_nonoverlapping(root.as_ptr(), out_ct_root, 32);
+                            *out_ct_block = block;
+                            *out_has_ct = 1;
+                        }
+                        None => {
+                            ptr::write_bytes(out_ct_root, 0, 32);
+                            *out_ct_block = 0;
+                            *out_has_ct = 0;
+                        }
+                    }
                 }
                 write_detail(out_detail, -1, 0);
                 SextantStatus::Ok as i32

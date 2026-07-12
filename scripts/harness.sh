@@ -67,6 +67,15 @@ header_gate() {
     echo "harness: a feature-gated crate token leaked into the C header" >&2
     exit 1
   fi
+
+  # Honest scope: the only spend-status value at the ABI is NOT_ESTABLISHED. No wire
+  # constant or field may ever mean "unspent"/"spent" — the read path cannot establish
+  # liveness, so a consumer must never be handed a value to gate a spend on. Reject the
+  # token anywhere in the committed header (the word "spend"/"SEXTANT_SPEND_*" is fine).
+  if grep -Eiq '\b(un)?spent\b' include/sextant.h; then
+    echo "harness: an 'unspent'/'spent' token leaked into the C header — the read path cannot claim liveness" >&2
+    exit 1
+  fi
 }
 
 case "$mode" in
