@@ -874,6 +874,7 @@ mod tests {
             vrf_vkey: [5u8; 32],
             vrf_output: [6u8; 64],
             vrf_proof: [7u8; 80],
+            block_body_hash: [12u8; 32],
             opcert: OpCert {
                 hot_vkey: [8u8; 32],
                 sequence_number: 9,
