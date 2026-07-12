@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use sextant::mithril::{Certificate, ChainError, verify_chain};
+use sextant::mithril::{Certificate, CertifiedTransactions, ChainError, verify_chain};
 
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -108,6 +108,62 @@ fn harvested_segment_is_an_avk_bound_chain() {
     // exercised (a single-epoch segment would prove nothing about it).
     let epochs: HashSet<u64> = ordered.iter().map(|c| c.epoch).collect();
     assert!(epochs.len() >= 10, "chain must span ≥10 epochs");
+}
+
+/// DoD line 5, part 1: the verified chain surfaces the tip certificate's
+/// Cardano-transactions commitment — the Merkle root a proof-based UTxO inclusion
+/// check recomputes against, bound to the `(epoch, block_number)` it certifies —
+/// from the same hashed content the integrity check already pins. The harvested
+/// tip is a real `CardanoTransactions` certificate, so on a `verify_chain`
+/// (and thus `verify_chain_anchored`) result this root is genesis-authenticated,
+/// not a provider assertion. Recompute against it, never trust a supplied root.
+#[test]
+fn verified_chain_surfaces_the_certified_transaction_root() {
+    let ordered = ordered_root_to_tip(harvested_certs());
+    let verified = verify_chain(&ordered).expect("harvested segment must verify as a chain");
+    // The tip is the real epoch-300 CardanoTransactions certificate.
+    assert_eq!(
+        verified.tip_hash,
+        "96602b8f11c48c3f6c4d1127793b2e1b2a08df0c5c5565d95475ed3b5b869795",
+    );
+    assert_eq!(
+        verified.certified_transactions,
+        Some(CertifiedTransactions {
+            merkle_root: "4409e1c7bb2e9fc6507d16393842daba385bb03a2d7c2b09f5bcede9b4c319b5"
+                .to_string(),
+            epoch: 300,
+            block_number: 4_924_499,
+        }),
+    );
+}
+
+/// The commitment is surfaced from the tip's own hashed content — the same
+/// `(epoch, block_number)` its `signed_entity_type` names and the same
+/// `cardano_transactions_merkle_root` protocol-message part the integrity check
+/// binds — so it cannot disagree with what the certificate signed.
+#[test]
+fn surfaced_root_comes_from_the_tip_certificates_hashed_content() {
+    let ordered = ordered_root_to_tip(harvested_certs());
+    let tip = ordered.last().unwrap();
+    assert_eq!(
+        verify_chain(&ordered)
+            .unwrap()
+            .certified_transactions
+            .as_ref(),
+        tip.certified_transactions().as_ref(),
+    );
+}
+
+/// A stake-distribution certificate commits to no transaction set, so it surfaces
+/// no Merkle root — the honest `None` a UTxO read must not read as an empty root.
+#[test]
+fn stake_distribution_certificate_surfaces_no_transaction_root() {
+    let bytes = fs::read(vectors_dir().join(
+        "mithril-cert-b842eb59758fb7d091bdc6638096aa9330012e424c6ed0be3aab4026d62a8fe3.json",
+    ))
+    .expect("read stake-distribution cert vector");
+    let cert = Certificate::from_json(&bytes).expect("parse stake-distribution cert");
+    assert_eq!(cert.certified_transactions(), None);
 }
 
 /// An empty segment is a clean error, never a vacuous success.
