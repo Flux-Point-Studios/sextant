@@ -67,6 +67,17 @@ hex = "0.4.3"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 ckb-merkle-mountain-range = "0.5.2"
 pallas-traverse = "1.1.1"
+# Independent transaction-output decoder oracle for the UTxO read differential:
+# pallas parses the golden transaction body and its `MultiEraOutput` accessors
+# yield `{address, lovelace, datum}` on a code path independent of Sextant's own
+# minicbor `decode_output`, so parity is a genuine cross-implementation check (the
+# same discipline the header/opcert/KES/VRF/MMR verdicts already carry). Already a
+# transitive dependency of `pallas-traverse`, so it adds nothing to the lockfile.
+pallas-primitives = "1.1.1"
+# The pallas oracle above decodes with pallas's own `minicbor` version (distinct
+# from the trust-substrate lib's `minicbor` 2.x); use its re-export so the two do
+# not clash in the differential test. Transitive already, adds nothing to the lock.
+pallas-codec = "1.1.1"
 # Independent Ed25519 oracle for the operational-certificate differential: its
 # `key::ed25519` verify runs on cryptoxide (pure-Rust), not the dalek fork
 # Sextant's own path uses — so parity on the same (key, message, signature) is a
