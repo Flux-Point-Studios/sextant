@@ -149,8 +149,9 @@ fn malformed_block_fails_closed_to_decode() {
 //   * tx beaa9166… is created in block[0] (4921916) with three outputs;
 //   * beaa9166…#0 is never spent in the segment (→ Unspent);
 //   * beaa9166…#1 is spent in block[1] (4921917) by tx 760076f2… (→ SpentObserved).
-// The adversary's only evasion — withhold the spending block — cannot advance the
-// verified tip, so it collapses to Stalled, never a false Unspent.
+// Two provider evasions, both closed to Stalled (never a false Unspent): withholding
+// a mid-window block breaks the hash chain (→ BrokenSegment); truncating the window
+// before the spend is caught by the caller's require_through floor (→ WindowTooShort).
 
 use sextant::utxo::{CertifiedTransactions, OutPoint};
 use sextant::window::{Freshness, StallReason, WatchBasis, WatchVerdict, verify_watched_window};
@@ -161,6 +162,9 @@ const EPOCH_300_ETA0: &str = "aa845533c5f8631a864010ae89c23ee1cee0ed7717e4ac00a2
 const WATCHED_TX: &str = "beaa9166c061e56457b5d84de4b3d15c9386b202d2585ff247f47af0dcd32a5e";
 /// The transaction that spends beaa9166…#1 in block[1] (4921917).
 const SPENDING_TX: &str = "760076f24ea0a151d28a32fb627a17122c92cb7bfb02041995bc98a421687844";
+/// The caller's required coverage floor: the window's own tip height (4921937). A
+/// full window reaches it; a truncated one (ending early) does not.
+const REQUIRE_THROUGH: u64 = 4_921_937;
 
 fn hash32(s: &str) -> [u8; 32] {
     unhex(s).try_into().expect("32-byte hex")
@@ -226,7 +230,14 @@ fn preprod_window() -> Vec<Vec<u8>> {
 fn unspent_outpoint_in_verified_window_yields_unspent_as_of_tip() {
     let blocks = preprod_window();
     assert!(blocks.len() >= 20, "expected the 22-block window");
-    let verdict = verify_watched_window(watched(0), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(0),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     match verdict {
         WatchVerdict::Unspent { as_of, basis } => {
             assert_eq!(as_of.as_of_height, 4_921_937, "as-of tip height");
@@ -249,7 +260,14 @@ fn unspent_outpoint_in_verified_window_yields_unspent_as_of_tip() {
 #[test]
 fn spending_block_in_window_yields_spent_observed_at_block() {
     let blocks = preprod_window();
-    let verdict = verify_watched_window(watched(1), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(1),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     match verdict {
         WatchVerdict::SpentObserved {
             at_height,
@@ -271,7 +289,14 @@ fn spending_block_in_window_yields_spent_observed_at_block() {
 fn dropped_spending_block_yields_stalled_never_unspent() {
     let mut blocks = preprod_window();
     blocks.remove(1);
-    let verdict = verify_watched_window(watched(1), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(1),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     assert!(
         matches!(
             verdict,
@@ -285,6 +310,40 @@ fn dropped_spending_block_yields_stalled_never_unspent() {
     assert!(!matches!(verdict, WatchVerdict::Unspent { .. }));
 }
 
+/// THE TRUNCATION EVASION (the CRITICAL a false `Unspent` would be): the spending block
+/// is NOT dropped mid-window — the provider simply ENDS the window one block before the
+/// spend. Watching the real on-chain-spent `beaa9166…#1` (spent in block[1]=4921917), a
+/// provider serving only the creating block[0]=4921916 yields an authentic, hash-linked,
+/// body-committed, contiguous, creation-observing window — every earlier check passes.
+/// The caller's `require_through` (4921937, past the spend) is the ONLY thing that closes
+/// it: the tip 4921916 falls short → `Stalled{WindowTooShort}`, NEVER a false `Unspent`.
+/// Non-vacuous: without the `require_through` gate this returns `Unspent{as_of 4921916}`
+/// for a genuinely-spent outpoint (verified against the pre-fix code).
+#[test]
+fn truncated_window_before_the_spend_yields_stalled_never_unspent() {
+    let all = preprod_window();
+    let truncated = vec![all[0].clone()]; // only the creating block, before the spend
+    let verdict = verify_watched_window(
+        watched(1),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &truncated,
+        &eta0(),
+        fresh(),
+    );
+    assert!(
+        matches!(
+            verdict,
+            WatchVerdict::Stalled {
+                reason: StallReason::WindowTooShort,
+                ..
+            }
+        ),
+        "a window truncated before the spend must stall, got {verdict:?}",
+    );
+    assert!(!matches!(verdict, WatchVerdict::Unspent { .. }));
+}
+
 /// THE "START AFTER THE SPEND" EVASION: a window that does not observe the outpoint's
 /// creation cannot vouch it was ever unspent. Dropping the creating block (block[0])
 /// leaves a still-contiguous, still-verified run — but creation is unseen, so an
@@ -293,7 +352,14 @@ fn dropped_spending_block_yields_stalled_never_unspent() {
 fn window_that_misses_creation_yields_stalled_never_unspent() {
     let mut blocks = preprod_window();
     blocks.remove(0);
-    let verdict = verify_watched_window(watched(0), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(0),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     assert!(
         matches!(
             verdict,
@@ -316,7 +382,8 @@ fn window_tip_above_certified_anchor_yields_stalled() {
         block_number: 4_921_930, // below the window tip 4921937
         ..anchor()
     };
-    let verdict = verify_watched_window(watched(0), &low, &blocks, &eta0(), fresh());
+    let verdict =
+        verify_watched_window(watched(0), &low, REQUIRE_THROUGH, &blocks, &eta0(), fresh());
     assert!(
         matches!(
             verdict,
@@ -338,7 +405,14 @@ fn stale_tip_yields_stalled_tip_too_old() {
         slot_now: 128_046_016 + 1_000_000,
         max_lag: 100,
     };
-    let verdict = verify_watched_window(watched(0), &anchor(), &blocks, &eta0(), stale);
+    let verdict = verify_watched_window(
+        watched(0),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        stale,
+    );
     assert!(
         matches!(
             verdict,
@@ -368,7 +442,14 @@ fn swapped_body_in_window_yields_stalled_never_unspent() {
     spliced.extend_from_slice(&blocks[1][spans1.tx_bodies.end..]);
     blocks[1] = spliced;
 
-    let verdict = verify_watched_window(watched(0), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(0),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     assert!(
         matches!(
             verdict,
@@ -390,7 +471,14 @@ fn swapped_body_in_window_yields_stalled_never_unspent() {
 fn phantom_output_index_yields_stalled_never_unspent() {
     let blocks = preprod_window();
     // beaa9166 has three outputs (0, 1, 2); index 5 was never created.
-    let verdict = verify_watched_window(watched(5), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(5),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     assert!(
         matches!(
             verdict,
@@ -408,7 +496,14 @@ fn phantom_output_index_yields_stalled_never_unspent() {
 #[test]
 fn empty_window_yields_stalled() {
     let blocks: Vec<Vec<u8>> = Vec::new();
-    let verdict = verify_watched_window(watched(0), &anchor(), &blocks, &eta0(), fresh());
+    let verdict = verify_watched_window(
+        watched(0),
+        &anchor(),
+        REQUIRE_THROUGH,
+        &blocks,
+        &eta0(),
+        fresh(),
+    );
     assert!(matches!(
         verdict,
         WatchVerdict::Stalled {
