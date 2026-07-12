@@ -197,9 +197,13 @@ pub struct VerifiedChain {
     /// Number of certificates verified.
     pub length: usize,
     /// The tip certificate's Cardano-transactions commitment, when it certifies
-    /// one — the genesis-authenticated Merkle root (and its certified height) a
-    /// UTxO inclusion proof is recomputed against. `None` when the tip certifies a
-    /// stake distribution rather than a transaction set.
+    /// one — the Merkle root (and its certified height) a UTxO inclusion proof is
+    /// recomputed against. `None` when the tip certifies a stake distribution
+    /// rather than a transaction set. Genesis-authenticated **only** when this
+    /// `VerifiedChain` came from [`verify_chain_anchored`]; from a plain
+    /// [`verify_chain`] the root is chain-integrity-checked but NOT genesis-anchored
+    /// (a self-consistent cert with a resealed hash survives), so a caller wiring
+    /// this into a UTxO read must anchor the chain to the genesis key first.
     pub certified_transactions: Option<CertifiedTransactions>,
 }
 
@@ -264,6 +268,11 @@ impl std::error::Error for ChainError {}
 /// The AVK binding is what stops a self-consistent forged child — one that links
 /// correctly but carries an attacker's signer set — from being accepted; it is
 /// the chain of trust the genesis anchor terminates and the multi-signature signs.
+///
+/// The returned [`VerifiedChain::certified_transactions`] carries integrity only,
+/// NOT genesis-authentication: this function does not check the root is the genesis
+/// anchor, so a self-consistent cert (its own hash resealed) surfaces the root it
+/// claims. Use [`verify_chain_anchored`] before trusting that root in a UTxO read.
 pub fn verify_chain(certs: &[Certificate]) -> Result<VerifiedChain, ChainError> {
     if certs.is_empty() {
         return Err(ChainError::Empty);

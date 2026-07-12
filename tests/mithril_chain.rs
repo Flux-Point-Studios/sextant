@@ -23,7 +23,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use sextant::mithril::{Certificate, CertifiedTransactions, ChainError, verify_chain};
+use sextant::mithril::{
+    Certificate, CertifiedTransactions, ChainError, ProtocolMessagePartKey, verify_chain,
+};
 
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -114,9 +116,11 @@ fn harvested_segment_is_an_avk_bound_chain() {
 /// Cardano-transactions commitment — the Merkle root a proof-based UTxO inclusion
 /// check recomputes against, bound to the `(epoch, block_number)` it certifies —
 /// from the same hashed content the integrity check already pins. The harvested
-/// tip is a real `CardanoTransactions` certificate, so on a `verify_chain`
-/// (and thus `verify_chain_anchored`) result this root is genesis-authenticated,
-/// not a provider assertion. Recompute against it, never trust a supplied root.
+/// tip is a real `CardanoTransactions` certificate; under `verify_chain_anchored`
+/// this same root is genesis-authenticated (this test exercises the surfacing on
+/// `verify_chain`, whose value is integrity-checked; the boundary test below pins
+/// that plain `verify_chain` alone does not authenticate it). Recompute against
+/// it, never trust a provider-supplied root.
 #[test]
 fn verified_chain_surfaces_the_certified_transaction_root() {
     let ordered = ordered_root_to_tip(harvested_certs());
@@ -151,6 +155,33 @@ fn surfaced_root_comes_from_the_tip_certificates_hashed_content() {
             .certified_transactions
             .as_ref(),
         tip.certified_transactions().as_ref(),
+    );
+}
+
+/// The honesty boundary the field doc names: plain `verify_chain` genesis-anchors
+/// nothing, so a self-consistent certificate — its own `hash` resealed over a
+/// forged `cardano_transactions_merkle_root` — passes the integrity check and
+/// surfaces the FORGED root. This is exactly the self-consistent forgery the
+/// genesis anchor + STM multi-signature (`verify_chain_anchored`) exist to reject,
+/// and why a UTxO read must anchor the chain before trusting the surfaced root
+/// rather than treat a bare `verify_chain` result as authenticated.
+#[test]
+fn plain_verify_chain_does_not_genesis_authenticate_the_surfaced_root() {
+    let ordered = ordered_root_to_tip(harvested_certs());
+    let mut tip = ordered.last().unwrap().clone();
+    let forged_root = "deadbeef".repeat(8); // 64 hex chars, not the certified root
+    tip.protocol_message.message_parts.insert(
+        ProtocolMessagePartKey::CardanoTransactionsMerkleRoot,
+        forged_root.clone(),
+    );
+    tip.hash = tip.compute_hash(); // reseal integrity; only the committed root is a lie
+
+    let verified =
+        verify_chain(std::slice::from_ref(&tip)).expect("resealed cert passes integrity");
+    // Integrity-only path surfaces the attacker-chosen root — NOT authenticated.
+    assert_eq!(
+        verified.certified_transactions.map(|c| c.merkle_root),
+        Some(forged_root),
     );
 }
 
