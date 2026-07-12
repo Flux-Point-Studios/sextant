@@ -9,6 +9,7 @@
 //!   cargo run -p harvest boundary        # fetch a run spanning the 299→300 turn
 //!   cargo run -p harvest mithril         # walk the cert chain tip→(12 hops)
 //!   cargo run -p harvest mithril-genesis # walk tip→genesis, pin the trust root
+//!   cargo run -p harvest tx-cbor <hash>  # raw tx BODY CBOR (hashes to the txid)
 //!
 //! Recent settled block points come from Koios (keyless JSON); the raw
 //! `[era, block]` CBOR comes from the relay via the node-to-node BlockFetch
@@ -132,8 +133,102 @@ async fn main() -> Result<()> {
         Some("boundary") => fetch_boundary().await,
         Some("mithril") => fetch_mithril().await,
         Some("mithril-genesis") => fetch_mithril_genesis().await,
+        Some("tx-cbor") => fetch_tx_body().await,
         _ => fetch_blocks(&Network::preprod(), want_arg(1)).await,
     }
+}
+
+/// One `tx_info` row: the block a transaction was minted in.
+#[derive(Deserialize)]
+struct TxInfoRow {
+    block_hash: String,
+    absolute_slot: u64,
+}
+
+/// Harvest the raw transaction BODY CBOR — the exact bytes whose Blake2b-256 is the
+/// transaction id — for a certified transaction, so the UTxO-read verifier can hash
+/// it to the id the Mithril inclusion proof attests and decode its outputs on
+/// Sextant's own path. The body span is pallas's retained `KeepRaw` original bytes
+/// (`Conway` era), never a re-encoding, so its hash matches the on-chain id exactly.
+/// Preprod only (the tx-proof fixtures come from release-preprod).
+async fn fetch_tx_body() -> Result<()> {
+    let txhash = std::env::args()
+        .nth(2)
+        .context("usage: harvest tx-cbor <txhash>")?;
+    let out_dir = vectors_dir()?;
+    let client = reqwest::Client::new();
+
+    // 1. Locate the tx's block (a chain point) via Koios.
+    eprintln!("harvest: tx_info for {txhash}");
+    let rows: Vec<TxInfoRow> = client
+        .post(format!("{KOIOS}/tx_info"))
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "_tx_hashes": [txhash],
+            "_inputs": false,
+            "_metadata": false,
+            "_assets": false,
+            "_withdrawals": false,
+            "_certs": false,
+            "_scripts": false,
+            "_bytecode": false,
+        }))
+        .timeout(std::time::Duration::from_secs(25))
+        .send()
+        .await
+        .context("koios tx_info request")?
+        .error_for_status()?
+        .json()
+        .await
+        .context("koios tx_info json")?;
+    let row = rows.first().context("koios returned no tx_info")?;
+    let point = Point::Specific(row.absolute_slot, hex::decode(&row.block_hash)?);
+    eprintln!(
+        "harvest: tx in block {} slot {}; blockfetching",
+        row.block_hash, row.absolute_slot
+    );
+
+    // 2. BlockFetch the single containing block.
+    let mut peer = PeerClient::connect(RELAY, PREPROD_MAGIC)
+        .await
+        .context("connect relay")?;
+    let blocks = peer
+        .blockfetch()
+        .fetch_range((point.clone(), point))
+        .await
+        .context("blockfetch")?;
+    peer.abort().await;
+    let raw = blocks.first().context("blockfetch returned no block")?;
+
+    // 3. Find the tx and extract its Conway body's retained raw bytes.
+    let block = MultiEraBlock::decode(raw).context("pallas decode block")?;
+    let mut body: Option<Vec<u8>> = None;
+    for tx in block.txs() {
+        if hex::encode(tx.hash()) != txhash {
+            continue;
+        }
+        body = match &tx {
+            pallas_traverse::MultiEraTx::Conway(x) => Some(x.transaction_body.raw_cbor().to_vec()),
+            _ => anyhow::bail!("tx {txhash} is not a Conway transaction"),
+        };
+        // Cross-check the retained span hashes to the id we searched for.
+        ensure!(
+            hex::encode(tx.hash()) == txhash,
+            "pallas tx hash disagrees with the requested id"
+        );
+        break;
+    }
+    let body =
+        body.with_context(|| format!("tx {txhash} not found in block {}", row.block_hash))?;
+
+    let path = out_dir.join("mithril-tx-body.cbor");
+    std::fs::write(&path, hex::encode(&body)).context("write tx body")?;
+    println!(
+        "harvested tx body ({} bytes) for {txhash} -> {}",
+        body.len(),
+        path.display()
+    );
+    Ok(())
 }
 
 /// Walk the preprod Mithril certificate chain tip→(genesis | `MITHRIL_HOPS`
