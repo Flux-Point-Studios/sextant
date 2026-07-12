@@ -296,17 +296,30 @@ needs a row in Evidence.
       dev-only differential vs `ckb-merkle-mountain-range` (the crate mithril rides). Negatives: a
       mutated proof-path node → `RootMismatch`; a tx-hash not in the proof → `NotIncluded`.
 - [ ] UTxO part 3 of 3 — `verify_utxo_read` + the honest verdict (CLOSES DoD line 5).
+      HARVEST DONE (operator, network seam): `tools/harvest tx-cbor <txhash>` (new mode) pulled
+      the raw transaction BODY CBOR for the golden tx `242f2037…a636` into
+      `tests/vectors/mithril-tx-body.cbor` (561 bytes) — the exact pallas `KeepRaw` body span, so
+      `blake2b256(body) == 242f2037…a636` (the certified txid; VERIFIED). `tx_bytes` IS this body
+      CBOR, so H is computed with NO span isolation: `H = hash::blake2b256(tx_bytes)`.
       `verify_utxo_read(tx_bytes, out_index, proof_bytes, certified_root, block_number) ->
-      Result<VerifiedOutput, _>`: hash the SUPPLIED `tx_bytes` → H (never trust a
-      provider-supplied H), `verify_tx_inclusion(H)`, decode `TxOut[out_index]` from the
-      certified bytes, return `VerifiedOutput { addr, value, datum, certified_at:
-      block_number, spend_status: SpendStatus::NotEstablished }`. The `spend_status` enum is
-      the honesty enforced in the type — uncoercible to "unspent" (no code path may narrow
-      it). NAMED negative (the DoD proof) `tampered_utxo_claim_is_rejected`: flip one
-      lovelace/datum byte in the `TxOut` → recomputed leaf no longer resolves into the
-      certified root → `Err(RootMismatch)`; variant: substitute tx-B's bytes under tx-A's
-      proof → rejected. See the "## Attacking next" spec for the full pinned design + the
-      honest-scope statement (proves provenance/inclusion, NOT unspent).
+      Result<VerifiedOutput, _>`: hash the SUPPLIED `tx_bytes` → H (NEVER a provider-supplied H),
+      `verify_tx_inclusion(H, proof_bytes, certified_root)`, then decode `TxOut[out_index]` from
+      the body map (Conway tx body = CBOR map; key 1 = outputs array; a Conway `TxOut` is a map
+      `{0: address_bytes, 1: value(coin uint | [coin, multiasset]), 2: datum_option?, 3:
+      script_ref?}`). Return `VerifiedOutput { address, lovelace, datum: Option<..>, certified_at:
+      block_number, spend_status: SpendStatus::NotEstablished }` — `spend_status` is the honesty
+      enforced in the TYPE (uncoercible to "unspent"; NO code path may narrow it; add an
+      honesty-guard test asserting the API never yields a positive-liveness value). The golden
+      fixture's outputs (for the positive test): idx 0 = a script address + `5_000_000` lovelace +
+      an inline datum; idx 1 = a payment address + `4_867_657_971` lovelace, no datum. `certified_at`
+      = the cert's `block_number` 4927469 (== proof `latest_block_number`). NAMED negative (the DoD
+      proof) `tampered_utxo_claim_is_rejected`: flip one lovelace/datum byte in `tx_bytes` → H
+      changes → H not among the proof's attested leaves → `Err(InclusionError::NotIncluded)` (the
+      hash-binding catches it BEFORE any root work — the honest variant, not `RootMismatch`);
+      variant: pass a DIFFERENT tx's body under this proof → same `NotIncluded`. `SpendStatus` +
+      `VerifiedOutput` live in the DEFAULT wasm-safe graph (no blst); the Conway TxOut decode is
+      Sextant's own minicbor path. See the "## Attacking next" spec for the honest-scope statement
+      (proves authentic-bytes + certified-inclusion + provenance, NOT unspent/liveness).
 
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
