@@ -31,6 +31,8 @@
 //! bytes hash to a value that is not a leaf of the proof and are rejected as
 //! not-included before any output is decoded.
 
+use std::collections::BTreeSet;
+
 use minicbor::Decoder;
 use minicbor::data::Type;
 
@@ -47,6 +49,23 @@ pub enum Datum {
     /// inside the `#6.24(bytes)` wrapper), which a consumer decodes as it needs.
     Inline(Vec<u8>),
 }
+
+/// A transaction outpoint: a reference to output `index` of transaction `tx_id` —
+/// the thing a spend consumes. `index` is a `u16` because a Conway
+/// `transaction_input` encodes it as `uint .size 2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OutPoint {
+    /// The 32-byte Blake2b-256 id of the transaction that created the output.
+    pub tx_id: [u8; 32],
+    /// The index of the output within that transaction.
+    pub index: u16,
+}
+
+/// The set of outpoints a transaction consumes: its inputs (body key 0) together
+/// with its collateral inputs (body key 13, drawn on only if the script phase
+/// fails, but a spend either way). Reference inputs (key 18) are read, not
+/// consumed, and are NOT members. A set, so a duplicated input collapses to one.
+pub type SpendSet = BTreeSet<OutPoint>;
 
 /// The spend verdict a read-path verifier can make. Deliberately has no `Unspent`
 /// variant today: the read path CANNOT establish liveness (see the module docs), so
@@ -153,6 +172,69 @@ pub fn verify_utxo_read(
         certified_at: block_number,
         spend_status: SpendStatus::NotEstablished,
     })
+}
+
+/// Decode the set of outpoints a Conway transaction consumes — its inputs
+/// (body key 0) and collateral inputs (key 13) — from the raw transaction-body
+/// CBOR. This is the forward spend-scan signal: an outpoint's presence here, in a
+/// body-committed block, is the on-chain evidence that it was spent.
+///
+/// A CBOR `set` is encoded either as a bare array or wrapped in tag 258
+/// (`#6.258`); both forms are accepted and decode identically. Every deviation —
+/// a non-map body, a malformed input, an output index wider than the protocol's
+/// `uint .size 2` — fails closed to [`UtxoError::MalformedTx`], because a spend a
+/// decoder silently drops is a spend a watcher would wrongly call unspent.
+pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
+    let mut d = Decoder::new(tx_bytes);
+    let entries = d
+        .map()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    let mut spends = SpendSet::new();
+    for _ in 0..entries {
+        match d.u64().map_err(|_| UtxoError::MalformedTx)? {
+            // key 0 = inputs, key 13 = collateral inputs — both are spends.
+            0 | 13 => decode_input_set(&mut d, &mut spends)?,
+            // key 18 = reference inputs (read, not consumed) and every other
+            // field are skipped.
+            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
+        }
+    }
+    Ok(spends)
+}
+
+/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped) into `spends`.
+fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), UtxoError> {
+    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
+        let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
+        if tag.as_u64() != 258 {
+            return Err(UtxoError::MalformedTx);
+        }
+    }
+    let count = d
+        .array()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    for _ in 0..count {
+        spends.insert(decode_outpoint(d)?);
+    }
+    Ok(())
+}
+
+/// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
+/// index : uint .size 2 ]`. An index wider than `u16` is out of protocol range.
+fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
+    if d.array()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?
+        != 2
+    {
+        return Err(UtxoError::MalformedTx);
+    }
+    let tx_id = read_hash32(d)?;
+    let index = u16::try_from(d.u64().map_err(|_| UtxoError::MalformedTx)?)
+        .map_err(|_| UtxoError::MalformedTx)?;
+    Ok(OutPoint { tx_id, index })
 }
 
 /// Decode output `out_index` from a Conway transaction-body CBOR map (key 1 =
@@ -391,5 +473,132 @@ mod tests {
             decode_output(&body_with_output(&out), 1),
             Err(UtxoError::OutputIndexOutOfRange)
         );
+    }
+
+    // ---- decode_spends (the tx-INPUT decoder) ----
+
+    /// A 32-byte transaction id filled with `b`.
+    fn txid(b: u8) -> [u8; 32] {
+        [b; 32]
+    }
+
+    /// A Conway `transaction_input` = `[ $hash32, index ]`, `index` supplied as its
+    /// raw CBOR so a test can encode an out-of-protocol-range index.
+    fn input_cbor(id: &[u8; 32], index_cbor: &[u8]) -> Vec<u8> {
+        let mut v = vec![0x82, 0x58, 0x20];
+        v.extend_from_slice(id);
+        v.extend_from_slice(index_cbor);
+        v
+    }
+
+    /// A bare-array `set` of inputs: `[ input, .. ]`.
+    fn bare_set(inputs: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = vec![0x80 | inputs.len() as u8];
+        for i in inputs {
+            v.extend_from_slice(i);
+        }
+        v
+    }
+
+    /// A tag-258 wrapped `set` of inputs: `#6.258([ input, .. ])`.
+    fn tagged_set(inputs: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = vec![0xd9, 0x01, 0x02];
+        v.extend_from_slice(&bare_set(inputs));
+        v
+    }
+
+    /// A one-field tx body `{ key: value }`.
+    fn body1(key: u8, value: &[u8]) -> Vec<u8> {
+        let mut v = vec![0xa1, key];
+        v.extend_from_slice(value);
+        v
+    }
+
+    /// A two-field tx body `{ k0: v0, k1: v1 }`.
+    fn body2(k0: u8, v0: &[u8], k1: u8, v1: &[u8]) -> Vec<u8> {
+        let mut v = vec![0xa2, k0];
+        v.extend_from_slice(v0);
+        v.push(k1);
+        v.extend_from_slice(v1);
+        v
+    }
+
+    #[test]
+    fn tag258_and_bare_array_decode_to_the_same_outpoint() {
+        let id = txid(0xab);
+        let inp = input_cbor(&id, &[0x03]); // index 3
+        let bare = decode_spends(&body1(0x00, &bare_set(std::slice::from_ref(&inp)))).unwrap();
+        let tagged = decode_spends(&body1(0x00, &tagged_set(std::slice::from_ref(&inp)))).unwrap();
+        let expected: SpendSet = [OutPoint {
+            tx_id: id,
+            index: 3,
+        }]
+        .into_iter()
+        .collect();
+        assert_eq!(bare, expected);
+        assert_eq!(tagged, expected);
+        assert_eq!(bare, tagged);
+    }
+
+    #[test]
+    fn collateral_key13_is_a_spend() {
+        let id = txid(0xcd);
+        let body = body1(0x0d, &bare_set(&[input_cbor(&id, &[0x00])])); // key 13
+        let expected: SpendSet = [OutPoint {
+            tx_id: id,
+            index: 0,
+        }]
+        .into_iter()
+        .collect();
+        assert_eq!(decode_spends(&body).unwrap(), expected);
+    }
+
+    #[test]
+    fn reference_input_key18_is_not_a_spend() {
+        let spent = txid(0x01);
+        let referenced = txid(0x02);
+        let body = body2(
+            0x00,
+            &bare_set(&[input_cbor(&spent, &[0x00])]),
+            0x12, // key 18 = reference_inputs (read, not consumed)
+            &bare_set(&[input_cbor(&referenced, &[0x00])]),
+        );
+        let spends = decode_spends(&body).unwrap();
+        assert!(spends.contains(&OutPoint {
+            tx_id: spent,
+            index: 0
+        }));
+        assert!(!spends.contains(&OutPoint {
+            tx_id: referenced,
+            index: 0
+        }));
+        assert_eq!(spends.len(), 1);
+    }
+
+    #[test]
+    fn malformed_input_body_is_malformed_tx() {
+        // key 0's set element is a bare uint, not a `[ $hash32, index ]` pair.
+        let body = body1(0x00, &[0x81, 0x00]);
+        assert_eq!(decode_spends(&body), Err(UtxoError::MalformedTx));
+    }
+
+    #[test]
+    fn overwide_index_is_malformed_tx() {
+        let id = txid(0x07);
+        // index 65536 = 0x1a 00 01 00 00, one past u16::MAX.
+        let over = body1(
+            0x00,
+            &bare_set(&[input_cbor(&id, &[0x1a, 0x00, 0x01, 0x00, 0x00])]),
+        );
+        assert_eq!(decode_spends(&over), Err(UtxoError::MalformedTx));
+        // The exact u16 boundary (65535 = 0x19 ff ff) is accepted.
+        let max = body1(0x00, &bare_set(&[input_cbor(&id, &[0x19, 0xff, 0xff])]));
+        let expected: SpendSet = [OutPoint {
+            tx_id: id,
+            index: u16::MAX,
+        }]
+        .into_iter()
+        .collect();
+        assert_eq!(decode_spends(&max).unwrap(), expected);
     }
 }

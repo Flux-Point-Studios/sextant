@@ -472,7 +472,7 @@ needs a row in Evidence.
       spending block) STRUCTURALLY collapses to `Stalled` (can't advance the tip), never a false
       `Unspent`. Build core over committed fixtures; DEFER the live relay follower (transport, a
       provider-of-bytes never a verdict). Slices:
-  - [ ] Tier1 slice 1 — `decode_spends` (tx-INPUT decoder). In `src/utxo.rs`, sibling of
+  - [x] Tier1 slice 1 — `decode_spends` (tx-INPUT decoder). In `src/utxo.rs`, sibling of
         `decode_output`: decode Conway tx body key 0 (`set<transaction_input>`, each `[tx_id:hash32,
         index:uint]`) AND key 13 (collateral) into a `SpendSet`; handle the TAG-258 DUALITY
         (`#6.258([..])` OR bare array — accept both), reject an index wider than u16, fail closed to
@@ -480,6 +480,20 @@ needs a row in Evidence.
         `collateral_key13_is_a_spend`, `reference_input_key18_is_NOT_a_spend`,
         `malformed_input_body_is_MalformedTx`, `overwide_index_is_MalformedTx`. No harvest (synthetic
         CBOR + existing fixtures).
+        SHIPPED (harness-green locally; CI pending on the PR): `pub struct OutPoint{tx_id:[u8;32],
+        index:u16}` + `pub type SpendSet = BTreeSet<OutPoint>` + `pub fn decode_spends(tx_bytes) ->
+        Result<SpendSet, UtxoError>` in the DEFAULT wasm-safe graph (0 blst, 0 new deps; reuses
+        `read_hash32`). Scans the definite body map; key 0 ∪ key 13 → `decode_input_set` (peeks
+        `Type::Tag`==258 or a bare array, both decode identically) → `decode_outpoint` (`u16::try_from`
+        rejects an index wider than `uint .size 2`); key 18 (reference_inputs) and every other field
+        are `d.skip()`ped — a reference input is read, not consumed. Every deviation fails closed to
+        `MalformedTx`. The 5 named unit tests (uppercase in `NOT`/`MalformedTx` normalized to
+        snake_case for the `-D warnings` `non_snake_case` lint; intent unchanged) are GREEN, PLUS an
+        added real-fixture differential `tests/utxo.rs::decode_spends_matches_pallas_inputs_on_the_
+        golden_tx` — the golden `mithril-tx-body.cbor`'s consumed outpoints match pallas's own
+        `inputs`+`collateral` sets byte-for-byte (the same cross-decoder oracle discipline
+        `decode_output` carries; closes open-risk #3 tag-258/collateral → missed-spend on REAL bytes).
+        No FFI change (header drift-gate clean). Next: slice 2 (body-commitment bind).
   - [ ] Tier1 slice 2 — body-commitment BIND. In `src/header.rs`: stop `d.skip()`-ing header_body
         idx 7 (`block_body_hash`), capture its 32 bytes + the RAW spans of block[1..4]. New bind
         (in `src/window.rs` or `src/chain.rs`): recompute `hashAlonzoSegWits =
@@ -602,8 +616,29 @@ needs a row in Evidence.
 | 2026-07-12 20:05 UTC | Independent red-team of the beyond-DoD FFI export (PR #23): VERDICT SHIP; one MEDIUM (defense-in-depth harness-grep gap) fixed + proven in the same push | Independent `fluxpoint-loop:red-team-reviewer` on `git diff main...HEAD`: all six pinned invariants verified sound — (1) marshalling/memory-safety: `copy_min` never derefs a null/cap-0 buffer and never copies a partial prefix on `-3`; struct written strictly LAST on Ok, once on `-3`; (2) honest-scope: `spend_status` hardcoded `SEXTANT_SPEND_NOT_ESTABLISHED` on every path, no positive-liveness constant, header 0 `unspent`/`spent` tokens, `SpendStatus` `#[non_exhaustive]` + same-crate exhaustive-match tripwire; (3) certified-root provenance: only one Mithril export, authenticates to genesis before surfacing `out_ct_root`, `merkle_root_bytes()` fails closed (→327, `has_ct` never set) — no sibling injection path; (4) null/empty/panic guards incl. empty-proof→402 (not pre-rejected) + the 3 new mithril out-ptrs; (5) feature-gate: core export ungated + wasm-clean, 0 blst/mithril_stm in the header, ABI 1→2 threaded; (6) status bands exhaustive 400–411 with non-empty messages. Only finding — MEDIUM, no reachable false-accept (type-system tripwire + hardcoded constant are the primary guarantee): the honest-scope grep `\b(un)?spent\b` could not catch a `_`-joined `#define SEXTANT_SPEND_UNSPENT`/`_SPENT` (regex `_` is a word char, so no `\b` fires before `UNSPENT`) — the exact leak the gate exists to catch. FIXED: widened to a bare-substring `(un)?spent` match; PROVEN false-positive-free (0 matches on the clean header; the 10 legit `spend`/`SEXTANT_SPEND_*` tokens contain no `spent` substring) AND that it now FIRES (2 matches) on an injected `SEXTANT_SPEND_UNSPENT`/`_SPENT` header — the gate catches what it exists to catch. `scripts/harness.sh --full` exit 0 after the fix. VERDICT SHIP. |
 | 2026-07-12 20:35 UTC | Independent verification of the autonomously-merged C-ABI export (PR #23, `17b270b`): VERDICT SHIP — safe variable-length marshalling, honest scope survives the C boundary, blst-free, deterministic | A SECOND independent `fluxpoint-loop:red-team-reviewer` (the loop's own was also SHIP) with EMPIRICAL checks: `nm` on the default-build `libsextant.a`/`.lib` shows `sextant_verify_utxo_read` present + ZERO `blst`/`mithril_stm`/`sextant_mithril_*` symbols; `cargo build --release --target wasm32` clean with the core export + 0 blst; `include/sextant.h` byte-identical to a fresh `make header` (drift gate real); header has 0 `(un)?spent` substrings + only `SEXTANT_SPEND_NOT_ESTABLISHED=0`; the widened harness grep fires on an injected `SEXTANT_SPEND_UNSPENT`/`_SPENT`. Marshalling traced: `copy_min` guards null/cap-0 + copies NOTHING (not a truncated prefix) on `-3`, `*out`+detail written LAST on every terminal path, no reachable OOB; honest scope holds (single constructor hardcodes `NotEstablished`, `#[non_exhaustive]` compile-tripwire, no positive-liveness constant); certified root honest-by-construction (only from the genesis-authenticated verify; malformed→327 before any out-write; None→has_ct=0). Operator flaky check: `--test ffi --test utxo --test inclusion` ×3 = 39 tests deterministic; 134 tests all-features. One LOW (the pre-existing `sextant_status_message` copies a truncated prefix on an undersized cap — the correct strlcpy-style contract for a LOG string, never verdict-bearing) → no fix needed. All four Woodpecker contexts green on merged main. **The C-ABI/WASM primitive is genuinely consumable end-to-end (a non-Rust consumer runs the verified read); the deferred FFI export is closed.** |
 
+| 2026-07-12 20:05 UTC | BEYOND-DoD v0.2 Tier1 slice 1 (DoD stays DONE): `decode_spends` — the tx-INPUT decoder, the forward spend-scan signal — decodes a Conway body's consumed outpoints (key 0 inputs ∪ key 13 collateral, excluding key 18 reference inputs) on Sextant's own minicbor path, tag-258/bare-array duality handled, fail-closed | TDD: added the 5 named unit tests referencing not-yet-existing `decode_spends`/`OutPoint`/`SpendSet` → RED (`cargo test --lib utxo`: `cannot find type SpendSet` / `cannot find struct OutPoint`), then the minimum impl → GREEN. `pub struct OutPoint{tx_id:[u8;32], index:u16}` + `pub type SpendSet=BTreeSet<OutPoint>` + `pub fn decode_spends(&[u8])->Result<SpendSet,UtxoError>` in `src/utxo.rs`, DEFAULT wasm-safe graph (0 blst, 0 new deps, reuses `read_hash32`): scans the definite body map, key 0∪13 → `decode_input_set` (peeks `Type::Tag`==258 OR a bare array, both decode identically) → `decode_outpoint` (`u16::try_from` rejects an index wider than `uint .size 2`); key 18 + every other field `d.skip()`ped. Unit tests GREEN: `tag258_and_bare_array_decode_to_the_same_outpoint`, `collateral_key13_is_a_spend`, `reference_input_key18_is_not_a_spend` (only the spent input, not the referenced one), `malformed_input_body_is_malformed_tx` (a bare-uint set element), `overwide_index_is_malformed_tx` (65536→`MalformedTx`, 65535→Ok at `u16::MAX`) — the spec's uppercase `NOT`/`MalformedTx` normalized to snake_case for the `-D warnings` `non_snake_case` lint, intent unchanged. PLUS an added real-fixture differential `tests/utxo.rs::decode_spends_matches_pallas_inputs_on_the_golden_tx`: the golden `mithril-tx-body.cbor`'s consumed outpoints equal pallas's own decoded `inputs`+`collateral` sets byte-for-byte (non-empty; the same cross-decoder oracle every sibling decoder in this file carries — closes open-risk #3 tag-258/collateral → missed-spend on REAL bytes, the cardinal false-Unspent source). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy `--all-targets --all-features -D warnings`, release, `cargo test --all-features` = 15 suites incl. `utxo`=8 (+1) and lib `utxo::tests`=13 (+5), wasm32 build, header drift-gate + leak/honest-scope greps; 0 failure markers). One clippy fix (`cloned_ref_to_slice_refs` → `std::slice::from_ref`). No FFI/`Cargo`/`.woodpecker`/header change (drift-gate clean); default+wasm graph untouched. PR + red-team next |
+| 2026-07-12 20:05 UTC | Independent red-team of Tier1 slice 1 (PR #TBD): VERDICT TBD | pending `fluxpoint-loop:red-team-reviewer` on the diff |
+
 ## Notes for the next iteration
-State (2026-07-12, latest — beyond-DoD FFI export shipped): **STATUS: DONE holds.** This iteration
+State (2026-07-12, latest — beyond-DoD Tier1 slice 1 `decode_spends` shipped): **STATUS: DONE holds.**
+This iteration shipped the first build slice of the operator-ratified BEYOND-DoD v0.2 flagship
+(Windowed-unspent Tier 1): `decode_spends`, the tx-INPUT decoder, in the default wasm-safe graph.
+It decodes a Conway tx body's consumed outpoints — key 0 inputs ∪ key 13 collateral, EXCLUDING key 18
+reference inputs (read, not consumed) — handling the CBOR set tag-258/bare-array duality and rejecting
+an index wider than `u16`, failing closed to `MalformedTx` on any deviation. This is the forward
+spend-scan primitive slice 3 (`verify_watched_window`) will compose: an outpoint's presence here, in a
+body-committed block, is the on-chain evidence it was spent. Proven by 5 synthetic-CBOR unit tests +
+a pallas differential over the real golden tx body (closes the cardinal "missed-spend → false Unspent"
+risk on real bytes). Harness green locally; the C smoke leg is unchanged (no FFI touched this slice).
+**Next slice = Tier1 slice 2 — the body-commitment BIND** (the CRUX / main red-team surface): stop
+`d.skip()`-ing header_body idx 7 (`block_body_hash`), capture it + the RAW block[1..4] spans, and
+require `blake2b256(blake2b256(raw tx_bodies) ‖ blake2b256(raw witness_sets) ‖ blake2b256(raw aux) ‖
+blake2b256(raw invalid_txs)) == header idx 7` — binding the scanned bodies to the header-verified chain
+(hash the RAW spans VERBATIM, never a re-encode; Cardano CBOR is non-canonical). Uses the existing
+committed preprod block fixtures; tests `authentic_block_body_binds_to_its_header_commitment` +
+`swapped_body_fails_the_bind`. See the "## Attacking next" spec for the full pinned design.
+
+State (2026-07-12, earlier — beyond-DoD FFI export shipped): **STATUS: DONE holds.** This iteration
 shipped the last open Plan item — the beyond-DoD C-ABI `sextant_verify_utxo_read` export + the
 extended anchored verify (`out_ct_root`/`out_ct_block`/`out_has_ct`) + an end-to-end C consumer in
 `tests/smoke/smoke.c` — closing the deferred FFI export. The verified read is now the primitive a
