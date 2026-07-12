@@ -27,6 +27,46 @@ full() {
   cargo build --release
   cargo test --all-features
   cargo build --release --target wasm32-unknown-unknown
+  header_gate
+}
+
+# The C-ABI header (include/sextant.h) is the consumable boundary; guard it:
+#  * no native panic=abort (it would silently no-op the FFI catch_unwind guard and
+#    re-open the abort-the-host hole);
+#  * the committed header matches what cbindgen regenerates from src/ffi.rs;
+#  * the mithril prototype stays behind its #ifdef and no feature-gated crate's
+#    symbols leak into the header.
+header_gate() {
+  # Match both TOML string forms — basic ("abort") and literal ('abort') are
+  # semantically identical, so the guard must reject either.
+  if grep -Eq "^[[:space:]]*panic[[:space:]]*=[[:space:]]*['\"]abort['\"]" Cargo.toml; then
+    echo "harness: Cargo.toml sets panic=abort, which defeats the FFI panic guard" >&2
+    exit 1
+  fi
+
+  command -v cbindgen >/dev/null 2>&1 || cargo install cbindgen --version '^0.28' --locked
+
+  local generated
+  generated="$(mktemp)"
+  if ! cbindgen --config cbindgen.toml --crate sextant --lang c --output "$generated" 2>/dev/null; then
+    rm -f "$generated"
+    echo "harness: cbindgen failed to generate the C header" >&2
+    exit 1
+  fi
+  if diff -u include/sextant.h "$generated"; then
+    rm -f "$generated"
+  else
+    rm -f "$generated"
+    echo "harness: include/sextant.h is stale — run 'make header' and commit it" >&2
+    exit 1
+  fi
+
+  grep -q '#if defined(SEXTANT_MITHRIL)' include/sextant.h ||
+    { echo "harness: SEXTANT_MITHRIL guard missing from the C header" >&2; exit 1; }
+  if grep -Eiq 'blst|mithril_stm' include/sextant.h; then
+    echo "harness: a feature-gated crate token leaked into the C header" >&2
+    exit 1
+  fi
 }
 
 case "$mode" in
