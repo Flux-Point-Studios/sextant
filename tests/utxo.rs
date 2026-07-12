@@ -193,3 +193,45 @@ fn the_output_is_read_against_an_stm_authenticated_certified_root() {
     assert_eq!(out.certified_at, CERTIFIED_BLOCK);
     assert_eq!(out.spend_status, SpendStatus::NotEstablished);
 }
+
+/// Independent cross-decoder differential: pallas decodes the same golden transaction
+/// body and its `MultiEraOutput` accessors yield `{address, lovelace, datum-presence}`
+/// on a code path independent of Sextant's own minicbor `decode_output`. Parity on
+/// EVERY output is the oracle the rest of this library's verdicts carry (pallas for
+/// header/opcert/KES, cardano-crypto for VRF, ckb for the MMR proof) — so a future
+/// divergence from the ledger on some output shape is caught, not silently wrong.
+#[test]
+fn utxo_output_decode_matches_pallas_on_every_output() {
+    use pallas_codec::minicbor;
+    use pallas_primitives::conway::TransactionBody;
+    use pallas_traverse::{Era, MultiEraOutput};
+
+    let body_bytes = tx_body();
+    let body: TransactionBody =
+        minicbor::decode(&body_bytes).expect("pallas decodes the Conway body");
+    assert!(body.outputs.len() >= 2, "golden tx has both test outputs");
+
+    for i in 0..body.outputs.len() {
+        let out_bytes = minicbor::to_vec(&body.outputs[i]).expect("re-encode output");
+        let oracle = MultiEraOutput::decode(Era::Conway, &out_bytes).expect("pallas output");
+
+        let sextant = verify_utxo_read(&body_bytes, i, &proof_hex(), &root(), CERTIFIED_BLOCK)
+            .unwrap_or_else(|e| panic!("output {i} verifies: {e:?}"));
+
+        assert_eq!(
+            sextant.address,
+            oracle.address().expect("pallas address").to_vec(),
+            "output {i}: address disagrees with pallas",
+        );
+        assert_eq!(
+            sextant.lovelace,
+            oracle.value().coin(),
+            "output {i}: lovelace disagrees with pallas",
+        );
+        assert_eq!(
+            sextant.datum.is_some(),
+            oracle.datum().is_some(),
+            "output {i}: datum-presence disagrees with pallas",
+        );
+    }
+}
