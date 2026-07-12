@@ -463,9 +463,11 @@ needs a row in Evidence.
       proven value). `gate.rs` uses the new `CertifiedTransactions::merkle_root_bytes()` (2nd caller).
       No `.woodpecker` change (rides the existing cc+./smoke line). All under `scripts/harness.sh
       --full` exit 0.
-- [ ] BEYOND-DoD v0.2 flagship — Windowed-unspent Tier 1 (`Unspent{WatchedWindow}`), operator-ratified,
-      BUILD SLICE-BY-SLICE (red-team gate each). Design pinned by a spec workflow (see the full
-      "## Attacking next" spec). The honest verdict: no input spending a watched outpoint appears in
+- [x] BEYOND-DoD v0.2 flagship — Windowed-unspent Tier 1 (`Unspent{WatchedWindow}`), operator-ratified,
+      BUILD SLICE-BY-SLICE (red-team gate each) — COMPLETE 2026-07-13: all five slices `[x]` below,
+      each independently red-team-gated; the C-ABI/WASM surface + `windowed_spend_gate` shipped.
+      Design pinned by a spec workflow (see the full
+      "## Reference (COMPLETE)" spec). The honest verdict: no input spending a watched outpoint appears in
       any block body of a header-verified, hash-linked, GAP-FREE, BODY-COMMITTED segment from the
       Mithril anchor to a verified tip, under (a) Mithril-quorum + (b) data-completeness assumptions,
       follower live — NEVER absolute/eternal/tip-state. The adversary's only evasion (withhold the
@@ -624,8 +626,10 @@ needs a row in Evidence.
 - BEYOND-DoD v0.3 — THE DEFERRED MAP, SCOPED (2026-07-13, design workflow: 3 design agents grounded
   in the repo + 3 adversarial critics; ALL THREE designs took critique fixes — 3 CRITICALs caught at
   DESIGN time: an unsound height-only region upgrade, a dangling producer-less SpendStatus constant,
-  a zero-threshold committee-pin forgery. The specs below are the AMENDED versions. Operator ratifies
-  sequencing; recommended order F → A → N-landing (N's note ships immediately).
+  a zero-threshold committee-pin forgery. The specs below are the AMENDED versions. SEQUENCING
+  OPERATOR-RATIFIED 2026-07-13: **Epic F first** (F1..F6, one slice per loop iteration, independent
+  red-team gate each), then A, then N-landing when its upstream gates arm. N0's note is committed;
+  sending it upstream is a pending operator action.
 
   EPIC F — LIVE FOLLOWER (buildable NOW, zero external deps; turns Tier-1 into the product contract
   "escrow funded at certified anchor, no spend observed through verified tip, follower live" for
