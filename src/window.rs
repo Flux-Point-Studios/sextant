@@ -109,20 +109,22 @@ pub struct WindowAssumptions {
     pub data_complete: bool,
 }
 
-/// The trust basis an [`WatchVerdict::Unspent`] rests on — a forward-compatible ladder
-/// mirroring [`crate::utxo::SpendStatus`]. `#[non_exhaustive]` so a future stronger
-/// basis is additive and an external `match` can never silently read it as a windowed
-/// scan:
-/// * **Tier 1 — [`WatchBasis::WatchedWindow`] (today).** A header-verified,
-///   body-committed, gap-free window under [`WindowAssumptions`].
-/// * **Tier 2 — `CertifiedUnspent { epoch }` (reserved, CRYPTOGRAPHIC).** A future
-///   Mithril ledger-state certificate of unspent-ness.
-/// * **Tier 3 — `Attested { committee, at }` (reserved, ECONOMIC).** A committee
-///   attestation, NEVER coercible into the cryptographic tier.
+/// The trust basis an [`WatchVerdict::Unspent`] rests on. Today there is exactly one:
+/// [`WatchBasis::WatchedWindow`], a header-verified, body-committed, gap-free window
+/// under [`WindowAssumptions`]. `#[non_exhaustive]` so a future stronger WATCH basis
+/// is additive and an external `match` can never silently read a new basis as a
+/// windowed scan.
+///
+/// The full cross-operation trust-tier ladder (this windowed basis, then a
+/// cryptographic ledger-state tier, then an economic attested tier) is documented in
+/// ONE place — [`crate::utxo::SpendStatus`] — not re-enumerated here; a stronger tier,
+/// when it exists, surfaces as a new variant there and (if it can be established over a
+/// watch) as a new variant here, never as a silent coercion of `WatchedWindow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WatchBasis {
-    /// No spend observed across a verified window under the stamped assumptions.
+    /// No spend of the watched outpoint observed across a verified window, under the
+    /// stamped assumptions.
     WatchedWindow(WindowAssumptions),
 }
 

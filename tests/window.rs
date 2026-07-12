@@ -512,3 +512,241 @@ fn empty_window_yields_stalled() {
         }
     ));
 }
+
+// ---- BEYOND-DoD Tier1 slice 5: the C-ABI windowed watch verdict ----
+//
+// The `extern "C"` export computes the SAME three-valued verdict as the in-process
+// `verify_watched_window`, on the real 22-block preprod window, and marshals it into the
+// fixed `SextantWatchVerdict` struct across the boundary. The truncation-CRITICAL
+// regression is re-asserted here at the C ABI: a window short of `require_through` is
+// STALLED(WINDOW_TOO_SHORT), never a false no-spend.
+mod ffi_boundary {
+    use super::{
+        REQUIRE_THROUGH, SPENDING_TX, anchor, eta0, fresh, hash32, preprod_window, watched,
+    };
+    use sextant::ffi::{
+        SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE, SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM,
+        SEXTANT_WATCH_BASIS_WATCHED_WINDOW, SEXTANT_WATCH_NO_SPEND_OBSERVED,
+        SEXTANT_WATCH_SPEND_OBSERVED, SEXTANT_WATCH_STALL_BROKEN_SEGMENT,
+        SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT, SEXTANT_WATCH_STALLED, SextantStatus,
+        SextantWatchVerdict, sextant_verify_watched_window,
+    };
+    use sextant::utxo::OutPoint;
+    use std::ptr;
+
+    fn zeroed() -> SextantWatchVerdict {
+        // SAFETY: `SextantWatchVerdict` is a plain `#[repr(C)]` scalar aggregate.
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// Call the export over borrowed block slices and the watched outpoint, returning the
+    /// status code and the written verdict struct.
+    fn verify_window(
+        blocks: &[Vec<u8>],
+        watch: OutPoint,
+        require_through: u64,
+    ) -> (i32, SextantWatchVerdict) {
+        let ptrs: Vec<*const u8> = blocks.iter().map(|b| b.as_ptr()).collect();
+        let lens: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+        let e = eta0();
+        let f = fresh();
+        let mut out = zeroed();
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                blocks.len(),
+                e.as_ptr(),
+                anchor().block_number,
+                watch.tx_id.as_ptr(),
+                watch.index,
+                require_through,
+                f.slot_now,
+                f.max_lag,
+                &mut out,
+            )
+        };
+        (rc, out)
+    }
+
+    /// POSITIVE: the never-spent outpoint over the full verified window marshals to
+    /// `NO_SPEND_OBSERVED` with the basis, both assumption bits, and the as-of tip — and
+    /// every other-kind field zeroed.
+    #[test]
+    fn no_spend_observed_marshals_with_basis_and_assumptions() {
+        let blocks = preprod_window();
+        let (rc, v) = verify_window(&blocks, watched(0), REQUIRE_THROUGH);
+        assert_eq!(rc, SextantStatus::Ok as i32);
+        assert_eq!(v.kind, SEXTANT_WATCH_NO_SPEND_OBSERVED);
+        assert_eq!(v.basis, SEXTANT_WATCH_BASIS_WATCHED_WINDOW);
+        assert_eq!(
+            v.assumptions,
+            SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM | SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE,
+            "both assumptions surfaced on a no-spend verdict"
+        );
+        assert_eq!(v.anchor_height, 4_927_469);
+        assert_eq!(v.as_of_height, 4_921_937);
+        assert_eq!(v.as_of_slot, 128_046_016);
+        // Fields belonging to the other kinds are zeroed.
+        assert_eq!(v.stall_reason, 0);
+        assert_eq!(v.verified_through, 0);
+        assert_eq!(v.spend_at_height, 0);
+        assert_eq!(v.spend_at_slot, 0);
+        assert_eq!(v.spending_txid, [0u8; 32]);
+        assert_eq!(v._reserved, [0u8; 4]);
+    }
+
+    /// NEGATIVE (definite refuse): the spent outpoint marshals to `SPEND_OBSERVED` naming
+    /// the spending block and transaction id, with the no-spend fields zeroed.
+    #[test]
+    fn spend_observed_marshals_with_spending_txid() {
+        let blocks = preprod_window();
+        let (rc, v) = verify_window(&blocks, watched(1), REQUIRE_THROUGH);
+        assert_eq!(rc, SextantStatus::Ok as i32);
+        assert_eq!(v.kind, SEXTANT_WATCH_SPEND_OBSERVED);
+        assert_eq!(v.spend_at_height, 4_921_917);
+        assert_eq!(v.spending_txid, hash32(SPENDING_TX));
+        // The no-spend fields carry nothing.
+        assert_eq!(v.basis, 0);
+        assert_eq!(v.assumptions, 0);
+        assert_eq!(v.anchor_height, 0);
+        assert_eq!(v.as_of_height, 0);
+    }
+
+    /// THE TRUNCATION CRITICAL, at the C boundary: watching the spent outpoint but serving
+    /// only its creating block yields `STALLED(WINDOW_TOO_SHORT)` — NEVER a false
+    /// `NO_SPEND_OBSERVED` — because the tip is below the caller's `require_through` floor.
+    #[test]
+    fn truncated_window_stalls_window_too_short_never_no_spend() {
+        let full = preprod_window();
+        let truncated = vec![full[0].clone()];
+        let (rc, v) = verify_window(&truncated, watched(1), REQUIRE_THROUGH);
+        assert_eq!(rc, SextantStatus::Ok as i32);
+        assert_ne!(
+            v.kind, SEXTANT_WATCH_NO_SPEND_OBSERVED,
+            "a window short of require_through must never read as no-spend"
+        );
+        assert_eq!(v.kind, SEXTANT_WATCH_STALLED);
+        assert_eq!(v.stall_reason, SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT);
+        assert_eq!(
+            v.verified_through, 4_921_916,
+            "verified through the served tip"
+        );
+    }
+
+    /// A dropped mid-window block breaks the hash chain: `STALLED(BROKEN_SEGMENT)`, the
+    /// withheld-block evasion, surfaced across the boundary.
+    #[test]
+    fn dropped_block_stalls_broken_segment() {
+        let mut blocks = preprod_window();
+        blocks.remove(blocks.len() / 2);
+        let (rc, v) = verify_window(&blocks, watched(0), REQUIRE_THROUGH);
+        assert_eq!(rc, SextantStatus::Ok as i32);
+        assert_eq!(v.kind, SEXTANT_WATCH_STALLED);
+        assert_eq!(v.stall_reason, SEXTANT_WATCH_STALL_BROKEN_SEGMENT);
+    }
+
+    /// Every required null pointer and a zero `count` are caller errors, reported without
+    /// touching the verifier (and never a false no-spend).
+    #[test]
+    fn null_and_empty_guards() {
+        let blocks = preprod_window();
+        let ptrs: Vec<*const u8> = blocks.iter().map(|b| b.as_ptr()).collect();
+        let lens: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
+        let e = eta0();
+        let txid = hash32(super::WATCHED_TX);
+        let f = fresh();
+        let mut out = zeroed();
+        let null_err = SextantStatus::ErrNullPointer as i32;
+
+        // Null block_ptrs.
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptr::null(),
+                lens.as_ptr(),
+                blocks.len(),
+                e.as_ptr(),
+                anchor().block_number,
+                txid.as_ptr(),
+                0,
+                REQUIRE_THROUGH,
+                f.slot_now,
+                f.max_lag,
+                &mut out,
+            )
+        };
+        assert_eq!(rc, null_err);
+
+        // Null eta0.
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                blocks.len(),
+                ptr::null(),
+                anchor().block_number,
+                txid.as_ptr(),
+                0,
+                REQUIRE_THROUGH,
+                f.slot_now,
+                f.max_lag,
+                &mut out,
+            )
+        };
+        assert_eq!(rc, null_err);
+
+        // Null watched_txid.
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                blocks.len(),
+                e.as_ptr(),
+                anchor().block_number,
+                ptr::null(),
+                0,
+                REQUIRE_THROUGH,
+                f.slot_now,
+                f.max_lag,
+                &mut out,
+            )
+        };
+        assert_eq!(rc, null_err);
+
+        // Null out.
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                blocks.len(),
+                e.as_ptr(),
+                anchor().block_number,
+                txid.as_ptr(),
+                0,
+                REQUIRE_THROUGH,
+                f.slot_now,
+                f.max_lag,
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, null_err);
+
+        // Zero count -> empty input.
+        let rc = unsafe {
+            sextant_verify_watched_window(
+                ptrs.as_ptr(),
+                lens.as_ptr(),
+                0,
+                e.as_ptr(),
+                anchor().block_number,
+                txid.as_ptr(),
+                0,
+                REQUIRE_THROUGH,
+                f.slot_now,
+                f.max_lag,
+                &mut out,
+            )
+        };
+        assert_eq!(rc, SextantStatus::ErrEmptyInput as i32);
+    }
+}

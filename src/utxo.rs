@@ -108,9 +108,13 @@ impl CertifiedTransactions {
 /// `#[non_exhaustive]` marks this as a forward-compatible TRUST-TIER LADDER — a
 /// future tier is additive (a new variant), never a layout break, and an external
 /// `match` must carry a wildcard so a new tier can never be silently read as
-/// `NotEstablished`:
-/// * **Tier 1 — [`SpendStatus::NotEstablished`] (today).** Inclusion + provenance are
-///   proven; liveness is not, and cannot be, established by this path.
+/// `NotEstablished`. This is the ONE canonical home of the ladder; the windowed
+/// read-path ([`crate::window::WatchBasis`]) mirrors Tier 1 over a watch and defers
+/// here for the full enumeration rather than re-listing the tiers:
+/// * **Tier 1 — [`SpendStatus::NotEstablished`] (today, single-tx read).** Inclusion +
+///   provenance are proven; liveness is not, and cannot be, established by this path.
+///   The windowed watch path establishes the stronger "no spend across a verified
+///   window" evidence and surfaces it as [`crate::window::WatchBasis::WatchedWindow`].
 /// * **Tier 2 — `CertifiedUnspent { epoch }` (reserved, CRYPTOGRAPHIC).** A future
 ///   Mithril ledger-state certificate + Merkle proof of unspent-ness as of `epoch`.
 /// * **Tier 3 — `Attested { committee, at }` (reserved, ECONOMIC).** A Materios /
