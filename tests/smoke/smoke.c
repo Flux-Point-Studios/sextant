@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "sextant.h"
+#include "utxo_fixture.h"
 
 #define CHECK(cond)                                                            \
     do {                                                                       \
@@ -58,7 +59,61 @@ int main(void) {
     size_t n = sextant_status_message(rc, (uint8_t *)msg, sizeof msg);
     CHECK(n > 0);
 
-    printf("smoke: ok (abi=%u verify_segment rc=%d index=%lld header rc=%d msg=\"%s\")\n",
-           sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg);
+    /* ---- The core UTxO-read consumer: the C analogue of the Rust
+     * examples/verified_read_gate, over the same real preprod order. Compiled
+     * WITHOUT -DSEXTANT_MITHRIL, so it exercises the core export against the default
+     * no-blst static library. The certified root is a committed fixture here; the
+     * mithril compose that DERIVES it from a genesis-anchored verify is proven in
+     * tests/ffi.rs under --all-features (smoke.c can't include the mithril proto). */
+    SextantVerifiedOutput vout;
+    SextantErrorDetail vdetail = {0, 0};
+
+    /* Sizing probe: NULL buffers, caps 0 -> ErrBufferTooSmall with the true lengths
+     * (and nothing copied). */
+    int32_t rc_size = sextant_verify_utxo_read(
+        UTXO_TX_BODY, sizeof UTXO_TX_BODY, 0, UTXO_PROOF_HEX, sizeof UTXO_PROOF_HEX,
+        UTXO_CERTIFIED_ROOT, UTXO_BLOCK_NUMBER, &vout, NULL, 0, NULL, 0, &vdetail);
+    CHECK(rc_size == ErrBufferTooSmall);
+    CHECK(vout.address_len > 0);
+    CHECK(vout.datum_len == sizeof UTXO_EXPECTED_DATUM);
+
+    /* Resize to the reported lengths and retry -> Ok, with the authentic fields. */
+    uint8_t addr_buf[128];
+    uint8_t datum_buf[256];
+    CHECK(vout.address_len <= sizeof addr_buf);
+    CHECK(vout.datum_len <= sizeof datum_buf);
+    int32_t rc_ok = sextant_verify_utxo_read(
+        UTXO_TX_BODY, sizeof UTXO_TX_BODY, 0, UTXO_PROOF_HEX, sizeof UTXO_PROOF_HEX,
+        UTXO_CERTIFIED_ROOT, UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
+        datum_buf, sizeof datum_buf, &vdetail);
+    CHECK(rc_ok == Ok);
+    CHECK(vout.lovelace >= UTXO_EXPECTED_LOVELACE);
+    CHECK(vout.certified_at == UTXO_BLOCK_NUMBER);
+    CHECK(vout.datum_kind == 2); /* an inline datum */
+    CHECK(vout.datum_len == sizeof UTXO_EXPECTED_DATUM);
+    CHECK(memcmp(datum_buf, UTXO_EXPECTED_DATUM, vout.datum_len) == 0);
+    CHECK(vout.spend_status == SEXTANT_SPEND_NOT_ESTABLISHED);
+
+    /* Spoof-refuse: flip output 0's coin byte so the body no longer hashes to the
+     * certified leaf -> rejected as not-included (400), never a false accept. */
+    uint8_t spoof[sizeof UTXO_TX_BODY];
+    memcpy(spoof, UTXO_TX_BODY, sizeof UTXO_TX_BODY);
+    spoof[UTXO_TAMPER_COIN_OFFSET] ^= 0x01;
+    int32_t rc_spoof = sextant_verify_utxo_read(
+        spoof, sizeof spoof, 0, UTXO_PROOF_HEX, sizeof UTXO_PROOF_HEX,
+        UTXO_CERTIFIED_ROOT, UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
+        datum_buf, sizeof datum_buf, &vdetail);
+    CHECK(rc_spoof == UtxoInclusionNotIncluded);
+
+    /* Null guard: a null tx pointer is a caller error, not a crash. */
+    CHECK(sextant_verify_utxo_read(NULL, sizeof UTXO_TX_BODY, 0, UTXO_PROOF_HEX,
+                                   sizeof UTXO_PROOF_HEX, UTXO_CERTIFIED_ROOT,
+                                   UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
+                                   datum_buf, sizeof datum_buf, &vdetail) == ErrNullPointer);
+
+    printf("smoke: ok (abi=%u verify_segment rc=%d index=%lld header rc=%d msg=\"%s\" "
+           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d)\n",
+           sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg,
+           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof);
     return 0;
 }

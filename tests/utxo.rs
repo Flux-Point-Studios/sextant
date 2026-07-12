@@ -132,10 +132,9 @@ fn a_different_transactions_bytes_are_rejected_under_this_proof() {
 #[test]
 fn the_verdict_never_claims_liveness() {
     let out = verify_utxo_read(&tx_body(), 0, &proof_hex(), &root(), CERTIFIED_BLOCK).unwrap();
-    // Exhaustive: the only variant is `NotEstablished`; there is no `Unspent`.
-    match out.spend_status {
-        SpendStatus::NotEstablished => {}
-    }
+    // The verdict is the honest tier. The compile-time tripwire that no liveness
+    // tier exists lives in the crate's own unit tests: `SpendStatus` is
+    // `#[non_exhaustive]`, so an external exhaustive match is not permitted here.
     assert_eq!(out.spend_status, SpendStatus::NotEstablished);
 }
 

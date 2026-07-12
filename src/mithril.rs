@@ -185,6 +185,16 @@ pub struct CertifiedTransactions {
     pub block_number: u64,
 }
 
+impl CertifiedTransactions {
+    /// The certified transaction Merkle root as 32 raw bytes, ready to pass as the
+    /// `certified_root` of a UTxO inclusion check. `None` when the hex root is not
+    /// exactly 32 bytes — a malformed certificate, rejected fail-closed rather than
+    /// yielding a partial or garbage root.
+    pub fn merkle_root_bytes(&self) -> Option<[u8; 32]> {
+        decode_hex(&self.merkle_root)?.try_into().ok()
+    }
+}
+
 /// A hash-linked, AVK-bound certificate chain segment verified on Sextant's own
 /// path. Names the endpoints so a caller can anchor on the tip certificate hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
