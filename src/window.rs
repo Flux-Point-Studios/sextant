@@ -30,7 +30,7 @@ use minicbor::Decoder;
 use crate::chain::{self, ChainError};
 use crate::hash::blake2b256;
 use crate::header::{BlockBodySpans, DecodeError, HeaderView};
-use crate::utxo::{CertifiedTransactions, OutPoint, decode_spends};
+use crate::utxo::{CertifiedTransactions, OutPoint, decode_spends, output_exists};
 
 /// Why a block's transaction bodies did not bind to its header commitment.
 /// Untrusted bytes make every failure an ordinary recoverable outcome.
@@ -274,7 +274,9 @@ pub fn verify_watched_window(
         for body in body_spans {
             let tx = &block[body];
             let txid = blake2b256(tx);
-            if txid == watch.tx_id {
+            // Creation is observed only when the creating transaction actually produced
+            // an output at the watched index — a phantom index is never read as created.
+            if txid == watch.tx_id && output_exists(tx, watch.index as usize).unwrap_or(false) {
                 create_seen = true;
             }
             let Ok(spends) = decode_spends(tx) else {
@@ -342,7 +344,9 @@ fn tx_body_spans(block: &[u8], region: &Range<usize>) -> Result<Vec<Range<usize>
     let base = region.start;
     let mut d = Decoder::new(&block[region.clone()]);
     let count = d.array().map_err(|_| ())?.ok_or(())?;
-    let mut spans = Vec::with_capacity(count as usize);
+    // Each element is >= 1 byte, so the region length caps the true element count;
+    // clamp the pre-allocation so a hostile declared count cannot force a large alloc.
+    let mut spans = Vec::with_capacity(count.min(region.len() as u64) as usize);
     for _ in 0..count {
         let start = d.position();
         d.skip().map_err(|_| ())?;

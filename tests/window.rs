@@ -382,6 +382,28 @@ fn swapped_body_in_window_yields_stalled_never_unspent() {
     assert!(!matches!(verdict, WatchVerdict::Unspent { .. }));
 }
 
+/// A PHANTOM outpoint — the creating transaction is in the window, but it produced no
+/// output at the watched index — must not read as `Unspent`. Creation is bound to the
+/// output's actual existence, not merely the transaction's presence, so watching a
+/// never-created index yields `Stalled{CreationNotObserved}`.
+#[test]
+fn phantom_output_index_yields_stalled_never_unspent() {
+    let blocks = preprod_window();
+    // beaa9166 has three outputs (0, 1, 2); index 5 was never created.
+    let verdict = verify_watched_window(watched(5), &anchor(), &blocks, &eta0(), fresh());
+    assert!(
+        matches!(
+            verdict,
+            WatchVerdict::Stalled {
+                reason: StallReason::CreationNotObserved,
+                ..
+            }
+        ),
+        "a phantom outpoint must stall, got {verdict:?}",
+    );
+    assert!(!matches!(verdict, WatchVerdict::Unspent { .. }));
+}
+
 /// An empty window carries no verified tip and cannot answer.
 #[test]
 fn empty_window_yields_stalled() {

@@ -271,6 +271,20 @@ fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
     Ok(OutPoint { tx_id, index })
 }
 
+/// Whether Conway transaction body `tx_bytes` produced an output at `out_index` — the
+/// outputs array (key 1) has more than `out_index` entries. Binds a windowed "creation
+/// observed" to the outpoint's ACTUAL existence (the creating transaction really made
+/// an output at that index), not merely to the transaction's presence, so a phantom
+/// index is never read as created. Fail-closed: a malformed body is `Err`, never a
+/// phantom `Ok(true)`.
+pub fn output_exists(tx_bytes: &[u8], out_index: usize) -> Result<bool, UtxoError> {
+    match decode_output(tx_bytes, out_index) {
+        Ok(_) => Ok(true),
+        Err(UtxoError::OutputIndexOutOfRange) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// Decode output `out_index` from a Conway transaction-body CBOR map (key 1 =
 /// outputs). Untrusted CBOR, so a definite-map shape is required and every
 /// deviation fails closed.
