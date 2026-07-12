@@ -1,14 +1,16 @@
-//! Vector harvester: pull recent preprod block CBOR off a public relay into
-//! `tests/vectors/`, so the differential harness has real, current-era headers
-//! to check Sextant's decoder against. Run manually — not wired into CI.
+//! Vector harvester: pull recent preprod/mainnet block CBOR off a public relay
+//! into `tests/vectors/`, so the differential harness has real, current-era
+//! headers to check Sextant's decoder against. Run manually — not wired into CI.
 //!
-//!   cargo run -p harvest [count]         # fetch `count` (default 24) block vectors
-//!   cargo run -p harvest eta0            # backfill epoch-nonce sidecars for them
+//!   cargo run -p harvest [count]         # fetch `count` (default 24) preprod vectors
+//!   cargo run -p harvest eta0            # backfill preprod epoch-nonce sidecars
+//!   cargo run -p harvest mainnet [count] # fetch `count` mainnet block vectors
+//!   cargo run -p harvest mainnet-eta0    # backfill mainnet epoch-nonce sidecars
 //!   cargo run -p harvest boundary        # fetch a run spanning the 299→300 turn
 //!   cargo run -p harvest mithril         # walk the cert chain tip→(12 hops)
 //!   cargo run -p harvest mithril-genesis # walk tip→genesis, pin the trust root
 //!
-//! Recent settled block points come from Koios preprod (keyless JSON); the raw
+//! Recent settled block points come from Koios (keyless JSON); the raw
 //! `[era, block]` CBOR comes from the relay via the node-to-node BlockFetch
 //! mini-protocol. The `eta0` mode adds, next to each `preprod-<slot>.block`, a
 //! `preprod-<slot>.eta0` sidecar holding that block's epoch nonce (32-byte hex)
@@ -44,6 +46,53 @@ const GENESIS_VKEY_URL: &str = "https://raw.githubusercontent.com/input-output-h
 /// Skip the newest few blocks — near the tip they can still roll back.
 const SETTLE_SKIP: usize = 8;
 
+/// Mainnet harvest endpoints. Verifying leader-VRF + KES on real mainnet blocks
+/// closes the "from mainnet" half of DoD line 2 (the verifiers are network-agnostic
+/// given the block + its epoch nonce). Koios mainnet supplies settled points and
+/// epoch nonces; the raw `[era, block]` CBOR comes from a public IOG backbone relay.
+const MAINNET_RELAY: &str = "backbone.mainnet.cardanofoundation.org:3001";
+const MAINNET_KOIOS: &str = "https://api.koios.rest/api/v1";
+const MAINNET_MAGIC: u64 = 764_824_073;
+
+/// A network's harvest endpoints: the N2N relay + magic to BlockFetch raw
+/// `[era, block]` CBOR from, the Koios base for settled points and epoch nonces,
+/// and the vector-filename prefix. Two instances (preprod, mainnet) let the `block`
+/// and `eta0` harvest run against either network without duplicating the fetch path.
+#[derive(Clone, Copy)]
+struct Network {
+    relay: &'static str,
+    koios: &'static str,
+    magic: u64,
+    prefix: &'static str,
+}
+
+impl Network {
+    fn preprod() -> Self {
+        Network {
+            relay: RELAY,
+            koios: KOIOS,
+            magic: PREPROD_MAGIC,
+            prefix: "preprod",
+        }
+    }
+    fn mainnet() -> Self {
+        Network {
+            relay: MAINNET_RELAY,
+            koios: MAINNET_KOIOS,
+            magic: MAINNET_MAGIC,
+            prefix: "mainnet",
+        }
+    }
+}
+
+/// The block count from positional arg `n`, defaulting to 24.
+fn want_arg(n: usize) -> usize {
+    std::env::args()
+        .nth(n)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24)
+}
+
 #[derive(Deserialize)]
 struct KoiosBlock {
     abs_slot: u64,
@@ -77,11 +126,13 @@ fn vectors_dir() -> Result<PathBuf> {
 #[tokio::main]
 async fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
-        Some("eta0") => backfill_eta0().await,
+        Some("eta0") => backfill_eta0(&Network::preprod()).await,
+        Some("mainnet-eta0") => backfill_eta0(&Network::mainnet()).await,
+        Some("mainnet") => fetch_blocks(&Network::mainnet(), want_arg(2)).await,
         Some("boundary") => fetch_boundary().await,
         Some("mithril") => fetch_mithril().await,
         Some("mithril-genesis") => fetch_mithril_genesis().await,
-        _ => fetch_blocks().await,
+        _ => fetch_blocks(&Network::preprod(), want_arg(1)).await,
     }
 }
 
@@ -309,19 +360,22 @@ fn parse_genesis_vkey(text: &str) -> Result<[u8; 32]> {
 
 /// BlockFetch `count` recent settled preprod blocks off the relay and write
 /// them as hex vectors named by slot.
-async fn fetch_blocks() -> Result<()> {
-    let want: usize = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(24);
-
+async fn fetch_blocks(net: &Network, want: usize) -> Result<()> {
+    let &Network {
+        relay,
+        koios,
+        magic,
+        prefix,
+    } = net;
     let out_dir = vectors_dir()?;
 
-    // 1. Recent settled block points (newest-first) from Koios preprod.
-    let url = format!("{KOIOS}/blocks?limit={}", want + SETTLE_SKIP + 4);
+    // 1. Recent settled block points (newest-first) from Koios.
+    let url = format!("{koios}/blocks?limit={}", want + SETTLE_SKIP + 4);
+    eprintln!("harvest: querying {url}");
     let mut blocks: Vec<KoiosBlock> = reqwest::Client::new()
         .get(&url)
         .header("accept", "application/json")
+        .timeout(std::time::Duration::from_secs(25))
         .send()
         .await
         .context("koios request")?
@@ -329,6 +383,7 @@ async fn fetch_blocks() -> Result<()> {
         .json()
         .await
         .context("koios json")?;
+    eprintln!("harvest: got {} points", blocks.len());
     if blocks.len() > SETTLE_SKIP {
         blocks.drain(0..SETTLE_SKIP);
     }
@@ -338,17 +393,20 @@ async fn fetch_blocks() -> Result<()> {
 
     let start = point(blocks.first().unwrap())?;
     let end = point(blocks.last().unwrap())?;
-    println!(
-        "fetching {} blocks from {RELAY}: slot {} .. {}",
+    // Progress to stderr (unbuffered) so a long network step is visible live.
+    eprintln!(
+        "fetching {} blocks from {relay}: slot {} .. {}",
         blocks.len(),
         blocks.first().unwrap().abs_slot,
         blocks.last().unwrap().abs_slot
     );
 
-    // 2. BlockFetch the range as raw CBOR from a public preprod relay.
-    let mut peer = PeerClient::connect(RELAY, PREPROD_MAGIC)
+    // 2. BlockFetch the range as raw CBOR from a public relay.
+    eprintln!("connecting to {relay} (magic {magic})...");
+    let mut peer = PeerClient::connect(relay, magic)
         .await
-        .context("connect preprod relay")?;
+        .context("connect relay")?;
+    eprintln!("connected; blockfetching the range...");
     let raw_blocks = peer
         .blockfetch()
         .fetch_range((start, end))
@@ -360,13 +418,13 @@ async fn fetch_blocks() -> Result<()> {
     let mut written = 0usize;
     for bytes in &raw_blocks {
         let blk = MultiEraBlock::decode(bytes).context("pallas decode of fetched block")?;
-        let path = out_dir.join(format!("preprod-{}.block", blk.slot()));
+        let path = out_dir.join(format!("{prefix}-{}.block", blk.slot()));
         std::fs::write(&path, hex::encode(bytes)).context("write vector")?;
         println!("  wrote {} ({} bytes)", path.display(), bytes.len());
         written += 1;
     }
     println!(
-        "harvested {written} preprod block vectors into {}",
+        "harvested {written} {prefix} block vectors into {}",
         out_dir.display()
     );
     Ok(())
@@ -417,8 +475,8 @@ async fn fetch_boundary() -> Result<()> {
     peer.abort().await;
 
     // Each epoch's active nonce; they must differ or there is no evolution.
-    let eta0_pre = fetch_eta0(&client, PRE_EPOCH).await?;
-    let eta0_post = fetch_eta0(&client, POST_EPOCH).await?;
+    let eta0_pre = fetch_eta0(&client, KOIOS, PRE_EPOCH).await?;
+    let eta0_post = fetch_eta0(&client, KOIOS, POST_EPOCH).await?;
     ensure!(
         eta0_pre != eta0_post,
         "epoch nonce did not change across the boundary"
@@ -482,11 +540,13 @@ async fn koios_epoch_blocks(
 /// For every `preprod-<slot>.block` vector, look up the epoch it was minted in
 /// and that epoch's active nonce (eta0), and write it as a `preprod-<slot>.eta0`
 /// sidecar. Uses Koios only (no relay); leaves the block CBOR untouched.
-async fn backfill_eta0() -> Result<()> {
+async fn backfill_eta0(net: &Network) -> Result<()> {
+    let &Network { koios, prefix, .. } = net;
+    let vec_prefix = format!("{prefix}-");
     let out_dir = vectors_dir()?;
     let client = reqwest::Client::new();
 
-    // 1. Map each preprod vector's block hash to its slot (from the CBOR).
+    // 1. Map each vector's block hash to its slot (from the CBOR).
     let mut slot_by_hash: HashMap<String, u64> = HashMap::new();
     for entry in std::fs::read_dir(&out_dir).context("read vectors dir")? {
         let path = entry?.path();
@@ -494,7 +554,7 @@ async fn backfill_eta0() -> Result<()> {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
-        if !name.starts_with("preprod-")
+        if !name.starts_with(&vec_prefix)
             || path.extension().and_then(|e| e.to_str()) != Some("block")
         {
             continue;
@@ -505,12 +565,12 @@ async fn backfill_eta0() -> Result<()> {
             .with_context(|| format!("pallas decode {}", path.display()))?;
         slot_by_hash.insert(blk.hash().to_string(), blk.slot());
     }
-    ensure!(!slot_by_hash.is_empty(), "no preprod vectors found");
+    ensure!(!slot_by_hash.is_empty(), "no {prefix} vectors found");
     let hashes: Vec<&String> = slot_by_hash.keys().collect();
 
     // 2. Koios block_info -> epoch per block hash.
     let infos: Vec<BlockInfo> = client
-        .post(format!("{KOIOS}/block_info"))
+        .post(format!("{koios}/block_info"))
         .header("accept", "application/json")
         .json(&serde_json::json!({ "_block_hashes": hashes }))
         .send()
@@ -527,7 +587,10 @@ async fn backfill_eta0() -> Result<()> {
         if nonce_by_epoch.contains_key(&info.epoch_no) {
             continue;
         }
-        nonce_by_epoch.insert(info.epoch_no, fetch_eta0(&client, info.epoch_no).await?);
+        nonce_by_epoch.insert(
+            info.epoch_no,
+            fetch_eta0(&client, koios, info.epoch_no).await?,
+        );
     }
 
     // 4. Write one sidecar per vector.
@@ -537,7 +600,7 @@ async fn backfill_eta0() -> Result<()> {
             .get(&info.hash)
             .with_context(|| format!("block_info returned unknown hash {}", info.hash))?;
         let eta0 = &nonce_by_epoch[&info.epoch_no];
-        let path = out_dir.join(format!("preprod-{slot}.eta0"));
+        let path = out_dir.join(format!("{prefix}-{slot}.eta0"));
         std::fs::write(&path, hex::encode(eta0)).context("write eta0 sidecar")?;
         println!("  wrote {} (epoch {})", path.display(), info.epoch_no);
         written += 1;
@@ -550,10 +613,10 @@ async fn backfill_eta0() -> Result<()> {
 }
 
 /// Fetch and validate the 32-byte active nonce for one preprod epoch.
-async fn fetch_eta0(client: &reqwest::Client, epoch: u64) -> Result<[u8; 32]> {
+async fn fetch_eta0(client: &reqwest::Client, koios: &str, epoch: u64) -> Result<[u8; 32]> {
     let params: Vec<EpochParam> = client
         .get(format!(
-            "{KOIOS}/epoch_params?_epoch_no={epoch}&select=nonce"
+            "{koios}/epoch_params?_epoch_no={epoch}&select=nonce"
         ))
         .header("accept", "application/json")
         .send()

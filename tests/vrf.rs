@@ -49,6 +49,12 @@ struct LeaderCase {
 
 /// Every preprod vector that has an `.eta0` sidecar, decoded into a leader case.
 fn leader_cases() -> Vec<LeaderCase> {
+    leader_cases_with_prefix("preprod-")
+}
+
+/// Every vector whose name starts with `prefix` and carries an `.eta0` sidecar,
+/// decoded into a leader case, sorted by slot for a deterministic anchor.
+fn leader_cases_with_prefix(prefix: &str) -> Vec<LeaderCase> {
     let mut cases = Vec::new();
     for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
         let path = entry.expect("dir entry").path();
@@ -56,9 +62,7 @@ fn leader_cases() -> Vec<LeaderCase> {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or_default();
-        if !name.starts_with("preprod-")
-            || path.extension().and_then(|e| e.to_str()) != Some("block")
-        {
+        if !name.starts_with(prefix) || path.extension().and_then(|e| e.to_str()) != Some("block") {
             continue;
         }
         let eta0_path = path.with_extension("eta0");
@@ -190,6 +194,51 @@ fn real_preprod_leader_proofs_verify() {
             "slot {}: verified output ≠ committed",
             c.slot
         );
+    }
+}
+
+/// The "from mainnet" half of DoD line 2: every freshly-harvested mainnet leader
+/// proof verifies on Sextant's own draft-03 path, reproduces the committed output
+/// (cardano-node ground truth — these blocks were minted and accepted by the live
+/// mainnet), and agrees byte-for-byte with the independent `cardano-crypto` oracle.
+#[test]
+fn real_mainnet_leader_proofs_verify() {
+    let cases = leader_cases_with_prefix("mainnet-");
+    assert!(
+        cases.len() >= 20,
+        "DoD line 2 requires ≥20 mainnet leader-verify vectors, found {}",
+        cases.len(),
+    );
+    for c in &cases {
+        let out =
+            vrf::verify_praos_leader(&c.vkey, c.slot, &c.eta0, &c.proof).unwrap_or_else(|e| {
+                panic!(
+                    "mainnet slot {} rejected a genuine leader proof: {e:?}",
+                    c.slot
+                )
+            });
+        assert_eq!(
+            out, c.output,
+            "mainnet slot {}: verified output ≠ committed",
+            c.slot
+        );
+
+        let alpha = vrf::praos_vrf_input(c.slot, &c.eta0);
+        let sextant = vrf::verify(&c.vkey, &alpha, &c.proof);
+        let oracle = VrfDraft03::verify(&c.vkey, &c.proof, &alpha);
+        assert_eq!(
+            sextant.is_ok(),
+            oracle.is_ok(),
+            "mainnet slot {}: verdict disagrees with oracle",
+            c.slot,
+        );
+        if let (Ok(a), Ok(b)) = (&sextant, &oracle) {
+            assert_eq!(
+                a, b,
+                "mainnet slot {}: output disagrees with oracle",
+                c.slot
+            );
+        }
     }
 }
 
