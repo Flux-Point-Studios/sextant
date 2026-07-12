@@ -6,6 +6,7 @@
 pub mod chain;
 mod curve;
 pub mod ed25519;
+pub mod ffi;
 mod hash;
 pub mod header;
 pub mod kes;
