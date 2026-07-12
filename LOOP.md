@@ -1,13 +1,17 @@
 # LOOP: Sextant — read-path verifying Cardano client (Rust core, C-ABI/WASM trust substrate)
 
-STATUS: ACTIVE
+STATUS: DONE
 
 ## Definition of Done
 Every line must be provably true, with the proof named. The Stop gate and
 the outer loop only trust `scripts/harness.sh --full`; everything else
 needs a row in Evidence.
 
-- [ ] `scripts/harness.sh --full` exits 0
+- [x] `scripts/harness.sh --full` exits 0
+      (PROVEN on merged main `28d112c` — fmt, clippy `--all-targets --all-features
+      -D warnings`, release build, `cargo test --all-features` (all suites incl.
+      `tests/consumer.rs`=4), wasm32 build, cbindgen header drift-gate; all four
+      Woodpecker contexts green on the PR + merged main, pipeline 158/159)
 - [x] Header validation: decodes current-era headers and verifies leader
       VRF + KES against ≥20 golden vectors pulled from preview and
       mainnet, byte-identical verdicts to pallas on the same inputs —
@@ -64,11 +68,47 @@ needs a row in Evidence.
       + `sextant.wasm`, and a CI-only C smoke test links the real static lib
       through the committed header on Linux; all Woodpecker contexts green, run
       https://ci.fluxpointstudios.com/repos/15/pipeline/122/1)
-- [ ] Live: the first downstream consumer's execution path performs one
+- [x] Live: the first downstream consumer's execution path performs one
       verified UTxO read on preview against a real order before a spend
       decision, and rejects a spoofed RPC response in the same test —
       proof: service log excerpt + the UTxO ref
-- [ ] Diff carries no single-caller abstractions and no dead code
+      (PROVEN on merged main `28d112c`, PR #22. The `examples/verified_read_gate`
+      example binary (a keeper/batcher stand-in shared with `tests/consumer.rs` via
+      `#[path]`) runs ONE control flow over UNTRUSTED bytes: `serde_json` parse the
+      106-cert `mithril-anchor-chain.json` → `verify_chain_anchored(&certs,
+      &genesis_vkey)` (genesis-anchored, tip `b3582978…deea`) → root+height taken
+      ONLY from the AUTHENTICATED tip (`Request` has no root field — provider-root
+      injection is type-impossible) → `verify_utxo_read(mithril-tx-body.cbor, 0,
+      mithril-txproof.json proof, &root, 4927469)` → boolean gate `lovelace >=
+      5_000_000 && datum == Inline(d8799f…4417ff)`. SERVICE LOG EXCERPT (both paths,
+      one run): `INFO read.verify utxo=242f2037…a636#0 certified_at=4927469
+      anchored=genesis lovelace=5000000 datum=inline` / `… -> PROCEED  note=
+      spend_status=NotEstablished (authenticity+inclusion proven; unspent deferred
+      to the ledger at submission)` / `WARN read.verify …#0 provider=spoofed
+      reason=NotIncluded` / `… -> REFUSE (no verified output; spend not submitted)`.
+      UTxO REF `242f2037b427ff20ef97a076a7d845c74530be4e5a97b59bb18a519fcfa7a636#0`.
+      Named tests (preview = the operator-chosen preprod, per Plan): `consumer_
+      proceeds_on_the_authentic_certified_order`, `consumer_refuses_a_spoofed_
+      tampered_utxo` (SAME test: authentic PROCEED then a flipped output-coin byte →
+      the SAME gate → `Inclusion(NotIncluded)` → REFUSE), `consumer_refuses_an_
+      unanchored_cert_chain` (wrong genesis vkey → `AnchoredError::Genesis`),
+      `the_example_runs_both_paths_and_exits_zero`. Honest scope enforced in the gate
+      (never branches on `spend_status`) + the PROCEED note + module docs: proves
+      authentic genesis-certified INCLUSION + provenance as of certified_at (~100
+      blocks behind tip), NOT unspent/liveness. Independent `fluxpoint-loop:red-team-
+      reviewer` VERDICT SHIP (0 CRITICAL/HIGH/MEDIUM/LOW; all 7 pinned risks —
+      unspent-gap, provider-root residue, spoof-through-`evaluate`, non-vacuous
+      negatives, fail-closed no-panic, no-overclaim, feature-gate — verified closed).
+      No `src/` change (composes only); no FFI change (header drift-gate clean);
+      default+wasm graph untouched (example `required-features=["mithril"]`))
+- [x] Diff carries no single-caller abstractions and no dead code
+      (PROVEN — the Live diff's shared helpers all have genuine fan-in: `refuse`
+      (4 callers), the fixture loaders + `tamper_output0_coin` (example + tests),
+      `evaluate`/`run_demo`/`expected_datum` (both `#[path]` includers); the three
+      one-shot match-to-reason helpers were inlined before merge, and `run_demo`
+      reads every `Outcome` field so neither includer carries dead code. Enforced by
+      `clippy --all-targets --all-features -D warnings` in the green harness + CI.
+      Red-team confirmed no dead code / no single-caller abstraction)
 
 ## Plan
 - [x] Failing test: decode one current-era header from a checked-in CBOR
@@ -462,29 +502,36 @@ needs a row in Evidence.
 | 2026-07-12 14:30 UTC | Independent red-team of UTxO part 2 returned VERDICT BLOCK (CRITICAL false-accept); closed + regression-guarded + re-verified green | The loop opened PR #19 but ran out of turns before self-red-teaming, so the independent pass was PRIMARY. `fluxpoint-loop:red-team-reviewer` (built a `ckb-merkle-mountain-range` differential harness) found a CRITICAL: the MMR port dropped four ckb anti-malleability guards, so a proof carrying a **duplicate/unconsumed leaf** in a genuine single-tx block range smuggles an arbitrary tx `X` past membership — `calculate_peak_root` returns at `pos==peak_pos` and silently DROPS `X`, the root still recomputes to the real STM-authenticated `certified_root`, and `collect_leaves` reports `X` present → `verify_tx_inclusion(proof, X, root) == Ok`. Reproduced end-to-end (X=`0xEE..`, real 8-range master root). The golden vector + the ckb differential both missed it (they exercise only well-formed proofs). FIX: restored the four ckb recompute guards — queue-empty-at-peak (G1, the essential one — alone closes the whole false-accept family), `parent_pos<=peak_pos` (G2), reject internal-node leaf positions (G3), reject duplicate leaf positions (G4). Two non-vacuous regression tests added (`a_smuggled_tx_in_a_single_tx_block_range_is_rejected`, `a_residual_leaf_at_a_peak_return_is_rejected`): operator VERIFIED both return `Ok` (FAIL) on the pre-fix verifier and `Err`/pass with the guards — genuinely guarding the CRITICAL (test 1 catches removing {G1,G4}, test 2 catches removing G1 alone). Post-fix independent VERDICT SHIP. `scripts/harness.sh --full` exit 0 (fmt, clippy --all-features, release, all inclusion tests + 2 new, wasm32, header drift-gate); feature-gate still clean (0 blst/mithril-stm in default+wasm) |
 | 2026-07-12 15:40 UTC | UTxO part 3 (CLOSES DoD line 5): `verify_utxo_read` proves an output's bytes are the authentic, genesis-anchorable on-chain bytes of a Mithril-certified transaction and carries the honest, uncoercible spend verdict; a tampered UTxO claim is rejected | `cargo test --all-features` — `tests/utxo.rs` (6) + `src/utxo.rs` unit (7). `verify_utxo_read(tx_bytes, out_index, proof_hex, certified_root, block_number)` hashes the SUPPLIED body → H (`hash::blake2b256`, never a provider H), composes shipped `inclusion::verify_tx_inclusion(H, …)` (root recomputed, never the proof's `inner_root`), then decodes the Conway `TxOut` (map form `{0:addr,1:value,2:datum_option,3:script_ref}` + legacy array `[addr,value(,datum_hash)]`; value = bare coin OR `[coin,multiasset]`; inline datum = `[1,#6.24(bytes)]`) on Sextant's own minicbor path. `verify_utxo_read_yields_the_certified_output_bytes` decodes both real golden outputs of tx `242f2037…a636` (idx 0 = script addr `7015e93b…3699` + 5_000_000 lovelace + inline datum `d8799f…4417ff`; idx 1 = base addr `007dedab…ddf05` + 4_867_657_971 lovelace, no datum), `certified_at`=4_927_469, `spend_status`=`NotEstablished`. NAMED negative `tampered_utxo_claim_is_rejected` (flip an output lovelace byte → H changes → `Err(Inclusion(NotIncluded))` before any decode) + `a_different_transactions_bytes_are_rejected_under_this_proof` (substituted-bytes variant). Honesty guard `the_verdict_never_claims_liveness` (exhaustive match on the single `SpendStatus::NotEstablished`). `the_output_is_read_against_an_stm_authenticated_certified_root` (mithril-gated) composes `verify_standard` on cert `b3582978…deea` → `certified_transactions().merkle_root` → `verify_utxo_read`, so the read is genesis-anchorable via `verify_chain_anchored`. Lib unit tests cover both `Datum` variants + all `UtxoError` variants (`MalformedTx`/`OutputIndexOutOfRange`). Default wasm-safe graph (no blst; 0 new deps); no FFI change (header drift-gate clean). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN) — fmt, clippy --all-features, release, all tests, wasm32, header drift-gate |
 | 2026-07-12 16:20 UTC | Independent red-team of UTxO part 3: VERDICT SHIP; one LOW (no in-code TxOut-decode differential) closed | Independent `fluxpoint-loop:red-team-reviewer` on merged `26328ae` + operator flaky/CI checks: NO false-accept (H = `blake2b256(supplied tx_bytes)` computed BEFORE `decode_output`, propagated with `?`; 5 hand-built laundering proof shapes all rejected; part-2 CRITICAL confirmed closed with standing regressions), decode panic-free under 3M+700k hostile inputs (guarded `.unwrap()`s, `.skip()` iterative, `MAX_PROOF_HEX`/`MAX_MMR_SIZE` bounds), `SpendStatus` single-inhabitant + uncoercible + `certified_at` on every Ok, tampered-negative PROVEN non-vacuous (a forged self-consistent proof for the tampered hash decodes to Ok with the CHANGED lovelace, so the real `NotIncluded` is the hash-binding), positive test pins the real values, feature-gate clean (0 blst in default+wasm; `verify_utxo_read` ungated). CI green on merged `26328ae`; `--test utxo --test inclusion` ×3 = 15 tests deterministic. The one LOW closed here: `utxo_output_decode_matches_pallas_on_every_output` — an INDEPENDENT cross-decoder differential (decode the golden body with `pallas-primitives`, cross-check `{address, lovelace, datum-presence}` per output via pallas's `MultiEraOutput` vs Sextant's `decode_output`), so the TxOut decode now carries the same independent-oracle discipline as every other verdict (pallas/cardano-crypto/ckb). `scripts/harness.sh --full` exit 0 |
-| 2026-07-12 18:10 UTC | Live (DoD line 7): the first downstream consumer performs one genesis-anchored verified UTxO read before a spend decision and refuses a spoofed provider response in the same run — the example stdout is the service-log excerpt | `cargo test --features mithril --test consumer` (4) + `examples/verified_read_gate` binary. RED first (stub `evaluate`→Refuse: all 4 red for the right reason), then GREEN. The consumer (`examples/verified_read_gate/gate.rs`, shared by the binary + `tests/consumer.rs` via `#[path]`) composes SHIPPED functions over UNTRUSTED bytes: `serde_json` parse the 106-cert `mithril-anchor-chain.json` → `verify_chain_anchored(&certs, &genesis_vkey)` → `VerifiedChain.certified_transactions{merkle_root 83c012fd…, block 4927469}` from the AUTHENTICATED tip `b3582978…deea` (NEVER a provider root — `Request` has no root field) → `hex::decode_to_slice` the root → `verify_utxo_read(mithril-tx-body.cbor, 0, mithril-txproof.json proof, &root, 4927469)` → boolean gate `lovelace>=5_000_000 && datum==Inline(d8799f…4417ff)`. Tests: `consumer_proceeds_on_the_authentic_certified_order` (Proceed, certified_at=4927469, read line carries the height + PROCEED line the NotEstablished note, ref `242f2037…a636#0`); `consumer_refuses_a_spoofed_tampered_utxo` (SAME test — authentic Proceed, then a flipped output-0 coin byte through the SAME gate → `Inclusion(NotIncluded)` → Refuse, fail-closed, WARN names provider=spoofed reason=NotIncluded); `consumer_refuses_an_unanchored_cert_chain` (wrong genesis vkey → `AnchoredError::Genesis` → Refuse); `the_example_runs_both_paths_and_exits_zero`. Example stdout (DoD proof, both paths from one run): `INFO read.verify utxo=242f2037…a636#0 certified_at=4927469 anchored=genesis lovelace=5000000 datum=inline` / `INFO spend.gate …#0 -> PROCEED  note=spend_status=NotEstablished (authenticity+inclusion proven; unspent deferred to the ledger at submission)` / `WARN read.verify …#0 provider=spoofed reason=NotIncluded` / `INFO spend.gate …#0 -> REFUSE (no verified output; spend not submitted)`. No `src/` change (composes only); no FFI change (header drift-gate clean); default+wasm graph untouched (example `required-features=["mithril"]`). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy --all-targets --all-features, release, all tests incl. `consumer` (4), wasm32, header drift-gate). Honest scope: proves authentic genesis-certified INCLUSION + provenance as of certified_at (~100 blocks behind tip), NOT unspent/liveness — the gate never branches on `spend_status`. UTxO ref `242f2037b427ff20ef97a076a7d845c74530be4e5a97b59bb18a519fcfa7a636#0`. Red-team + merge pending |
+| 2026-07-12 18:10 UTC | Live (DoD line 7): the first downstream consumer performs one genesis-anchored verified UTxO read before a spend decision and refuses a spoofed provider response in the same run — the example stdout is the service-log excerpt | `cargo test --features mithril --test consumer` (4) + `examples/verified_read_gate` binary. RED first (stub `evaluate`→Refuse: all 4 red for the right reason), then GREEN. The consumer (`examples/verified_read_gate/gate.rs`, shared by the binary + `tests/consumer.rs` via `#[path]`) composes SHIPPED functions over UNTRUSTED bytes: `serde_json` parse the 106-cert `mithril-anchor-chain.json` → `verify_chain_anchored(&certs, &genesis_vkey)` → `VerifiedChain.certified_transactions{merkle_root 83c012fd…, block 4927469}` from the AUTHENTICATED tip `b3582978…deea` (NEVER a provider root — `Request` has no root field) → `hex::decode_to_slice` the root → `verify_utxo_read(mithril-tx-body.cbor, 0, mithril-txproof.json proof, &root, 4927469)` → boolean gate `lovelace>=5_000_000 && datum==Inline(d8799f…4417ff)`. Tests: `consumer_proceeds_on_the_authentic_certified_order` (Proceed, certified_at=4927469, read line carries the height + PROCEED line the NotEstablished note, ref `242f2037…a636#0`); `consumer_refuses_a_spoofed_tampered_utxo` (SAME test — authentic Proceed, then a flipped output-0 coin byte through the SAME gate → `Inclusion(NotIncluded)` → Refuse, fail-closed, WARN names provider=spoofed reason=NotIncluded); `consumer_refuses_an_unanchored_cert_chain` (wrong genesis vkey → `AnchoredError::Genesis` → Refuse); `the_example_runs_both_paths_and_exits_zero`. Example stdout (DoD proof, both paths from one run): `INFO read.verify utxo=242f2037…a636#0 certified_at=4927469 anchored=genesis lovelace=5000000 datum=inline` / `INFO spend.gate …#0 -> PROCEED  note=spend_status=NotEstablished (authenticity+inclusion proven; unspent deferred to the ledger at submission)` / `WARN read.verify …#0 provider=spoofed reason=NotIncluded` / `INFO spend.gate …#0 -> REFUSE (no verified output; spend not submitted)`. No `src/` change (composes only); no FFI change (header drift-gate clean); default+wasm graph untouched (example `required-features=["mithril"]`). `scripts/harness.sh --full` exit 0 (HARNESS_GREEN — fmt, clippy --all-targets --all-features, release, all tests incl. `consumer` (4), wasm32, header drift-gate). Honest scope: proves authentic genesis-certified INCLUSION + provenance as of certified_at (~100 blocks behind tip), NOT unspent/liveness — the gate never branches on `spend_status`. UTxO ref `242f2037b427ff20ef97a076a7d845c74530be4e5a97b59bb18a519fcfa7a636#0`. PR #22 squash-merged to main (`28d112c`); all four Woodpecker contexts green (pipeline 158/159). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — 0 CRITICAL/HIGH/MEDIUM/LOW, all 7 pinned risks verified closed (unspent-gap guarded, provider-root injection type-impossible, spoof driven through `evaluate`, negatives non-vacuous, fail-closed no-panic on untrusted `Request` bytes, no overclaim beyond ADA-coin inclusion, feature-gate clean). **DoD line 7 CLOSED — every DoD line now checked; STATUS: DONE.** |
 | 2026-07-12 03:30 UTC | DoD line 2 "from mainnet" CLOSED: leader-VRF + opcert + KES verify on 24 real mainnet blocks, byte-identical to the independent oracles | PR #17 squash-merged to main (`3fb7d6a`). `tools/harvest` (now `Network`-parameterized) BlockFetched 24 contiguous real mainnet blocks (epoch 642, slots 192261567..192262175) off the CF backbone relay (magic 764824073) + their eta0 (`593225d2…5bf8159c`) from Koios mainnet. `real_mainnet_leader_proofs_verify` (24 leader proofs verify + reproduce the committed output + agree with `cardano-crypto` VrfDraft03), `real_mainnet_kes_body_sigs_verify` (24 KES body sigs verify + `pallas` Sum6Kes oracle parity), `real_mainnet_opcerts_verify` (24 opcerts verify + `pallas` cryptoxide Ed25519 parity) — the full cold→hot→body chain + leader-VRF on mainnet. Case-builders generalized by prefix (KES/opcert require the `.eta0` sidecar, excluding the 5 synthetic decode-fixtures whose hand-set slots break the KES-period rule); the all-`*.block` decode + VRF-output sweeps auto-verify the 24 mainnet vectors against pallas. Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP: proof non-vacuous (≥20 asserted, real verifiers called, genuinely-independent oracles); blocks confirmed real (decoded era-7 Conway; a 1-bit `eta0` flip makes leader-VRF FAIL, so `eta0` + proof are genuine); one LOW (opcert mainnet coverage) closed in the same PR (`78d6dcc`). All Woodpecker contexts green (PR pipeline 127). `scripts/harness.sh --full` exit 0. DoD line 2 now spans preprod (preview substitute) + mainnet, ≥20 each |
 
 ## Notes for the next iteration
-State (2026-07-12, this iteration): **DoD line 7 (Live) is IMPLEMENTED and harness-green locally —
-the LAST verification content is done; only the red-team + merge gate remains before STATUS: DONE.**
+State (2026-07-12): **STATUS: DONE — every Definition-of-Done line is checked with proof recorded.**
+DoD line 7 (Live) shipped as PR #22 (`28d112c`, red-team SHIP, all four Woodpecker contexts green):
 `examples/verified_read_gate/{main.rs,gate.rs}` (a keeper/batcher stand-in for the out-of-scope
 write-path) + `tests/consumer.rs` (which shares `gate.rs` via `#[path]`) run ONE control flow over
 UNTRUSTED provider bytes: parse the 106-cert `mithril-anchor-chain.json` → `verify_chain_anchored`
-(genesis-anchored, PROVEN Ok, tip `b3582978…deea`) → take root+height ONLY from the AUTHENTICATED
-tip (`Request` carries no root field — provider-root injection is type-impossible) → `verify_utxo_
-read` → a boolean spend gate. Both the authentic PROCEED and the spoofed-REFUSE paths run from ONE
-example invocation (stdout = the DoD service-log excerpt) and are mirrored by the four `consumer`
-tests. Fail-closed: every spoof (`tampered UTxO` → `Inclusion(NotIncluded)`, `wrong genesis vkey` →
+(genesis-anchored, tip `b3582978…deea`) → take root+height ONLY from the AUTHENTICATED tip
+(`Request` carries no root field — provider-root injection is type-impossible) → `verify_utxo_read`
+→ a boolean spend gate. Both the authentic PROCEED and the spoofed-REFUSE paths run from ONE example
+invocation (stdout = the DoD service-log excerpt) and are mirrored by the four `consumer` tests.
+Fail-closed: every spoof (`tampered UTxO` → `Inclusion(NotIncluded)`, `wrong genesis vkey` →
 `AnchoredError::Genesis`) makes a `verify_*` return Err BEFORE a VerifiedOutput exists, so the gate
 is never reached. The gate NEVER branches on `spend_status`; the PROCEED note states the honest
-scope verbatim. No `src/` change (composes only), no FFI change (header drift-gate clean),
-default+wasm graph untouched (example `required-features=["mithril"]`). **NEXT: red-team the diff,
-open the PR, on SHIP auto-merge (squash), then finalize DoD lines 1/7/8 with the merged-commit +
-CI-green proof and set STATUS: DONE.** After that the ONLY remaining follow-on (a NEW slice, not a
-DoD gap) is the C-ABI `sextant_verify_utxo_read` export + `smoke.c` + cbindgen header regen — the
-caller-allocated-buffer ABI for `VerifiedOutput`'s variable-length address/datum (see the deferred
-"Prerequisite sub-slice for line 7" note below). **DoD lines 2, 3, 4, 5, 6 are all CLOSED.** The
+scope verbatim.
+
+**The read-path DoD is complete (all 8 lines).** The verify core (header VRF/opcert/KES on preprod
+AND mainnet, chain-following + nonce across a real epoch boundary, the Mithril genesis-anchored trust
+root, the proof-based certified UTxO read), the consumable C-ABI/WASM artifacts primitive, AND a
+live downstream consumer that fail-closed-refuses a spoofed provider are all shipped and
+red-teamed. **The one remaining follow-on (a NEW slice, NOT a DoD gap, operator's call whether to
+pursue): the C-ABI `sextant_verify_utxo_read` export + `smoke.c` reference + cbindgen header regen**
+— the caller-allocated-buffer ABI for `VerifiedOutput`'s variable-length address/optional inline
+datum (`addr_buf`/`addr_cap` + `datum_buf`/`datum_cap` + out-lengths; `SpendStatus` → a fixed
+`#[repr(i32)]`; `certified_at` a `u64` out-param), so a C/WASM consumer proves the read primitive
+end-to-end over the boundary (the red-team "every export gains a `smoke.c` reference or it is not
+proven retained" rule applies). This turns the verified read into the primitive a non-Rust
+downstream calls — the compounding-leverage payoff. **DoD lines 2, 3, 4, 5, 6 are all CLOSED.** The
 UTxO epic proved the loop's value AND the independent-red-team gate's: part 2's MMR verifier hid a
 CRITICAL false-accept behind a green harness + green CI + a green ckb differential (a duplicate/
 unconsumed leaf smuggled an arbitrary tx past membership under a real STM-authenticated root); only
