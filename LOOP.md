@@ -719,7 +719,30 @@ needs a row in Evidence.
 | 2026-07-13 00:20 UTC | Tier1 slice 4+5 (FINAL — C-ABI windowed watch verdict + ladder reconciliation) — CLOSES Tier-1; independent red-team SHIP, all four Woodpecker contexts green | PR #28 (`42d3caf`), branch `tier1-slice5-cabi-windowed`; `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (the `artifacts` job COMPILED + RAN the new `smoke.c` window leg on Linux — external C linkage of `sextant_verify_watched_window` + the struct crossing the boundary + garbage→STALLED, the leg unbuildable locally on Windows-MSVC). Export `sextant_verify_watched_window` (CORE, default+wasm32, 0 blst) surfaces the 3-valued verdict as fixed-width `#[repr(C)] SextantWatchVerdict{kind,basis,assumptions,stall_reason,_reserved[4],anchor_height,as_of_height,as_of_slot,verified_through,spend_at_height,spend_at_slot,spending_txid[32]}` (88B, no implicit padding, no `-3` sizing); CARRIES `require_through` (truncation defense holds at the C ABI). ABI 2→3. Slice 4: reserved `CertifiedUnspent`/`Attested` tiers de-duplicated onto `SpendStatus` (one home); `WatchBasis` docs only `WatchedWindow`. Independent `fluxpoint-loop:red-team-reviewer` (3rd of the project, hunting the false-accept that bit slices UTxO-pt2 + Tier1-3) VERDICT SHIP — NO false-accept/UB: (1) `project_watch_verdict` disjoint arms, `kind` set explicitly per variant, no path maps Stalled/SpentObserved→`NO_SPEND_OBSERVED`; (2) `require_through` passed through, `<` boundary correct, C-ABI regression proven on real data; (3) EXHAUSTIVELY grepped `src/` to confirm `merkle_root`/`epoch` are read ONLY in mithril.rs + the anchored-verify (never on the window path) — the empty anchor root is genuinely inert, honest-by-construction; (4) honest-scope grep survives because `NO_SPEND` is `s-p-e-n-d` not `spent` (the rename off the brief's `_UNSPENT` is load-bearing); (5) wasm pass-through guard + native `catch_unwind` + the harness's reject-`panic=abort` gate together close the unwind hole; (6) struct written once, `_reserved` explicit, header cbindgen-diff clean. `scripts/harness.sh --full` exit 0 (19 window incl. 5 ffi_boundary + 5 windowed_consumer + all others). Tier-1 windowed-unspent COMPLETE end-to-end (Rust core + C-ABI/WASM + consumer example). |
 
 ## Notes for the next iteration
-State (2026-07-12, latest — beyond-DoD Tier1 slice 3 verify_watched_window MERGED, PR #26 `26ef8ad`, red-team SHIP, all four Woodpecker contexts green): **STATUS: DONE holds.**
+State (2026-07-13, latest — beyond-DoD Tier1 slice 4+5 C-ABI windowed watch verdict + ladder reconciliation MERGED, PR #28 `57a45d3`, independent red-team SHIP, all four Woodpecker contexts green): **STATUS: DONE holds; Tier-1 windowed-unspent is now COMPLETE end-to-end.**
+This iteration shipped the FINAL Tier-1 slice: `sextant_verify_watched_window` (a CORE C-ABI export,
+default+wasm32, 0 blst) surfaces the three-valued `WatchVerdict` as a fixed-width `#[repr(C)]
+SextantWatchVerdict` — `kind` (NO_SPEND_OBSERVED=1 / SPEND_OBSERVED=2 / STALLED=3) SEPARATED from `basis`
+(the ladder, WATCHED_WINDOW=1 in band 1..=9; economic ATTESTED reserved far at 100+), `assumptions` bits,
+and a per-kind payload; it CARRIES `require_through` so the slice-3 truncation defense holds at the C ABI.
+ABI 2→3. Slice 4 folded in: the reserved CertifiedUnspent/Attested tiers were de-duplicated onto ONE home
+(`utxo::SpendStatus`); `window::WatchBasis` documents only WatchedWindow. The honest-scope grep FORCED the
+operational name `NO_SPEND_OBSERVED` (never `_UNSPENT` — "spend" ≠ "spent" by one letter), and the header
+carries no liveness claim. Consumer proof: `examples/windowed_spend_gate` (Masumi/ADAM analogue) + the
+`smoke.c` window leg (compiled + run on Linux by the artifacts CI job). Independent red-team (3rd of the
+project, the discipline that caught the MMR + truncation CRITICALs the loop self-review missed) VERDICT
+SHIP — no false-accept/UB, honest-by-construction anchor confirmed by an exhaustive `merkle_root`/`epoch`
+grep. `scripts/harness.sh --full` exit 0.
+**Next: nothing pinned — Tier-1 is done.** The remaining windowed-unspent map is deliberately DEFERRED, not
+diluted: (a) the LIVE relay follower — the transport that streams the contiguous body window from the
+certified anchor to the live tip in real time (a provider of BYTES, re-verified every block; needs a
+chain-sync client + a real-time clock for `slot_now`), NOT yet requested; (b) Tier-2 `CertifiedUnspent` —
+a Mithril LEDGER-STATE certificate + proof of unspent-ness, which does NOT exist upstream yet (standing
+offer: draft the Mithril proof-format note for the operator to take upstream); (c) Tier-3 `Attested` —
+a Materios/Witness-Network economic committee attestation, never coercible into the cryptographic tier.
+The loop may idle on STATUS: DONE until the operator scopes one of these. No harvest needed.
+
+State (2026-07-12, prior — beyond-DoD Tier1 slice 3 verify_watched_window MERGED, PR #26 `26ef8ad`, red-team SHIP, all four Woodpecker contexts green): **STATUS: DONE holds.**
 This iteration shipped Tier1 slice 3 of the BEYOND-DoD v0.2 flagship: `verify_watched_window` — the
 windowed-unspent verdict CORE. It composes the three proven primitives in one bytes-in/verdict-out flow
 over the committed 22-block preprod segment: `chain::verify_segment` (headers authentic + hash-linked +
@@ -1154,14 +1177,16 @@ is to **compute** it from the chain (the separate nonce-evolution DoD line):
 eta0 evolves deterministically from block VRF outputs. That slice makes the
 whole leader-VRF path oracle-free.
 
-## Attacking next — BEYOND-DoD v0.2: Windowed-unspent Tier 1 (Unspent{WatchedWindow})
+## Reference (COMPLETE) — BEYOND-DoD v0.2: Windowed-unspent Tier 1 (Unspent{WatchedWindow})
 Design pinned by a spec workflow (follower-mechanism research + verdict/consumer/C-ABI research +
-adversarial synthesis), OPERATOR-RATIFIED, build SLICE-BY-SLICE (red-team gate each). The Plan
-lists the slices; THIS is the shared design + the load-bearing invariants every slice must hold.
-CURRENT slice = Tier1 slice 4+5 (FINAL, merged): ladder reconciliation + the C-ABI windowed export +
-the `windowed_spend_gate` example. Slices 1-3 (decoder, body-bind, `verify_watched_window` core incl.
-the slice-3 truncation CRITICAL fix — mandatory `require_through` floor + `StallReason::WindowTooShort`)
-are DONE + red-team-verified on main. The DoD stays DONE.
+adversarial synthesis), OPERATOR-RATIFIED, built SLICE-BY-SLICE (red-team gate each). ALL SLICES SHIPPED
++ red-team-verified on main: slice 1 (`decode_spends`), slice 2 (body-commitment bind), slice 3
+(`verify_watched_window` core, incl. the truncation CRITICAL fix — mandatory `require_through` floor +
+`StallReason::WindowTooShort`), slice 4+5 (ladder reconciliation + the C-ABI `sextant_verify_watched_window`
+export + `SextantWatchVerdict` + the `windowed_spend_gate` example). Tier-1 is COMPLETE end-to-end; NO
+slice is in flight. This section is retained as the load-bearing design + invariant record — it is the
+reference the DEFERRED work builds on (the live relay follower; Tier-2 CertifiedUnspent; Tier-3 Attested),
+not an active work item. The DoD stays DONE.
 
 ### The honest verdict (enforced by TYPE, not comment)
 `WatchVerdict` has THREE terminal shapes and only ONE is Unspent — collapsing SpentObserved vs
