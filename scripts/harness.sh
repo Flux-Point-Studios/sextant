@@ -70,9 +70,13 @@ header_gate() {
 
   # Honest scope: the only spend-status value at the ABI is NOT_ESTABLISHED. No wire
   # constant or field may ever mean "unspent"/"spent" — the read path cannot establish
-  # liveness, so a consumer must never be handed a value to gate a spend on. Reject the
-  # token anywhere in the committed header (the word "spend"/"SEXTANT_SPEND_*" is fine).
-  if grep -Eiq '\b(un)?spent\b' include/sextant.h; then
+  # liveness, so a consumer must never be handed a value to gate a spend on. Match the
+  # bare substring (NOT a \b-bounded word): the leak this exists to catch is a
+  # `_`-joined constant like SEXTANT_SPEND_UNSPENT / _SPENT, and `_` is a regex word
+  # char so a word boundary never fires before it. The legitimate tokens
+  # `spend`/`spend_status`/`SEXTANT_SPEND_NOT_ESTABLISHED` contain no `spent` substring,
+  # so a bare `(un)?spent` stays false-positive-free.
+  if grep -Eiq '(un)?spent' include/sextant.h; then
     echo "harness: an 'unspent'/'spent' token leaked into the C header — the read path cannot claim liveness" >&2
     exit 1
   fi
