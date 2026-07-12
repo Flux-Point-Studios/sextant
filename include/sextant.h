@@ -8,9 +8,10 @@
 /**
  * ABI contract version. A consumer asserts `sextant_abi_version() == SEXTANT_ABI_VERSION`
  * at load; cbindgen emits it into the header as a `#define`. Bumped 1→2 for the UTxO
- * read export and the certified-transactions out-params on the anchored verify.
+ * read export and the certified-transactions out-params on the anchored verify; 2→3 for
+ * the windowed watch-verdict export ([`sextant_verify_watched_window`]).
  */
-#define SEXTANT_ABI_VERSION 2
+#define SEXTANT_ABI_VERSION 3
 
 /**
  * The only defined `spend_status` value a verified read returns. The read path can
@@ -25,6 +26,98 @@
  * bump), never a layout break. cbindgen emits this as a `#define`.
  */
 #define SEXTANT_SPEND_NOT_ESTABLISHED 0
+
+/**
+ * `SextantWatchVerdict.kind`: NO spend of the watched outpoint was observed across the
+ * verified window (the honest windowed verdict — read [`SextantWatchVerdict`]'s scope).
+ */
+#define SEXTANT_WATCH_NO_SPEND_OBSERVED 1
+
+/**
+ * `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
+ * spend of the watched outpoint — a definite refuse, authoritative regardless of freshness.
+ */
+#define SEXTANT_WATCH_SPEND_OBSERVED 2
+
+/**
+ * `SextantWatchVerdict.kind`: the window could not answer (a gap, a failed body
+ * commitment, an unverified segment, an unobserved creation, a short or stale tip). A
+ * non-answer is a REFUSE, never "probably fine".
+ */
+#define SEXTANT_WATCH_STALLED 3
+
+/**
+ * `SextantWatchVerdict.basis` (meaningful only when `kind == SEXTANT_WATCH_NO_SPEND_OBSERVED`):
+ * the trust basis, in the CRYPTOGRAPHIC-WITH-ASSUMPTIONS band `1..=9`. `WATCHED_WINDOW`
+ * is the only tier today; a future ledger-state tier is reserved in this band's free
+ * slots, and an ECONOMIC/attested tier is reserved numerically FAR (100+) so an
+ * attestation can never be numerically mistaken for a cryptographic basis. This is the
+ * ONE place the tier ladder lives at the C ABI. `0` for the other kinds.
+ */
+#define SEXTANT_WATCH_BASIS_WATCHED_WINDOW 1
+
+/**
+ * `SextantWatchVerdict.assumptions` bit: the window sits inside a region a Mithril
+ * quorum certified (the tip is at or below the caller-supplied certified anchor height).
+ */
+#define SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM (1 << 0)
+
+/**
+ * `SextantWatchVerdict.assumptions` bit: the scanned segment is a header-verified,
+ * hash-linked, gap-free, body-committed run — a complete body stream over the window.
+ */
+#define SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE (1 << 1)
+
+/**
+ * `SextantWatchVerdict.stall_reason` (meaningful only when `kind == SEXTANT_WATCH_STALLED`):
+ * the window carried no blocks.
+ */
+#define SEXTANT_WATCH_STALL_EMPTY_WINDOW 1
+
+/**
+ * The header segment did not verify (broken link, crypto, or decode) — the withheld-block
+ * evasion collapses here.
+ */
+#define SEXTANT_WATCH_STALL_BROKEN_SEGMENT 2
+
+/**
+ * A block's bodies did not hash to its header commitment: real headers with swapped or
+ * tampered bodies.
+ */
+#define SEXTANT_WATCH_STALL_BODY_COMMITMENT_MISMATCH 3
+
+/**
+ * A block's body stream was not a decodable transaction sequence; the scan fails closed.
+ */
+#define SEXTANT_WATCH_STALL_MALFORMED_BODY 4
+
+/**
+ * The verified block numbers were not contiguous over the window (a dropped block).
+ */
+#define SEXTANT_WATCH_STALL_MISSING_BLOCK 5
+
+/**
+ * The watched outpoint's creation was not observed inside the window — the "start the
+ * window after the spend" evasion.
+ */
+#define SEXTANT_WATCH_STALL_CREATION_NOT_OBSERVED 6
+
+/**
+ * The verified tip did not reach the caller's `require_through` floor — the "truncate the
+ * window before the spend" evasion. Freshness alone cannot close it, so the caller MUST
+ * assert a hard lower bound on the tip it is answered as of.
+ */
+#define SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT 7
+
+/**
+ * The window tip is above the certified anchor height: outside the Mithril-vouched region.
+ */
+#define SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR 8
+
+/**
+ * The verified tip is older than the caller's freshness bound.
+ */
+#define SEXTANT_WATCH_STALL_TIP_TOO_OLD 9
 
 /**
  * Every verdict the boundary can return, as one flat `#[repr(i32)]` enum. All bands
@@ -186,6 +279,82 @@ typedef struct {
   uint8_t _reserved[6];
 } SextantVerifiedOutput;
 
+/**
+ * The verdict of a windowed watch check, projected into a caller-allocated fixed-width
+ * `#[repr(C)]` struct — no sizing protocol, no owned buffer crosses the boundary. The
+ * consumer switches on `kind`; the fields carry the payload for that kind (all others
+ * are zeroed).
+ *
+ * ## Honest scope — read before gating on the result
+ * `kind == SEXTANT_WATCH_NO_SPEND_OBSERVED` proves ONLY that no input consuming the
+ * watched outpoint appears in any body of a header-verified, hash-linked, gap-free,
+ * body-committed window that observed the outpoint's creation and reached the caller's
+ * `require_through` height — under the surfaced `assumptions`, as of the verified tip
+ * (`as_of_height`/`as_of_slot`). It is NOT absolute, NOT eternal, NOT tip-state, and NOT
+ * a cryptographic proof of a negative; the window trails the live tip. The `assumptions`
+ * bits and `as_of_*` travel with the verdict precisely so a consumer sees the scope and
+ * never reads a windowed answer as current ledger state. `kind == SEXTANT_WATCH_STALLED`
+ * (any gap/short/stale window) and `kind == SEXTANT_WATCH_SPEND_OBSERVED` are both a
+ * REFUSE — only `NO_SPEND_OBSERVED`, with the caller's own freshness judgement over
+ * `as_of_slot`, clears a gate.
+ */
+typedef struct {
+  /**
+   * Which verdict: `SEXTANT_WATCH_NO_SPEND_OBSERVED` / `_SPEND_OBSERVED` / `_STALLED`.
+   */
+  uint8_t kind;
+  /**
+   * The trust basis, when `kind == NO_SPEND_OBSERVED`: `SEXTANT_WATCH_BASIS_WATCHED_WINDOW`.
+   * `0` otherwise.
+   */
+  uint8_t basis;
+  /**
+   * The surfaced assumptions bitset, when `kind == NO_SPEND_OBSERVED`
+   * (`SEXTANT_WATCH_ASSUMPTION_*`). `0` otherwise.
+   */
+  uint8_t assumptions;
+  /**
+   * Why the window could not answer, when `kind == STALLED` (`SEXTANT_WATCH_STALL_*`).
+   * `0` otherwise.
+   */
+  uint8_t stall_reason;
+  /**
+   * Explicit alignment padding; zeroed on write so the struct is fully deterministic.
+   */
+  uint8_t _reserved[4];
+  /**
+   * The Mithril-certified anchor height the window rests on, when `kind == NO_SPEND_OBSERVED`.
+   */
+  uint64_t anchor_height;
+  /**
+   * The verified tip block number the verdict holds as of, when `kind == NO_SPEND_OBSERVED`.
+   */
+  uint64_t as_of_height;
+  /**
+   * The verified tip slot the verdict holds as of, when `kind == NO_SPEND_OBSERVED` — the
+   * value the caller applies its OWN freshness bound to.
+   */
+  uint64_t as_of_slot;
+  /**
+   * The highest block number the window verified through before stalling, when
+   * `kind == STALLED`.
+   */
+  uint64_t verified_through;
+  /**
+   * The block number the spend was observed in, when `kind == SPEND_OBSERVED`.
+   */
+  uint64_t spend_at_height;
+  /**
+   * The slot the spend was observed at, when `kind == SPEND_OBSERVED`.
+   */
+  uint64_t spend_at_slot;
+  /**
+   * The id of the transaction that consumed the watched outpoint, when
+   * `kind == SPEND_OBSERVED`. Zeroed otherwise.
+   */
+  uint8_t spending_txid[32];
+} SextantWatchVerdict;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -290,6 +459,47 @@ int32_t sextant_verify_utxo_read(const uint8_t *tx_bytes,
                                  uint8_t *datum_buf,
                                  uintptr_t datum_cap,
                                  SextantErrorDetail *out_detail);
+
+/**
+ * Run [`crate::window::verify_watched_window`] over a certified, header-verified block
+ * window and marshal the three-valued watch verdict into `*out`.
+ *
+ * This is a CORE export — present in the default library and the wasm32 build (the
+ * window verifier composes only Blake2b + minicbor, no feature-gated crypto crate). The
+ * window's cryptographic strength is the per-header crypto + hash links (`eta0`) and the
+ * per-block body-commitment bind; `anchor_height` is a completeness BOUND, not a checked
+ * input — it MUST be the `out_ct_block` of a prior
+ * [`sextant_mithril_verify_chain_anchored`] so the caller cannot fabricate a certified
+ * region. Passing an unauthenticated height forfeits the `mithril_quorum` assumption the
+ * verdict surfaces, exactly as a wrong `eta0` forfeits a real verify — the boundary
+ * cannot verify provenance, so it SURFACES the assumption instead of hiding it.
+ *
+ * `require_through` is the caller's HARD lower bound on the verified tip: a window whose
+ * tip is below it is `SEXTANT_WATCH_STALLED` with `SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT`,
+ * never a false no-spend — this closes the truncation evasion, which freshness alone
+ * cannot. The caller sets it to the height it needs no-spend coverage through.
+ *
+ * Returns `0` once the verdict is computed (branch on `out.kind` — a spend or a stall is
+ * STILL `0`, the verdict is in the struct), or a negative [`SextantStatus`] for a
+ * boundary/caller error (null pointer, zero `count`) with `*out` left untouched.
+ *
+ * # Safety
+ * `block_ptrs`/`block_lens` must each point to `count` readable entries, each
+ * `block_ptrs[i]` to `block_lens[i]` readable bytes; `eta0` and `watched_txid` to 32
+ * readable bytes each; `out` to a writable [`SextantWatchVerdict`]. All borrows live
+ * only for the duration of the call.
+ */
+int32_t sextant_verify_watched_window(const uint8_t *const *block_ptrs,
+                                      const uintptr_t *block_lens,
+                                      uintptr_t count,
+                                      const uint8_t *eta0,
+                                      uint64_t anchor_height,
+                                      const uint8_t *watched_txid,
+                                      uint16_t watched_index,
+                                      uint64_t require_through,
+                                      uint64_t freshness_slot_now,
+                                      uint64_t freshness_max_lag,
+                                      SextantWatchVerdict *out);
 
 #if defined(SEXTANT_MITHRIL)
 /**

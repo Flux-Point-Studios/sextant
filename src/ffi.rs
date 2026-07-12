@@ -24,8 +24,9 @@ use crate::chain::{self, ChainError};
 use crate::header::{DecodeError, HeaderView};
 use crate::inclusion::InclusionError;
 use crate::kes::KesError;
-use crate::utxo::{self, Datum, UtxoError};
+use crate::utxo::{self, CertifiedTransactions, Datum, OutPoint, UtxoError};
 use crate::vrf::VrfError;
+use crate::window::{self, Freshness, StallReason, WatchBasis, WatchVerdict};
 
 #[cfg(feature = "mithril")]
 use crate::mithril::{
@@ -34,8 +35,9 @@ use crate::mithril::{
 
 /// ABI contract version. A consumer asserts `sextant_abi_version() == SEXTANT_ABI_VERSION`
 /// at load; cbindgen emits it into the header as a `#define`. Bumped 1→2 for the UTxO
-/// read export and the certified-transactions out-params on the anchored verify.
-pub const SEXTANT_ABI_VERSION: u32 = 2;
+/// read export and the certified-transactions out-params on the anchored verify; 2→3 for
+/// the windowed watch-verdict export ([`sextant_verify_watched_window`]).
+pub const SEXTANT_ABI_VERSION: u32 = 3;
 
 /// The only defined `spend_status` value a verified read returns. The read path can
 /// NEVER establish that an output is currently available to spend (see
@@ -657,6 +659,290 @@ pub unsafe extern "C" fn sextant_verify_utxo_read(
             *out = projected;
         }
         write_detail(out_detail, -1, 0);
+        SextantStatus::Ok as i32
+    })
+}
+
+// ---- Windowed watch-verdict boundary (BEYOND-DoD Tier1 slice 5) ----
+//
+// [`crate::window::verify_watched_window`] answers a THREE-valued question over a
+// certified, header-verified, body-committed block window: was the watched outpoint
+// spent, was NO spend of it observed, or could the window not answer. That verdict is
+// surfaced here as a fixed-width `#[repr(C)]` out-struct whose `kind` the C consumer
+// switches on — never collapsed to a single boolean, which would let a non-answer or a
+// definite spend read as "safe to proceed".
+
+/// `SextantWatchVerdict.kind`: NO spend of the watched outpoint was observed across the
+/// verified window (the honest windowed verdict — read [`SextantWatchVerdict`]'s scope).
+pub const SEXTANT_WATCH_NO_SPEND_OBSERVED: u8 = 1;
+/// `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
+/// spend of the watched outpoint — a definite refuse, authoritative regardless of freshness.
+pub const SEXTANT_WATCH_SPEND_OBSERVED: u8 = 2;
+/// `SextantWatchVerdict.kind`: the window could not answer (a gap, a failed body
+/// commitment, an unverified segment, an unobserved creation, a short or stale tip). A
+/// non-answer is a REFUSE, never "probably fine".
+pub const SEXTANT_WATCH_STALLED: u8 = 3;
+
+/// `SextantWatchVerdict.basis` (meaningful only when `kind == SEXTANT_WATCH_NO_SPEND_OBSERVED`):
+/// the trust basis, in the CRYPTOGRAPHIC-WITH-ASSUMPTIONS band `1..=9`. `WATCHED_WINDOW`
+/// is the only tier today; a future ledger-state tier is reserved in this band's free
+/// slots, and an ECONOMIC/attested tier is reserved numerically FAR (100+) so an
+/// attestation can never be numerically mistaken for a cryptographic basis. This is the
+/// ONE place the tier ladder lives at the C ABI. `0` for the other kinds.
+pub const SEXTANT_WATCH_BASIS_WATCHED_WINDOW: u8 = 1;
+
+/// `SextantWatchVerdict.assumptions` bit: the window sits inside a region a Mithril
+/// quorum certified (the tip is at or below the caller-supplied certified anchor height).
+pub const SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM: u8 = 1 << 0;
+/// `SextantWatchVerdict.assumptions` bit: the scanned segment is a header-verified,
+/// hash-linked, gap-free, body-committed run — a complete body stream over the window.
+pub const SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE: u8 = 1 << 1;
+
+/// `SextantWatchVerdict.stall_reason` (meaningful only when `kind == SEXTANT_WATCH_STALLED`):
+/// the window carried no blocks.
+pub const SEXTANT_WATCH_STALL_EMPTY_WINDOW: u8 = 1;
+/// The header segment did not verify (broken link, crypto, or decode) — the withheld-block
+/// evasion collapses here.
+pub const SEXTANT_WATCH_STALL_BROKEN_SEGMENT: u8 = 2;
+/// A block's bodies did not hash to its header commitment: real headers with swapped or
+/// tampered bodies.
+pub const SEXTANT_WATCH_STALL_BODY_COMMITMENT_MISMATCH: u8 = 3;
+/// A block's body stream was not a decodable transaction sequence; the scan fails closed.
+pub const SEXTANT_WATCH_STALL_MALFORMED_BODY: u8 = 4;
+/// The verified block numbers were not contiguous over the window (a dropped block).
+pub const SEXTANT_WATCH_STALL_MISSING_BLOCK: u8 = 5;
+/// The watched outpoint's creation was not observed inside the window — the "start the
+/// window after the spend" evasion.
+pub const SEXTANT_WATCH_STALL_CREATION_NOT_OBSERVED: u8 = 6;
+/// The verified tip did not reach the caller's `require_through` floor — the "truncate the
+/// window before the spend" evasion. Freshness alone cannot close it, so the caller MUST
+/// assert a hard lower bound on the tip it is answered as of.
+pub const SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT: u8 = 7;
+/// The window tip is above the certified anchor height: outside the Mithril-vouched region.
+pub const SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR: u8 = 8;
+/// The verified tip is older than the caller's freshness bound.
+pub const SEXTANT_WATCH_STALL_TIP_TOO_OLD: u8 = 9;
+
+/// The verdict of a windowed watch check, projected into a caller-allocated fixed-width
+/// `#[repr(C)]` struct — no sizing protocol, no owned buffer crosses the boundary. The
+/// consumer switches on `kind`; the fields carry the payload for that kind (all others
+/// are zeroed).
+///
+/// ## Honest scope — read before gating on the result
+/// `kind == SEXTANT_WATCH_NO_SPEND_OBSERVED` proves ONLY that no input consuming the
+/// watched outpoint appears in any body of a header-verified, hash-linked, gap-free,
+/// body-committed window that observed the outpoint's creation and reached the caller's
+/// `require_through` height — under the surfaced `assumptions`, as of the verified tip
+/// (`as_of_height`/`as_of_slot`). It is NOT absolute, NOT eternal, NOT tip-state, and NOT
+/// a cryptographic proof of a negative; the window trails the live tip. The `assumptions`
+/// bits and `as_of_*` travel with the verdict precisely so a consumer sees the scope and
+/// never reads a windowed answer as current ledger state. `kind == SEXTANT_WATCH_STALLED`
+/// (any gap/short/stale window) and `kind == SEXTANT_WATCH_SPEND_OBSERVED` are both a
+/// REFUSE — only `NO_SPEND_OBSERVED`, with the caller's own freshness judgement over
+/// `as_of_slot`, clears a gate.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SextantWatchVerdict {
+    /// Which verdict: `SEXTANT_WATCH_NO_SPEND_OBSERVED` / `_SPEND_OBSERVED` / `_STALLED`.
+    pub kind: u8,
+    /// The trust basis, when `kind == NO_SPEND_OBSERVED`: `SEXTANT_WATCH_BASIS_WATCHED_WINDOW`.
+    /// `0` otherwise.
+    pub basis: u8,
+    /// The surfaced assumptions bitset, when `kind == NO_SPEND_OBSERVED`
+    /// (`SEXTANT_WATCH_ASSUMPTION_*`). `0` otherwise.
+    pub assumptions: u8,
+    /// Why the window could not answer, when `kind == STALLED` (`SEXTANT_WATCH_STALL_*`).
+    /// `0` otherwise.
+    pub stall_reason: u8,
+    /// Explicit alignment padding; zeroed on write so the struct is fully deterministic.
+    pub _reserved: [u8; 4],
+    /// The Mithril-certified anchor height the window rests on, when `kind == NO_SPEND_OBSERVED`.
+    pub anchor_height: u64,
+    /// The verified tip block number the verdict holds as of, when `kind == NO_SPEND_OBSERVED`.
+    pub as_of_height: u64,
+    /// The verified tip slot the verdict holds as of, when `kind == NO_SPEND_OBSERVED` — the
+    /// value the caller applies its OWN freshness bound to.
+    pub as_of_slot: u64,
+    /// The highest block number the window verified through before stalling, when
+    /// `kind == STALLED`.
+    pub verified_through: u64,
+    /// The block number the spend was observed in, when `kind == SPEND_OBSERVED`.
+    pub spend_at_height: u64,
+    /// The slot the spend was observed at, when `kind == SPEND_OBSERVED`.
+    pub spend_at_slot: u64,
+    /// The id of the transaction that consumed the watched outpoint, when
+    /// `kind == SPEND_OBSERVED`. Zeroed otherwise.
+    pub spending_txid: [u8; 32],
+}
+
+/// Map a [`StallReason`] to its stable C code. Exhaustive (no wildcard): the
+/// `#[non_exhaustive]` relaxation does not apply in-crate, so a new stall cause fails to
+/// compile here until it is given a code — a tripwire, not a silent `0`.
+fn stall_code(reason: StallReason) -> u8 {
+    match reason {
+        StallReason::EmptyWindow => SEXTANT_WATCH_STALL_EMPTY_WINDOW,
+        StallReason::BrokenSegment => SEXTANT_WATCH_STALL_BROKEN_SEGMENT,
+        StallReason::BodyCommitmentMismatch => SEXTANT_WATCH_STALL_BODY_COMMITMENT_MISMATCH,
+        StallReason::MalformedBody => SEXTANT_WATCH_STALL_MALFORMED_BODY,
+        StallReason::MissingBlock => SEXTANT_WATCH_STALL_MISSING_BLOCK,
+        StallReason::CreationNotObserved => SEXTANT_WATCH_STALL_CREATION_NOT_OBSERVED,
+        StallReason::WindowTooShort => SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT,
+        StallReason::TipAboveAnchor => SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR,
+        StallReason::TipTooOld => SEXTANT_WATCH_STALL_TIP_TOO_OLD,
+    }
+}
+
+/// Project a [`WatchVerdict`] into the fixed boundary struct, zeroing every field not
+/// carried by its kind. The `#[non_exhaustive]` `WatchBasis` matches exhaustively
+/// in-crate, so a future basis is a compile error here until it is banded.
+fn project_watch_verdict(v: WatchVerdict) -> SextantWatchVerdict {
+    let mut out = SextantWatchVerdict {
+        kind: 0,
+        basis: 0,
+        assumptions: 0,
+        stall_reason: 0,
+        _reserved: [0u8; 4],
+        anchor_height: 0,
+        as_of_height: 0,
+        as_of_slot: 0,
+        verified_through: 0,
+        spend_at_height: 0,
+        spend_at_slot: 0,
+        spending_txid: [0u8; 32],
+    };
+    match v {
+        WatchVerdict::Unspent { as_of, basis } => {
+            let WatchBasis::WatchedWindow(a) = basis;
+            out.kind = SEXTANT_WATCH_NO_SPEND_OBSERVED;
+            out.basis = SEXTANT_WATCH_BASIS_WATCHED_WINDOW;
+            out.assumptions = (if a.mithril_quorum {
+                SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM
+            } else {
+                0
+            }) | (if a.data_complete {
+                SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE
+            } else {
+                0
+            });
+            out.anchor_height = as_of.anchor_height;
+            out.as_of_height = as_of.as_of_height;
+            out.as_of_slot = as_of.as_of_slot;
+        }
+        WatchVerdict::SpentObserved {
+            at_height,
+            at_slot,
+            spending_txid,
+        } => {
+            out.kind = SEXTANT_WATCH_SPEND_OBSERVED;
+            out.spend_at_height = at_height;
+            out.spend_at_slot = at_slot;
+            out.spending_txid = spending_txid;
+        }
+        WatchVerdict::Stalled {
+            verified_through,
+            reason,
+        } => {
+            out.kind = SEXTANT_WATCH_STALLED;
+            out.stall_reason = stall_code(reason);
+            out.verified_through = verified_through;
+        }
+    }
+    out
+}
+
+/// Run [`crate::window::verify_watched_window`] over a certified, header-verified block
+/// window and marshal the three-valued watch verdict into `*out`.
+///
+/// This is a CORE export — present in the default library and the wasm32 build (the
+/// window verifier composes only Blake2b + minicbor, no feature-gated crypto crate). The
+/// window's cryptographic strength is the per-header crypto + hash links (`eta0`) and the
+/// per-block body-commitment bind; `anchor_height` is a completeness BOUND, not a checked
+/// input — it MUST be the `out_ct_block` of a prior
+/// [`sextant_mithril_verify_chain_anchored`] so the caller cannot fabricate a certified
+/// region. Passing an unauthenticated height forfeits the `mithril_quorum` assumption the
+/// verdict surfaces, exactly as a wrong `eta0` forfeits a real verify — the boundary
+/// cannot verify provenance, so it SURFACES the assumption instead of hiding it.
+///
+/// `require_through` is the caller's HARD lower bound on the verified tip: a window whose
+/// tip is below it is `SEXTANT_WATCH_STALLED` with `SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT`,
+/// never a false no-spend — this closes the truncation evasion, which freshness alone
+/// cannot. The caller sets it to the height it needs no-spend coverage through.
+///
+/// Returns `0` once the verdict is computed (branch on `out.kind` — a spend or a stall is
+/// STILL `0`, the verdict is in the struct), or a negative [`SextantStatus`] for a
+/// boundary/caller error (null pointer, zero `count`) with `*out` left untouched.
+///
+/// # Safety
+/// `block_ptrs`/`block_lens` must each point to `count` readable entries, each
+/// `block_ptrs[i]` to `block_lens[i]` readable bytes; `eta0` and `watched_txid` to 32
+/// readable bytes each; `out` to a writable [`SextantWatchVerdict`]. All borrows live
+/// only for the duration of the call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn sextant_verify_watched_window(
+    block_ptrs: *const *const u8,
+    block_lens: *const usize,
+    count: usize,
+    eta0: *const u8,
+    anchor_height: u64,
+    watched_txid: *const u8,
+    watched_index: u16,
+    require_through: u64,
+    freshness_slot_now: u64,
+    freshness_max_lag: u64,
+    out: *mut SextantWatchVerdict,
+) -> i32 {
+    guard(|| {
+        if block_ptrs.is_null()
+            || block_lens.is_null()
+            || eta0.is_null()
+            || watched_txid.is_null()
+            || out.is_null()
+        {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        if count == 0 {
+            return SextantStatus::ErrEmptyInput as i32;
+        }
+        // SAFETY: `block_ptrs`/`block_lens` point to `count` valid entries (caller
+        // contract); the borrows live only inside this closure.
+        let ptrs = unsafe { slice::from_raw_parts(block_ptrs, count) };
+        let lens = unsafe { slice::from_raw_parts(block_lens, count) };
+        let mut blocks: Vec<&[u8]> = Vec::with_capacity(count);
+        for i in 0..count {
+            if ptrs[i].is_null() {
+                return SextantStatus::ErrNullPointer as i32;
+            }
+            // SAFETY: `ptrs[i]` is non-null and points to `lens[i]` readable bytes.
+            blocks.push(unsafe { slice::from_raw_parts(ptrs[i], lens[i]) });
+        }
+        // SAFETY: `eta0` and `watched_txid` are non-null and point to 32 readable bytes.
+        let eta0 = unsafe { &*(eta0 as *const [u8; 32]) };
+        let watch = OutPoint {
+            tx_id: *unsafe { &*(watched_txid as *const [u8; 32]) },
+            index: watched_index,
+        };
+        // The window path reads only the anchor's height (a completeness bound); its
+        // merkle_root/epoch are not consumed, so a certified root is not marshalled here.
+        let anchor = CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 0,
+            block_number: anchor_height,
+        };
+        let freshness = Freshness {
+            slot_now: freshness_slot_now,
+            max_lag: freshness_max_lag,
+        };
+        let verdict = window::verify_watched_window(
+            watch,
+            &anchor,
+            require_through,
+            &blocks,
+            eta0,
+            freshness,
+        );
+        // SAFETY: `out` is non-null (checked); the whole struct is written once.
+        unsafe { *out = project_watch_verdict(verdict) };
         SextantStatus::Ok as i32
     })
 }

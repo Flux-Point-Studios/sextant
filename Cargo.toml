@@ -24,6 +24,14 @@ name = "verified_read_gate"
 path = "examples/verified_read_gate/main.rs"
 required-features = ["mithril"]
 
+# The windowed-unspent consumer (BEYOND-DoD Tier1): authenticates the Mithril chain for
+# the certified anchor, then scans a header-verified, body-committed window for a spend of
+# the watched outpoint. Needs `mithril` for the anchored verify, same as the read gate.
+[[example]]
+name = "windowed_spend_gate"
+path = "examples/windowed_spend_gate/main.rs"
+required-features = ["mithril"]
+
 [features]
 # Mithril certificate-chain verification. OFF by default so the default lib and
 # the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
