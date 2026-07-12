@@ -621,6 +621,169 @@ needs a row in Evidence.
         PROCEED line names basis+anchor+as_of+lag+assumptions; REFUSES on SpentObserved, on Stalled,
         and on a truncated (WindowTooShort) window.
 
+- BEYOND-DoD v0.3 — THE DEFERRED MAP, SCOPED (2026-07-13, design workflow: 3 design agents grounded
+  in the repo + 3 adversarial critics; ALL THREE designs took critique fixes — 3 CRITICALs caught at
+  DESIGN time: an unsound height-only region upgrade, a dangling producer-less SpendStatus constant,
+  a zero-threshold committee-pin forgery. The specs below are the AMENDED versions. Operator ratifies
+  sequencing; recommended order F → A → N-landing (N's note ships immediately).
+
+  EPIC F — LIVE FOLLOWER (buildable NOW, zero external deps; turns Tier-1 into the product contract
+  "escrow funded at certified anchor, no spend observed through verified tip, follower live" for
+  Masumi escrow / ADAM spend-gate). Two layers: sans-io `WindowFollower` state machine in the lib
+  (src/follow.rs, DEFAULT wasm-safe graph, zero new deps) + workspace member tools/sentry (tokio +
+  pallas-network + Koios + aggregator polling — harvest's exact dep set; NOTE the repo has NO
+  chain-sync code today: harvest is blockfetch+Koios only, the chain-sync consumer loop is GREENFIELD
+  and budgeted in F6). Scope is honestly WATCH-FROM-CREATION (fresh outpoints — the Masumi/ADAM case);
+  old outpoints cost O(age) and their real answer is Tier-2 (Epic N).
+  - [ ] F1 — `WindowFollower` incremental core + differential parity (lib). new(watch, anchor,
+        require_through, eta0, schedule) / append(&[u8]) -> Result<Appended, AppendRefusal> /
+        verdict(Freshness) -> WatchVerdict. O(block-bytes) per append (never O(window)); refusal
+        leaves state untouched. Share ONE per-block unit with batch: de-privatize
+        chain::verify_header to pub(crate) + extract the batch scan (window.rs:284-319 +
+        tx_body_spans) into pub(crate) scan_block_facts — DRY, two callers, batch stays the frozen
+        oracle. PINNED EQUIVALENCE RELATION (critique fix — naive "byte-equal on every prefix +
+        mutation" is unsatisfiable): follower.verdict()==batch(P) iff every block of P was ACCEPTED
+        by append AND batch's verdict is in the follower's domain; for a REFUSED append at i the gate
+        is refusal-reason(i) ~ batch-stall-reason over blocks[..=i] via an explicit
+        AppendRefusal↔StallReason map; where the follower is MORE correct (spend recorded in an
+        accepted prefix, then a broken tail) the REQUIRED verdict is SpentObserved with batch applied
+        to the accepted prefix. Gating test: ONE long-lived follower per watched outpoint over the
+        committed 22-block window, require_through=4_921_937 fixed, verdict read after EVERY append,
+        compared per-prefix (short prefixes legitimately compare Stalled{WindowTooShort} ==
+        Stalled{WindowTooShort} — the truncation regression re-proved incrementally) + the mutation
+        set (dropped/spliced/tampered/wrong-eta0) through the refusal map.
+  - [ ] F2 — epoch-boundary crossing (lib). SlotSchedule{epoch, epoch_first_slot,
+        epoch_length_slots} + supply_next_eta0(epoch, [u8;32]) (idempotent/overwritable while
+        unused). NONCE STATE IS A MAP (critique fix — mutation-based switching bricks on a
+        rolled-back turn): carry (epoch → η0) entries (current + staged), SELECT the verifying nonce
+        from each appended block's slot via the schedule; NEVER mutate nonce state on append (success
+        or refusal) and NEVER clear it on rollback. Missing staged nonce at the turn → append refuses
+        EpochNonceUnavailable (fail-closed, liveness-only); wrong staged nonce → the first new-epoch
+        VRF fails (tests/boundary.rs proves each side rejects the other's nonce). Gating test: cross
+        the committed 299→300 boundary run through one follower, ROLLBACK below the turn, re-append
+        BOTH sides, assert green with no re-staging; assert a refused wrong-nonce append leaves a
+        subsequent correct-nonce append accepted. Transport sources η0 as BYTES (Koios epoch_params,
+        harvest's fetch_eta0 pattern) — an input to verify, never a verdict.
+  - [ ] F3 — rollback truncation + EVICTION-AS-FINALIZATION (lib). BlockFact ring
+        {height,slot,block_hash,created_here,spending_txid} capped k=2160 (~180KB). CRITIQUE FIX
+        (the flagship case hits the cap in ~12h — naive survivor-recompute makes finalized facts
+        EVAPORATE): eviction IS finalization — a fact k-deep below the carried tip is
+        rollback-immune (Ouroboros common prefix), so on eviction fold it into sticky aggregates
+        creation_final: Option<u64> / spend_final: Option<(height,slot,txid)> that rollback() NEVER
+        clears. rollback(slot,&hash): point in ring → truncate + recompute the NON-final facts from
+        survivors; the retained FOLLOW BASE POINT (intersect predecessor, pinned at first append —
+        critique fix, disambiguates the two stalls) → truncate to empty → CreationNotObserved path;
+        any other point → Stalled{RollbackBeyondWindow} (new additive StallReason) + restart.
+        Gating test: test-only ring capacity (e.g. 4) over the real window — append past the cap
+        watching #1, assert SpentObserved survives eviction; rollback to block[0]'s REAL predecessor
+        point (its prev_hash is in the fixture) for the CreationNotObserved arm, a fabricated point
+        for RollbackBeyondWindow; re-append re-converges with batch.
+  - [ ] F4 — two-region honesty + re_anchor (lib). SpendRegion{MithrilCertified, HeaderVouched} added
+        to WatchVerdict::SpentObserved (batch AND follower; correct the shipped src/window.rs:207 +
+        ffi.rs "authoritative regardless of freshness" docs — true only in the certified region).
+        CRITIQUE FIX (CRITICAL — height comparison alone is UNSOUND for the upgrade: a valid orphaned
+        sibling block below the anchor height is not the certified chain): HeaderVouched →
+        MithrilCertified upgrades ONLY on a verified INCLUSION PROOF of the spending tx against the
+        certified Merkle root (the existing src/inclusion.rs path; sentry fetches the proof at
+        re-anchor) — height alone NEVER upgrades a spend. Above-anchor Unspent: follower verdict()
+        extends past the batch domain — as_of above anchor yields Unspent with
+        WindowAssumptions{mithril_quorum: false, data_complete: true} instead of Stalled{
+        TipAboveAnchor}; the mithril_quorum bit KEEPS its shipped v3 wording (tip at/below the
+        certified anchor height, under the assumption the followed chain is the certified one) —
+        never a "final"/absolute claim. re_anchor(anchor) monotone in block_number. Gating test:
+        anchor pinned mid-window → #0 Unspent{mithril_quorum:false} at tip, #1 SpentObserved{
+        HeaderVouched}; re_anchor past the spend + a real inclusion proof → MithrilCertified;
+        re_anchor WITHOUT the proof → stays HeaderVouched.
+  - [ ] F5 — follower C-ABI, ABI v4 (ffi). SextantWatchVerdict._reserved[4] → spend_region:u8 +
+        _reserved[3]; consts SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED=1/_HEADER_VOUCHED=2 (0=n/a);
+        SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW=10/_EPOCH_NONCE_UNAVAILABLE=11. Opaque-handle
+        exports sextant_follower_{new,append,supply_next_eta0,rollback,re_anchor,verdict,destroy}
+        (Box::into_raw; a create/destroy pair is wasm-legal — the no-free rule covers lib-owned
+        buffers, none cross here). SEXTANT_ABI_VERSION 3→4 + header regen; grep stays clean (all
+        naming operational: spend/region/no-spend — never the banned substrings). Gating: FFI
+        replay+rollback test vs the Rust verdicts + harness --full.
+  - [ ] F6 — tools/sentry transport + live preprod evidence (member). GREENFIELD chain-sync loop
+        (find_intersect, RollForward/RollBackward, agency/idle) — budget it as new code. BOOTSTRAP
+        (critique fix — find_intersect serves only SUCCESSORS, and Koios tx_info yields the creating
+        block's OWN point, so intersecting there never serves the funding tx): blockfetch the
+        creating block by its own point FIRST (harvest fetch_range((p,p)) — fetch_single unverified
+        in the pinned pallas-network), append it, THEN find_intersect at that point. Per RollForward:
+        blockfetch full bodies (chain-sync N2N is headers-only). Aggregator polling + mithril-feature
+        verify_chain_anchored for re-anchor (+ the spending-tx inclusion proof fetch for F4's region
+        upgrade). slot_now from wall clock + Shelley-genesis config; require_through defaulted to the
+        observed network tip at watch start (confirm with ADAM). GATES SPLIT DETERMINISTICALLY
+        (critique fix — no weather-dependent evidence): (a) REQUIRED: in-process mock-peer test
+        serving the committed window as RollForward/RollBackward events MUST inject one rollback AND
+        one epoch turn; (b) live preprod transcript gates steady-state following + ONE real
+        aggregator re-anchor with the mithril_quorum flip observed. Real-runtime evidence attached
+        per DoD.
+
+  EPIC N — TIER-2 CertifiedUnspent (note NOW; landing slices GATED on upstream artifacts).
+  - [x] N0 — the upstream note: docs/mithril-utxo-commitment-note.md (committed 2026-07-13, critique-
+        amended: §4 claim precise, cadence a first-class ask WITH the consumer cost curve, snapshot
+        block-HASH + boundary-semantics asks added, ancillary-key citation fixed). OPERATOR ACTION:
+        send to the Mithril team (GitHub discussion on #2720/#2525 or direct) — time-sensitive,
+        shapes the format before it ossifies.
+  - [ ] N1..N4 (GATED — do NOT start until the named upstream artifact exists): N1 membership
+        verifier in src/snapshot.rs (GATE: published PoC proof vectors with a per-entry root);
+        N2 certificate binding — new part key + SignedEntityType + certified_utxo_set() accessor
+        (GATE: a real network certificate whose protocol message carries a PER-ENTRY COMMITMENT ROOT,
+        published together with ≥1 membership-proof vector — critique fix: the #3269 file-image-hash
+        entity must NEVER arm this); N3 the rebased window — WatchBasis::SnapshotRebased{...} +
+        verify_rebased_window (share the Tier-1 scan core — second caller now exists) with the
+        critique-mandated bindings: first_block.prev_hash == snapshot block HASH (number-only
+        continuity is forkable), post-state boundary semantics pinned by an upstream vector,
+        TWO-CERTIFICATE COHERENCE (both certs off the SAME genesis-anchored VerifiedChain, snapshot
+        S < CT-anchor A, S >= A → a named stall), and the F4 SpendRegion rule inherited; N4 C-ABI —
+        a SEPARATE fixed-width SextantRebasedVerdict out-struct + export (critique fix: NEVER grow
+        the shipped SextantWatchVerdict layout), grep-safe naming (membership/snapshot vocabulary),
+        ABI bump. CRITIQUE FIX (CRITICAL, binding on all of N): NO SpendStatus variant and NO
+        spend_status wire constant until a PRODUCING API with a mandatory staleness bound exists —
+        the honest Tier-2 verdict is WatchVerdict::Unspent{basis: SnapshotRebased} ONLY (it
+        structurally carries as_of + require_through + freshness); a bare membership-at-S value in
+        spend_status would be a stale-read footgun the ladder exists to prevent.
+
+  EPIC A — TIER-3 Attested (wire format + verifier NOW; C-ABI deferred behind a named trigger).
+  Design ratified by critique with fixes; the verdict is a DISTINCT type (attest::Attested), never a
+  WatchBasis/SpendStatus coercion; default wasm-safe graph, ZERO new deps (strict Ed25519 M-of-N —
+  never BLS, which would drag blst into default).
+  - [ ] A0 — Materios sync (operator): resolve (1) in-band creation binding (payload field 9?) vs
+        policy_id-implicit; (2) committee_epoch semantics — RESOLUTION PINNED per critique: epoch is
+        PIN MATERIAL — fold into CommitteePin{vkeys, threshold, epoch} and the committee_id preimage
+        blake2b256([threshold, epoch, [vkeys…]]) so a stale-epoch attestation fails CommitteeMismatch
+        STRUCTURALLY (no fake unenforced field); (3) network_magic convention (mainnet = 764824073,
+        the magic, never network-id). If the sync cannot happen: ship under domain tag
+        "sextant/attest/v1-draft", rename to v1 only at freeze.
+  - [ ] A1 — wire format + codec + committee identity (src/attest.rs, default graph). Domain-tagged
+        canonical CBOR (definite lengths, minimal ints, strictly-increasing member indices),
+        PER-FIELD WIDTH BOUNDS in the CDDL (outpoint index uint .le 65535 etc. — over-width → hard
+        Malformed, never truncation; critique fix). PIN VALIDATION FIRST (critique fix — CRITICAL:
+        threshold=0 + empty sig list verified as Ok in the unamended design): threshold==0, empty
+        roster, threshold>N, duplicate roster vkey → hard AttestError::InvalidPin before any other
+        check. Golden vectors + full mutation matrix (incl. threshold=0 with AND without valid sigs,
+        N<M, dup-roster double-sign, index=65536, 9-byte uint).
+  - [ ] A2 — M-of-N verify, fail-closed (src/attest.rs). verify_attestation(watch, network_magic,
+        blob, &CommitteePin, chain_bind: Option<&[u8;32]>, require_observed_through: u64, slot_now)
+        — CRITIQUE FIX (CRITICAL: attestor-chosen expiry alone admits pre-spend replay): the caller
+        supplies require_observed_through and claim.observed_through_height below it → hard
+        ObservationTooOld (the WindowTooShort discipline carried over); expiry remains the attestor's
+        liability bound, the floor is the CONSUMER's. chain_bind documented as an ACCOUNTABILITY
+        binding + cross-check hook, NOT a fork-replay closure (critique fix — above the anchor the
+        Tier-1 window cannot source the hash; a headers-only live verify_segment run is the one real
+        source; chain_bound=false leaves fork replay bounded only by expiry+floor, SURFACED as an
+        inline `chain_bound: bool` on Attested — no one-field assumptions struct). ALL doc language
+        "binds/surfaces X", NEVER "closes X" unless a named test demonstrates it. Surface the
+        correlated-vantage/eclipse caveat as an assumption (vantage diversity is policy_id material,
+        not verifiable here). CROSS-TIER COMPOSITION RULE pinned in docs: to compose with Tier-1,
+        claim.observed_through must reach DOWN to the Tier-1 anchor height (else the gap between
+        anchor and observation-start is covered by NEITHER tier). Strict per-member Ed25519
+        (src/ed25519.rs) over the payload bytes verbatim; ANY invalid signature → hard reject.
+  - [ ] A3 (DEFERRED — trigger: the FIRST end-to-end attestation blob from a real Witness-Network
+        committee testnet): C-ABI export + SEXTANT_BASIS_COMMITTEE_ATTESTED=100 (first economic-band
+        inhabitant) + a 500 status band + ABI bump; unify the TWO band-doc blocks (ffi.rs
+        spend_status doc AND the watch-basis doc) into one cross-referenced canonical numbering
+        (critique fix — they can drift today).
+
 ## Constraints
 - Read-path only. No transaction building, no interface layer — that
   belongs to the separate write-path layer this library sits under.
@@ -716,6 +879,7 @@ needs a row in Evidence.
 | 2026-07-12 23:20 UTC | Tier1 slice 3 (`verify_watched_window`) merged to main with red-team SHIP; all four Woodpecker contexts green | PR #26 squash-merged (`26ef8ad`); `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (pipelines 185/186). Red-team `fluxpoint-loop:red-team-reviewer` VERDICT SHIP (no reachable false-Unspent from any gap/stall/withheld/tampered/swapped-body vector, no panic on hostile bytes, CRUX body-bind proven non-vacuous by mutation, 0 blst/mithril-stm in default+wasm); the one MEDIUM (phantom-index → false Unspent) + one LOW (`with_capacity` on untrusted count) both closed IN the branch before merge (`b3a27fd`), each harness-green. Local main fast-forwarded to `26ef8ad`, branch deleted, tree clean. Next: Tier1 slice 4 (wire `WatchVerdict` into the `SpendStatus` ladder) |
 | 2026-07-12 23:55 UTC | Independent red-team of the autonomously-merged slice 3 found a CRITICAL (truncation → false `Unspent`) the loop's self-red-team MISSED; reproduced, fixed, regression-guarded, re-verified | A SECOND independent `fluxpoint-loop:red-team-reviewer` (hunting the cardinal false-`Unspent`) found the TRUNCATION EVASION: `verify_watched_window` had no LOWER bound on the tip, so a provider serving a valid window that simply ENDS one block before the spend (not withholding a mid-window block — that correctly `BrokenSegment`s) returns `Unspent`. OPERATOR REPRODUCED on the committed fixtures: watching the real on-chain-spent `beaa9166…#1` (spent block[1] 4921917), serving only block[0] 4921916 → `Unspent{as_of 4921916, data_complete:true}` — a false `Unspent` for a spent outpoint. The module docstring's "the adversary's only evasion, withholding … collapses to Stalled" was FALSE; freshness is a soft floor only (`max_lag` loose enough for the ~100-block-trailing Mithril window also admits a spend just under the tip). FIX (`fix-window-truncation`): a MANDATORY caller-supplied `require_through: u64` (hard lower bound on the verified tip) + `StallReason::WindowTooShort`; after contiguity + `create_seen`, `if tip.block_number < require_through → Stalled{WindowTooShort}`. Regression `truncated_window_before_the_spend_yields_stalled_never_unspent` (watch `#1`, `require_through` past the spend, serve only block[0] → `Stalled{WindowTooShort}`, asserts NOT `Unspent`) — NON-VACUOUS (operator reproduced the pre-fix `Unspent`). Docstring + the slice-3 comment corrected to name both evasions. `scripts/harness.sh --full` exit 0 (14 window tests, +1). Slice-5 C-ABI `sextant_verify_watched_window` MUST carry `require_through`. |
 | 2026-07-12 21:45 UTC | Tier1 slice 2 merged to main with red-team SHIP; all four Woodpecker contexts green | PR #25 squash-merged (`9405024`); `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (pipeline 178/177). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — no CRITICAL/HIGH, no false-accept or bind-bypass, no formula/span bug: the `hashAlonzoSegWits` recompute (`blake2b256(‖ of four blake2b256(segment))`, raw 128B preimage, NO CBOR framing) is byte-pinned to cardano-node over 61 real minted+accepted blocks (load-bearing + non-circular — idx-7 is an independent read, mutation `!=`→`==` flips 3/4 red); span boundaries deterministic from CBOR framing, NOT attacker-steerable (bytes can't shift between adjacent segments without changing that segment's hash); commitment authenticity anchored by the KES-signed `header_body` span (forging idx-7 needs breaking KES or a blake2b preimage); no panic (every span from a successful `d.skip()` ⇒ in-bounds `block_bytes[span]`, fail-closed decode); feature-gate clean (0 blst/mithril_stm, default wasm-safe graph); negatives non-vacuous (assert the exact `BodyCommitmentMismatch`). One LOW (documented, no fix): the bind proves CONSISTENCY not AUTHENTICITY — meaningless standalone (zero production callers today); slice 3's `verify_watched_window` MUST compose `verify_segment`/KES/VRF before/with the bind (already the pinned slice-3 design). `scripts/harness.sh --full` exit 0 on merged main |
+| 2026-07-13 02:10 UTC | The deferred map SCOPED (v0.3): live follower (Epic F), Tier-2 Mithril landing (Epic N) + the upstream note COMMITTED, Tier-3 Attested (Epic A) — via a 6-agent design+adversarial-critique workflow; THREE design-time CRITICALs caught and folded into the pinned specs | Workflow: 3 design agents (each grounded in the repo — file:line citations verified) pipelined into 3 adversarial critics; all three verdicts "needs-fixes" with the fixes AMENDED into the LOOP.md Plan specs. CRITICALs caught before any code: (F) a height-only SpentObserved region upgrade is unsound — a valid orphaned sibling block below the anchor height passes VRF/KES/link/body-bind yet is not the certified chain; upgrade ONLY via a verified inclusion proof of the spending tx against the certified root; (N) a producer-less SpendStatus::CertifiedUnspent + wire constant would land a stale membership-at-S value in the exact field documented "never gate a spend on it" — dropped; the honest Tier-2 verdict is WatchVerdict::Unspent{SnapshotRebased} only; (A) an unvalidated CommitteePin{threshold:0} accepts an EMPTY signature list — zero Ed25519 verifications — as Ok(Attested); pin validation is now the first verify step. Also caught: k-ring eviction must be finalization (the flagship watch hits k=2160 in ~12h; naive recompute evaporates finalized spends), nonce state must be a slot-keyed map (mutation-based switching bricks on a rolled-back epoch turn), find_intersect serves only successors (the funding tx needs a blockfetch bootstrap), attestor-chosen expiry alone admits pre-spend replay (caller floor require_observed_through added), snapshot certs need the block HASH not just number (fork-transplant at S+1). Deliverable committed: docs/mithril-utxo-commitment-note.md (critique-amended, upstream-ready — grounded in real Mithril state: #3269 file-hash entity shipped-closed, #2525 determinism track open, #2720 CIP-0165 SCLS the structured-commitment opening, 2027-Q2). |
 | 2026-07-13 00:20 UTC | Tier1 slice 4+5 (FINAL — C-ABI windowed watch verdict + ladder reconciliation) — CLOSES Tier-1; independent red-team SHIP, all four Woodpecker contexts green | PR #28 (`42d3caf`), branch `tier1-slice5-cabi-windowed`; `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (the `artifacts` job COMPILED + RAN the new `smoke.c` window leg on Linux — external C linkage of `sextant_verify_watched_window` + the struct crossing the boundary + garbage→STALLED, the leg unbuildable locally on Windows-MSVC). Export `sextant_verify_watched_window` (CORE, default+wasm32, 0 blst) surfaces the 3-valued verdict as fixed-width `#[repr(C)] SextantWatchVerdict{kind,basis,assumptions,stall_reason,_reserved[4],anchor_height,as_of_height,as_of_slot,verified_through,spend_at_height,spend_at_slot,spending_txid[32]}` (88B, no implicit padding, no `-3` sizing); CARRIES `require_through` (truncation defense holds at the C ABI). ABI 2→3. Slice 4: reserved `CertifiedUnspent`/`Attested` tiers de-duplicated onto `SpendStatus` (one home); `WatchBasis` docs only `WatchedWindow`. Independent `fluxpoint-loop:red-team-reviewer` (3rd of the project, hunting the false-accept that bit slices UTxO-pt2 + Tier1-3) VERDICT SHIP — NO false-accept/UB: (1) `project_watch_verdict` disjoint arms, `kind` set explicitly per variant, no path maps Stalled/SpentObserved→`NO_SPEND_OBSERVED`; (2) `require_through` passed through, `<` boundary correct, C-ABI regression proven on real data; (3) EXHAUSTIVELY grepped `src/` to confirm `merkle_root`/`epoch` are read ONLY in mithril.rs + the anchored-verify (never on the window path) — the empty anchor root is genuinely inert, honest-by-construction; (4) honest-scope grep survives because `NO_SPEND` is `s-p-e-n-d` not `spent` (the rename off the brief's `_UNSPENT` is load-bearing); (5) wasm pass-through guard + native `catch_unwind` + the harness's reject-`panic=abort` gate together close the unwind hole; (6) struct written once, `_reserved` explicit, header cbindgen-diff clean. `scripts/harness.sh --full` exit 0 (19 window incl. 5 ffi_boundary + 5 windowed_consumer + all others). Tier-1 windowed-unspent COMPLETE end-to-end (Rust core + C-ABI/WASM + consumer example). |
 
 ## Notes for the next iteration
@@ -733,14 +897,16 @@ carries no liveness claim. Consumer proof: `examples/windowed_spend_gate` (Masum
 project, the discipline that caught the MMR + truncation CRITICALs the loop self-review missed) VERDICT
 SHIP — no false-accept/UB, honest-by-construction anchor confirmed by an exhaustive `merkle_root`/`epoch`
 grep. `scripts/harness.sh --full` exit 0.
-**Next: nothing pinned — Tier-1 is done.** The remaining windowed-unspent map is deliberately DEFERRED, not
-diluted: (a) the LIVE relay follower — the transport that streams the contiguous body window from the
-certified anchor to the live tip in real time (a provider of BYTES, re-verified every block; needs a
-chain-sync client + a real-time clock for `slot_now`), NOT yet requested; (b) Tier-2 `CertifiedUnspent` —
-a Mithril LEDGER-STATE certificate + proof of unspent-ness, which does NOT exist upstream yet (standing
-offer: draft the Mithril proof-format note for the operator to take upstream); (c) Tier-3 `Attested` —
-a Materios/Witness-Network economic committee attestation, never coercible into the cryptographic tier.
-The loop may idle on STATUS: DONE until the operator scopes one of these. No harvest needed.
+**Next: the deferred map is now SCOPED (v0.3, 2026-07-13) — see the Plan's Epic F / Epic N / Epic A**
+(design + adversarial-critique workflow; three design-time CRITICALs folded into the pinned specs).
+Recommended sequencing (operator ratifies): Epic F first (live follower — buildable now, zero external
+deps, turns Tier-1 into the Masumi/ADAM product contract; F1..F6, red-team gate each), Epic A slices
+A0..A2 next (wire format + M-of-N verifier; A3 C-ABI deferred behind the committee-testnet trigger),
+Epic N landing slices GATED on upstream Mithril artifacts (N1..N4 must NOT start early — the gate
+conditions are pinned in the Plan). N0 is DONE: docs/mithril-utxo-commitment-note.md is committed and
+upstream-ready — the OPERATOR ACTION is sending it to the Mithril team (#2720/#2525 discussion).
+The loop attacks the first unchecked Plan item per the ratified order. No harvest needed until F6
+(live preprod evidence).
 
 State (2026-07-12, prior — beyond-DoD Tier1 slice 3 verify_watched_window MERGED, PR #26 `26ef8ad`, red-team SHIP, all four Woodpecker contexts green): **STATUS: DONE holds.**
 This iteration shipped Tier1 slice 3 of the BEYOND-DoD v0.2 flagship: `verify_watched_window` — the
