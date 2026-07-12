@@ -32,8 +32,13 @@ needs a row in Evidence.
       implemented (snapshot-anchored or proof-based — decide in a design
       slice first), with a negative test proving a tampered UTxO claim is
       rejected — proof: named test
-- [ ] Artifacts: single static lib + C header via cbindgen, and a wasm32
+- [x] Artifacts: single static lib + C header via cbindgen, and a wasm32
       build, both produced in CI — proof: release workflow run link
+      (PROVEN on merged main `d743d9a` — `.woodpecker/artifacts.yml` builds
+      `libsextant.a` + `include/sextant.h` (cbindgen, drift-gated by the harness)
+      + `sextant.wasm`, and a CI-only C smoke test links the real static lib
+      through the committed header on Linux; all Woodpecker contexts green, run
+      https://ci.fluxpointstudios.com/repos/15/pipeline/122/1)
 - [ ] Live: the first downstream consumer's execution path performs one
       verified UTxO read on preview against a real order before a spend
       decision, and rejects a spoofed RPC response in the same test —
@@ -230,7 +235,7 @@ needs a row in Evidence.
       empty guards, header fields incl. genesis `has_prev_hash==0`, panic→`ErrPanic`,
       mithril good/tampered/bad-json. See the "## Attacking next" spec for the pinned
       signatures, the `SextantStatus` enum, and the struct layouts.
-- [ ] Artifacts part 2 of 2 — CI artifact production (CLOSES DoD line 6):
+- [x] Artifacts part 2 of 2 — CI artifact production (CLOSES DoD line 6):
       `.woodpecker` builds and retains the three artifacts (`libsextant.a`,
       `include/sextant.h`, `sextant.wasm`) into `dist/` with a listing, so a green
       pipeline run link is the "produced in CI" proof; plus a CI-only C smoke test
@@ -312,10 +317,11 @@ needs a row in Evidence.
 | 2026-07-12 00:40 UTC | Artifacts part 1 (DoD line 6): the verified core is exposed over a minimal, allocation-free C ABI (`src/ffi.rs`) whose in-process verdicts equal the Rust path on real vectors, with a committed cbindgen header the harness drift-gates | `scripts/harness.sh --full` exit 0 — 4 core exports (`sextant_abi_version`/`_verify_segment`/`_header_decode`/`_status_message`) + `#[cfg(mithril)] sextant_mithril_verify_chain_anchored`; `tests/ffi.rs` (14) + `src/ffi.rs` unit (4): good preprod segment → `Ok{index:-1}`; dropped block → `ChainBrokenLink(201)`+index; tampered VRF → `ChainVrf(203)`+index+`detail∈110..=113`; null eta0 → `ErrNullPointer`; count==0 → `ErrEmptyInput`; header fields byte-match `HeaderView`; malformed→`100`, era→`101`+`detail==era`; mithril anchor good → `0`+64-hex root `69bc3bdf…`/tip `fc979366…`+len 2, bad-json@i → `327`+`index==i`, wrong vkey → `313`, resealed broken-link → `302`+idx1, resealed tampered-sig → 320-band+idx1; `guard` unit test panic→`ErrPanic(-9)`, genesis projection `has_prev_hash==0`. Header drift-gate (`cbindgen` regen + `diff`) clean, `#if defined(SEXTANT_MITHRIL)` present, 0 `blst`/`mithril_stm` tokens; `cargo tree -e normal` = 0 blst/mithril-stm in default+wasm; wasm32 build green (guard is a no-op trap there). No new crate (ffi adds no dep); no `panic="abort"` (grep-guarded) |
 | 2026-07-12 00:55 UTC | Red-team of the part-1 diff: VERDICT SHIP — no false-accept at the boundary, no memory/panic/feature-leak hole; the one actionable MEDIUM (panic=abort guard missed the single-quoted TOML form) closed + proven | `fluxpoint-loop:red-team-reviewer` across 7 attack surfaces: `Ok`(0) emitted only inside `Ok` arms (success writes strictly gated), bands disjoint from 0; every `from_raw_parts`/`&*` null-checked incl. each `block_ptrs[i]`/`cert_json_ptrs[i]` + `count==0` guard, `write_hex64`/`status_message` clamp `.min(64)`/`.min(cap)`; `guard` on all fallible exports, `AssertUnwindSafe` sound (writes only after the verifier, on the terminal arm); `cargo tree -e normal` (default + wasm) = 0 blst/mithril-stm; drift gate proven RED-on-change. MEDIUM fix: `header_gate` panic-abort grep now matches `['\"]abort['\"]` (both TOML string forms) — proven old regex matched 1/2 fixture lines (missed `panic = 'abort'`), new matches 2/2; `scripts/harness.sh --full` exit 0 after the fix. LOWs (index→i64 wrap unreachable; `ErrBufferTooSmall` reserved for part-2 sizing) documented, non-blocking |
 | 2026-07-12 01:20 UTC | Independent verification of the autonomously-merged FFI part-1 (DoD line 6, part 1): VERDICT SHIP — safe C-ABI boundary, honest ABI header, deterministic | Fresh `fluxpoint-loop:red-team-reviewer` (7 attack surfaces) + operator drift/flaky checks: every fallible export `guard`-wrapped (`AssertUnwindSafe` sound — out-params written once on the terminal arm, so a caught unwind → `ErrPanic(-9)`, never a half-written verdict); no false-accept (`Ok(0)` only inside `Ok` arms, bands disjoint from 0); every raw-ptr marshalling null-checked incl. per-element + `count==0`; taxonomy exhaustive with chain(200)/mithril(300) bands disjoint. Independent header regen = byte-identical to committed `include/sextant.h` (the drift gate is not hollow); `cargo test --all-features` ×3 = 88/88 deterministic; `cargo tree -e normal` default+wasm = 0 blst/mithril-stm; header 0-leak + `#if defined(SEXTANT_MITHRIL)`-guarded. One LOW closed here: `AnchoredError::Standard.index` doc said "0-based, oldest=root" but the value is `i+1` (1-based absolute; genesis root = index 0) — `src/mithril.rs` doc corrected to match the code + the already-correct FFI comment. Symbol-retention through linker dead-strip is deferred to part-2's CI C-smoke-test (pinned). Merged PR branch cleaned; remote = origin/main only |
+| 2026-07-12 02:10 UTC | Artifacts part 2 (CLOSES DoD line 6): the three artifacts are produced in CI and a C smoke test links the real static lib through the committed header on the Linux target | PR #16 squash-merged to main (`d743d9a`); `.woodpecker/artifacts.yml` runs `cargo build --release` (→ lean `libsextant.a`, no blst) + `cargo build --release --target wasm32` (→ `sextant.wasm`), then `cc -I include tests/smoke/smoke.c target/release/libsextant.a -lpthread -ldl -lm && ./smoke` (asserts `abi_version()==SEXTANT_ABI_VERSION`; garbage 2-block segment → non-zero `ChainDecode`+`index≥0`; null eta0 → `ErrNullPointer`; all 4 core exports link-referenced so a dead-stripped `#[no_mangle]` symbol is a LINK error), then assembles + lists `dist/{libsextant.a,sextant.h,sextant.wasm}`. All 4 Woodpecker contexts green on the PR (pipeline 122) AND on merged main `d743d9a` (`push/artifacts` + `push/harness` success). Independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP, 0 findings: proof non-vacuous (`CHECK` macro not `assert`; garbage genuinely decodes to `UnsupportedEra(0)`; a false-accept regression would turn smoke red), lean artifact (no `default=[mithril]`), fail-fast pipeline gates `./smoke`'s exit code. Durable downloadable release (publish secret) deferred to the operator. Run link: https://ci.fluxpointstudios.com/repos/15/pipeline/122/1 |
 
 ## Notes for the next iteration
-State (2026-07-12): **Artifacts part 1 shipped — the C-ABI FFI surface + drift-gated
-cbindgen header (DoD line 6, part 1 of 2)**. `src/ffi.rs` turns the verified core into
+State (2026-07-12): **DoD line 6 is CLOSED — the C-ABI/WASM artifacts primitive shipped
+(parts 1 + 2 of 2, PRs #15 + #16).** Part 1 (`src/ffi.rs`) turns the verified core into
 the consumable primitive: 4 core `extern "C"` exports (`sextant_abi_version`,
 `sextant_verify_segment`, `sextant_header_decode`, `sextant_status_message`) + a
 `#[cfg(feature="mithril")] sextant_mithril_verify_chain_anchored`, each fallible body in a
@@ -332,18 +338,25 @@ maps the cfg fn to `#if defined(SEXTANT_MITHRIL)` via `[defines]`; `[export] inc
 the enum (no fn signature references it) and `exclude` drops the leaked `SLOTS_PER_KES_PERIOD`.
 No new crate (ffi adds no dep); feature-gate keeps mithril-stm/blst out of default+wasm.
 
-**Attacking next — DoD line 6 part 2 of 2 (CLOSES the line): CI artifact production.**
-The pinned spec is the "### CI artifacts (part 2)" block below. `.woodpecker` builds + retains
-`dist/{libsextant.a, sextant.h, sextant.wasm}` with a listing (green pipeline run link = the
-"produced in CI" proof), plus a CI-only C smoke test (`tests/smoke/smoke.c`) that `#include`s
-`sextant.h`, links `libsextant.a`, and calls through the boundary (abi_version match + a
-tampered segment → nonzero + `out_detail.index>=0`) — proving external C linkage + `#[no_mangle]`
-symbol retention on the Linux artifact target (Windows-MSVC local link is fragile, so this is
-CI-only by design, run on every push, a merge gate). RULE the red-team flagged for part 2: every
-new export must gain a smoke.c reference or it is not proven retained. A durable downloadable
-release (plugin-release / `gh release`) needs a CI secret — deferred to the operator.
+**DoD line 6 CLOSED (parts 1 + 2 shipped).** Part 2 (PR #16, `d743d9a`): `.woodpecker/
+artifacts.yml` builds + lists `dist/{libsextant.a, sextant.h, sextant.wasm}` (green run link =
+"produced in CI" proof) and a CI-only C smoke test links the real static lib through the
+committed header on Linux (external C linkage + `#[no_mangle]` symbol retention; Windows-MSVC
+local link is fragile, so CI-only by design + a merge gate). Independent red-team SHIP (0
+findings); all Woodpecker contexts green on the PR and on merged main. A durable downloadable
+release (plugin-release / `gh release`) needs a CI publish secret — DEFERRED to the operator.
+RULE (red-team-flagged): every new export must gain a `smoke.c` reference or it is not proven
+retained.
 
-**Carried for the part-2 red-team (part-1 self-review):** (1) the drift gate installs
+**Attacking next — OPERATOR-STEERED (do NOT auto-derive).** The consensus + trust-establishment
+core AND the consumable C-ABI/WASM primitive are done (DoD lines 2 substantive, 3, 4, 6).
+Remaining DoD is a different character and some needs an operator decision: line 5 (UTxO — a
+DESIGN slice first: snapshot-anchored vs proof-based, anchored to the now-verified Mithril
+snapshot; see the deferred UTxO note above), line 2 (a real mainnet block + eta0 harvest to tick
+the "from mainnet" wording), line 7 (Live — needs a downstream consumer). Checkpoint the operator
+before attacking any of these.
+
+**Carried notes (the part-2 red-team returned 0 findings):** (1) the drift gate installs
 `cbindgen ^0.28` via `cargo install` if missing — a future 0.28.x formatting change could
 spuriously fail the gate; fix is `make header` + recommit (fail-closed, never a false-accept).
 (2) `SextantStatus::ErrBufferTooSmall(-3)` is reserved ABI (in the message table, never
