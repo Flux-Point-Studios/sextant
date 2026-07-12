@@ -537,13 +537,25 @@ needs a row in Evidence.
         gap-free) → per-block body-bind (slice 2) → `decode_spends` (slice 1) → membership test →
         the CHECKED invariant `tip.n − start.n + 1 == len` + creation-of-H observed at/above start →
         freshness lag. FAIL-CLOSED: any gap/broken-link/body-mismatch/stale-tip → `Stalled`, NEVER
-        `Unspent`. HARVEST (operator, network seam): a contiguous preprod segment with a real
-        create+spend of one outpoint + a not-spent outpoint, committed as fixtures. Named tests:
-        `unspent_outpoint_in_verified_window_yields_Unspent_as_of_tip`,
-        `spending_block_in_window_yields_SpentObserved_at_block`,
-        `dropped_spending_block_yields_Stalled_never_Unspent`,
-        `window_starting_after_the_spend_yields_Stalled` (the "start after the spend" evasion),
-        `stale_tip_yields_Stalled_TipTooOld`.
+        `Unspent`. NO HARVEST — the committed fixtures already contain everything (operator verified
+        via a tx-graph probe): the existing 22-block contiguous preprod segment (`preprod-*.block` +
+        `.eta0`, block numbers 4921916..4921937, all ≤ certified_at, already `verify_segment`-verified
+        by `tests/chain.rs`) has 118 create+spend pairs + 157 created-not-spent outpoints. The ANCHOR
+        is the committed `CertifiedTransactions{root 83c012fd…774129, epoch 300, block 4927469}` (from
+        `mithril-txproof-cert.json::certified_transactions()` — the window tip 4921937 ≤ 4927469, so the
+        window sits inside the Mithril-certified region; `data_complete`/`mithril_quorum` are the
+        surfaced assumptions). PINNED watched outpoints (all from tx `beaa9166c061e56457b5d84de4b3d15c
+        9386b202d2585ff247f47af0dcd32a5e`, created in block[0]=4921916 → `create_seen` holds):
+        `#0` is NOT spent in the segment (POSITIVE → `Unspent{as_of: height 4921937 / slot 128046016}`);
+        `#1` is spent in block[1]=4921917 (NEGATIVE → `SpentObserved{at 4921917}`). Named tests:
+        `unspent_outpoint_in_verified_window_yields_Unspent_as_of_tip` (watch `beaa9166…#0`, full
+        segment → `Unspent`, assumptions both set, `as_of` = tip height+slot),
+        `spending_block_in_window_yields_SpentObserved_at_block` (watch `beaa9166…#1` → `SpentObserved`
+        naming block[1]), `dropped_spending_block_yields_Stalled_never_Unspent` (watch `#1`, drop
+        block[1] → `verify_segment` `BrokenLink` → `Stalled{BrokenSegment}`, NEVER `Unspent`),
+        `window_tip_above_certified_at_or_create_not_seen_yields_Stalled` (a window whose start does
+        NOT observe `beaa9166`'s creation → `Stalled`, the "start after the spend" evasion),
+        `stale_tip_yields_Stalled_TipTooOld` (freshness `slot_now − tip.slot > max_lag` → `Stalled`).
   - [ ] Tier1 slice 4 — `SpendStatus::Unspent{as_of, basis}` variant + the `#[non_exhaustive]`
         tripwire update, wiring the WatchVerdict into the ladder; honest-scope doc.
   - [ ] Tier1 slice 5 — C-ABI additive: `SextantWatchVerdict` (sibling struct) + banded constants
