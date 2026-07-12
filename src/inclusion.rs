@@ -200,7 +200,10 @@ fn calculate_peak_root(
         .collect();
     while let Some((pos, item, height)) = queue.pop_front() {
         if pos == peak_pos {
-            return Ok(item);
+            if queue.is_empty() {
+                return Ok(item);
+            }
+            return Err(InclusionError::MalformedProof);
         }
         let next_height = pos_height_in_tree(pos + 1);
         let (sib_pos, parent_pos) = if next_height > height {
@@ -225,6 +228,9 @@ fn calculate_peak_root(
         } else {
             merge(&item, &sibling_item)
         };
+        if parent_pos > peak_pos {
+            return Err(InclusionError::MalformedProof);
+        }
         queue.push_back((parent_pos, parent_item.to_vec(), height + 1));
     }
     Err(InclusionError::MalformedProof)
@@ -235,10 +241,16 @@ fn calculate_peaks_hashes(
     mmr_size: u64,
     proof_items: &mut core::slice::Iter<'_, Vec<u8>>,
 ) -> Result<Vec<Vec<u8>>, InclusionError> {
+    if leaves.iter().any(|(pos, _)| pos_height_in_tree(*pos) > 0) {
+        return Err(InclusionError::MalformedProof);
+    }
     if mmr_size == 1 && leaves.len() == 1 && leaves[0].0 == 0 {
         return Ok(vec![leaves.remove(0).1]);
     }
     leaves.sort_by_key(|(pos, _)| *pos);
+    if leaves.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err(InclusionError::MalformedProof);
+    }
     let peaks = get_peaks(mmr_size);
     let mut peaks_hashes: Vec<Vec<u8>> = Vec::with_capacity(peaks.len() + 1);
     let mut leaves = leaves.into_iter().peekable();

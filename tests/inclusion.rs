@@ -15,6 +15,7 @@
 //! trusted for the proof *bytes* only; a mutated path node or a substituted
 //! sub-tree recomputes to a different root and is rejected.
 
+use ckb_merkle_mountain_range::{MMR, Merge, Result as MmrResult, util::MemStore};
 use sextant::inclusion::{InclusionError, verify_tx_inclusion};
 use std::fs;
 use std::path::PathBuf;
@@ -183,5 +184,259 @@ fn the_certified_root_is_stm_authenticated_and_the_proof_binds_to_it() {
             &hex32(&ct.merkle_root)
         ),
         Ok(())
+    );
+}
+
+// ---- Anti-malleability regression (adversarial review of the MMR verifier) ----
+//
+// A genuine `MKMapProof<BlockRange>` — its master map and every sub-tree root built
+// here with `ckb-merkle-mountain-range`, so the recompute target is a real MMR root —
+// commits eight block ranges, one of which legitimately holds a single transaction
+// (a 1-leaf sub-tree whose root is that tx's ascii-hex leaf). Appending an unrelated
+// transaction `X` as a second leaf into that single-tx sub-proof makes a naive
+// recompute silently drop `X` at the peak while membership still reports it present,
+// yielding a false `Ok`. The restored ckb recompute guards reject the unconsumed /
+// duplicate leaf. This test returns `Ok` (fails) on the pre-guard verifier and passes
+// with the guards in place — it is the standing regression for the CRITICAL.
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct MmrNode(Vec<u8>);
+
+struct MmrMerge;
+impl Merge for MmrMerge {
+    type Item = MmrNode;
+    fn merge(left: &MmrNode, right: &MmrNode) -> MmrResult<MmrNode> {
+        Ok(MmrNode(node_merge(&left.0, &right.0)))
+    }
+}
+
+fn blake2s256(data: &[u8]) -> Vec<u8> {
+    use blake2::VarBlake2s;
+    use blake2::digest::{Update, VariableOutput};
+    let mut h = VarBlake2s::new(32).unwrap();
+    h.update(data);
+    let mut out = [0u8; 32];
+    h.finalize_variable(|r| out.copy_from_slice(r));
+    out.to_vec()
+}
+
+fn node_merge(a: &[u8], b: &[u8]) -> Vec<u8> {
+    blake2s256(&[a, b].concat())
+}
+
+/// mithril's MKTree leaf form of a tx hash: its lowercase-hex ASCII bytes.
+fn ascii_hex_leaf(tx: &[u8; 32]) -> Vec<u8> {
+    hex::encode(tx).into_bytes()
+}
+
+/// An `MkTreeNode` on the wire: `{"hash":[u8,..]}`.
+fn wire_node(hash: &[u8]) -> serde_json::Value {
+    let bytes: Vec<serde_json::Value> = hash.iter().map(|b| serde_json::json!(b)).collect();
+    serde_json::json!({ "hash": bytes })
+}
+
+/// HEX(JSON) — the exact form `verify_tx_inclusion` consumes.
+fn to_wire(v: &serde_json::Value) -> Vec<u8> {
+    hex::encode(serde_json::to_vec(v).unwrap()).into_bytes()
+}
+
+/// Build an MMR over `leaf_values`; return `(root, mmr_size, proof_items, leaf_pos)`
+/// for a single-leaf inclusion proof of `target_idx`.
+fn mmr_single_proof(
+    leaf_values: &[Vec<u8>],
+    target_idx: usize,
+) -> (Vec<u8>, u64, Vec<Vec<u8>>, u64) {
+    let store = MemStore::<MmrNode>::default();
+    let mut mmr = MMR::<MmrNode, MmrMerge, _>::new(0, &store);
+    let mut positions = Vec::new();
+    for v in leaf_values {
+        positions.push(mmr.push(MmrNode(v.clone())).unwrap());
+    }
+    let root = mmr.get_root().unwrap().0;
+    let proof = mmr.gen_proof(vec![positions[target_idx]]).unwrap();
+    let items: Vec<Vec<u8>> = proof.proof_items().iter().map(|n| n.0.clone()).collect();
+    (root, proof.mmr_size(), items, positions[target_idx])
+}
+
+#[test]
+fn a_smuggled_tx_in_a_single_tx_block_range_is_rejected() {
+    let ranges: [(u64, u64); 8] = [
+        (0, 14),
+        (15, 29),
+        (30, 44),
+        (45, 59),
+        (60, 74),
+        (75, 89),
+        (90, 104),
+        (105, 119),
+    ];
+    let target = 3usize;
+    let real_tx = [0x42u8; 32];
+
+    // Range 3 is a single-tx range (1-leaf sub-tree); the others hold three txs each.
+    let sub_roots: Vec<Vec<u8>> = (0..8)
+        .map(|i| {
+            if i == target {
+                ascii_hex_leaf(&real_tx)
+            } else {
+                let leaves: Vec<Vec<u8>> = (0..3)
+                    .map(|j| ascii_hex_leaf(&[(i as u8) * 10 + j as u8; 32]))
+                    .collect();
+                mmr_single_proof(&leaves, 0).0
+            }
+        })
+        .collect();
+
+    // Genuine master map over merge("{start}-{end}", sub_root) — the STM-signed root.
+    let master_leaves: Vec<Vec<u8>> = (0..8)
+        .map(|i| {
+            node_merge(
+                format!("{}-{}", ranges[i].0, ranges[i].1).as_bytes(),
+                &sub_roots[i],
+            )
+        })
+        .collect();
+    let (master_root, master_size, master_items, master_pos) =
+        mmr_single_proof(&master_leaves, target);
+    let mut certified_root = [0u8; 32];
+    certified_root.copy_from_slice(&master_root);
+
+    let master_items_json: Vec<serde_json::Value> =
+        master_items.iter().map(|h| wire_node(h)).collect();
+    let range_json = serde_json::json!({
+        "inner_range": { "start": ranges[target].0, "end": ranges[target].1 }
+    });
+
+    let x = [0xEEu8; 32]; // attacker tx, in no range
+
+    // Forged: genuine master path for range 3, but range 3's single-leaf sub-proof
+    // carries the real tx AND X at the same leaf position.
+    let forged = serde_json::json!({
+        "master_proof": {
+            "inner_leaves": [ [master_pos, wire_node(&master_leaves[target])] ],
+            "inner_proof_size": master_size,
+            "inner_proof_items": master_items_json.clone(),
+        },
+        "sub_proofs": [[ range_json.clone(), {
+            "master_proof": {
+                "inner_leaves": [
+                    [0u64, wire_node(&ascii_hex_leaf(&real_tx))],
+                    [0u64, wire_node(&ascii_hex_leaf(&x))]
+                ],
+                "inner_proof_size": 1u64,
+                "inner_proof_items": [],
+            },
+            "sub_proofs": []
+        }]]
+    });
+    assert_ne!(
+        verify_tx_inclusion(&to_wire(&forged), &x, &certified_root),
+        Ok(()),
+        "a tx smuggled into a single-tx block range must not verify"
+    );
+
+    // Control: the genuine single-tx proof still verifies for the real tx.
+    let genuine = serde_json::json!({
+        "master_proof": {
+            "inner_leaves": [ [master_pos, wire_node(&master_leaves[target])] ],
+            "inner_proof_size": master_size,
+            "inner_proof_items": master_items_json,
+        },
+        "sub_proofs": [[ range_json, {
+            "master_proof": {
+                "inner_leaves": [ [0u64, wire_node(&ascii_hex_leaf(&real_tx))] ],
+                "inner_proof_size": 1u64,
+                "inner_proof_items": [],
+            },
+            "sub_proofs": []
+        }]]
+    });
+    assert_eq!(
+        verify_tx_inclusion(&to_wire(&genuine), &real_tx, &certified_root),
+        Ok(()),
+        "the genuine single-tx block range must still verify"
+    );
+}
+
+/// A distinct-position (non-duplicate) smuggle whose sub-proof still recomputes to the
+/// genuine single-tx sub-root by returning early at the peak with a residual leaf left
+/// in the queue. The dedup guard cannot catch it (the two leaves sit at different
+/// positions); the queue-empty-at-peak guard (and, independently, the internal-node
+/// position guard, since the real leaf is declared at internal pos 2) closes it. This
+/// pins the queue-empty guard as load-bearing: dedup alone does not close this family.
+#[test]
+fn a_residual_leaf_at_a_peak_return_is_rejected() {
+    let ranges: [(u64, u64); 8] = [
+        (0, 14),
+        (15, 29),
+        (30, 44),
+        (45, 59),
+        (60, 74),
+        (75, 89),
+        (90, 104),
+        (105, 119),
+    ];
+    let target = 3usize;
+    let real_tx = [0x42u8; 32];
+
+    let sub_roots: Vec<Vec<u8>> = (0..8)
+        .map(|i| {
+            if i == target {
+                ascii_hex_leaf(&real_tx)
+            } else {
+                let leaves: Vec<Vec<u8>> = (0..3)
+                    .map(|j| ascii_hex_leaf(&[(i as u8) * 10 + j as u8; 32]))
+                    .collect();
+                mmr_single_proof(&leaves, 0).0
+            }
+        })
+        .collect();
+
+    let master_leaves: Vec<Vec<u8>> = (0..8)
+        .map(|i| {
+            node_merge(
+                format!("{}-{}", ranges[i].0, ranges[i].1).as_bytes(),
+                &sub_roots[i],
+            )
+        })
+        .collect();
+    let (master_root, master_size, master_items, master_pos) =
+        mmr_single_proof(&master_leaves, target);
+    let mut certified_root = [0u8; 32];
+    certified_root.copy_from_slice(&master_root);
+    let master_items_json: Vec<serde_json::Value> =
+        master_items.iter().map(|h| wire_node(h)).collect();
+
+    let x = [0xEEu8; 32];
+
+    // Range 3's sub-proof: inner_proof_size 3, real tx declared at (internal) pos 2, X at
+    // pos 0, one bogus sibling item. Pre-fix, the recompute pops X, folds toward the peak,
+    // returns the real leaf at the peak while X's partial fold is still queued — dropped.
+    let sub = serde_json::json!({
+        "master_proof": {
+            "inner_leaves": [
+                [2u64, wire_node(&ascii_hex_leaf(&real_tx))],
+                [0u64, wire_node(&ascii_hex_leaf(&x))]
+            ],
+            "inner_proof_size": 3u64,
+            "inner_proof_items": [ wire_node(&[0u8; 32]) ],
+        },
+        "sub_proofs": []
+    });
+    let forged = serde_json::json!({
+        "master_proof": {
+            "inner_leaves": [ [master_pos, wire_node(&master_leaves[target])] ],
+            "inner_proof_size": master_size,
+            "inner_proof_items": master_items_json,
+        },
+        "sub_proofs": [[
+            { "inner_range": { "start": ranges[target].0, "end": ranges[target].1 } },
+            sub
+        ]]
+    });
+    assert_ne!(
+        verify_tx_inclusion(&to_wire(&forged), &x, &certified_root),
+        Ok(()),
+        "a residual queued leaf at a peak return must not smuggle a tx"
     );
 }
