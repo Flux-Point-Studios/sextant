@@ -385,7 +385,7 @@ fn hex_val(c: u8) -> Option<u8> {
     }
 }
 
-fn decode_hex(s: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(s: &[u8]) -> Option<Vec<u8>> {
     if s.is_empty() || !s.len().is_multiple_of(2) {
         return None;
     }
