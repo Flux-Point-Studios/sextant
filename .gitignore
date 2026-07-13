@@ -2,3 +2,8 @@
 /.scratch
 .claude/fluxpoint-loop/
 .claude/settings.local.json
+
+# Internal fluxpoint-loop machinery — kept local, out of the public repo
+LOOP.md
+LOOP_PROMPT.md
+scripts/loop.sh
