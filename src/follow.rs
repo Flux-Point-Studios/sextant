@@ -50,8 +50,24 @@
 //! has not been staged is refused [`AppendRefusal::EpochNonceUnavailable`] (fail-closed,
 //! liveness-only: it never advances the tip, and a later append after the nonce is staged
 //! still succeeds).
+//!
+//! ## Rollback + eviction-as-finalization (F3)
+//! A live chain-sync consumer receives `RollBackward` as well as `RollForward`, so the
+//! follower retains the last [`RING_CAP`] accepted blocks' facts in a ring
+//! ([`BlockFact`]) and [`WindowFollower::rollback`] truncates the accepted run to the
+//! rolled-back-to point, recomputing the window's facts from the survivors. `RING_CAP` is
+//! Cardano's Ouroboros security parameter k = 2160: a fact evicted below it is
+//! common-prefix-deep and can NEVER be rolled back, so eviction FINALIZES it — folding
+//! `created_here`/`spending_txid` into the sticky `creation_final`/`spend_final`
+//! aggregates that [`WindowFollower::rollback`] never clears (a naive
+//! recompute-from-survivors would make a spend that scrolled below the cap evaporate).
+//! A rollback target the follower does not retain — deeper than the ring and not the
+//! follow base — is fail-closed to [`crate::window::StallReason::RollbackBeyondWindow`]:
+//! the follower cannot reconstruct that history, so it is poisoned until the caller
+//! discards it and restarts. The nonce map is untouched by rollback (F2), so crossing an
+//! epoch boundary and rolling back below it needs no re-staging.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::chain;
 use crate::header::HeaderView;
@@ -97,6 +113,61 @@ impl SlotSchedule {
             self.epoch.saturating_sub(epochs_below)
         }
     }
+}
+
+/// The follower's rollback horizon: it retains the last `RING_CAP` accepted blocks' facts
+/// so a chain-sync `RollBackward` within this depth can truncate and recompute. Set to
+/// Cardano's Ouroboros security parameter k = 2160 — the common-prefix bound — so a fact
+/// evicted below it can never be rolled back and is safely finalized. At ~5 fields × 8
+/// bytes the ring is well under 200 KB.
+const RING_CAP: usize = 2160;
+
+/// One accepted block's read-path facts, retained in the follower's rollback ring. A
+/// rollback truncates the ring to the target and the window's facts recompute from the
+/// survivors; a fact evicted below `RING_CAP` is finalized into the sticky aggregates
+/// (see [`WindowFollower`]).
+#[derive(Debug, Clone, Copy)]
+struct BlockFact {
+    height: u64,
+    slot: u64,
+    block_hash: [u8; 32],
+    created_here: bool,
+    spending_txid: Option<[u8; 32]>,
+}
+
+/// The follower's verified tip — the linkage parent for the next append and the point the
+/// verdict is answered as of. Only the three fields append and verdict read from a header
+/// are kept, so a rollback can restore the tip from a retained [`BlockFact`] without a
+/// full [`HeaderView`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Tip {
+    block_number: u64,
+    slot: u64,
+    block_hash: [u8; 32],
+}
+
+/// Which arm a [`WindowFollower::rollback`] target fell in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rollback {
+    /// The target is a block still in the fact ring: the accepted run was truncated to end
+    /// at it and the window's facts recompute from the survivors (plus the finalized
+    /// aggregates). The follower stays live — re-append the target's successors. Carries
+    /// the new verified-tip height.
+    Truncated {
+        /// The verified tip's block number after truncation.
+        tip_height: u64,
+    },
+    /// The target is the follow base — the predecessor the first appended block hung from,
+    /// reachable only while the whole window still fits in the ring. The window is empty
+    /// again but the follower stays anchored; re-append from the first block. Finalized
+    /// aggregates are kept.
+    ToBase,
+    /// The target is neither in the ring nor the follow base: deeper than the follower
+    /// retains, so a rollback beyond the common-prefix horizon the ring covers. The
+    /// follower cannot reconstruct the intervening state — its verdict is now
+    /// [`crate::window::StallReason::RollbackBeyondWindow`] and the caller must discard it
+    /// and restart from a fresh anchor.
+    BeyondWindow,
 }
 
 /// The outcome of a successful [`WindowFollower::append`]: the block was verified and
@@ -203,13 +274,35 @@ pub struct WindowFollower {
     /// a later rollback below the turn re-selects the earlier epoch's nonce with no
     /// re-staging. `append` only READS this map.
     nonces: BTreeMap<u64, [u8; 32]>,
-    /// The last accepted header: the linkage parent for the next append and the tip the
-    /// verdict is answered as of. `None` before the first accepted block.
-    tip: Option<HeaderView>,
-    /// Whether the watched outpoint's creation has been observed in an accepted block.
-    create_seen: bool,
-    /// The first observed spend, if any (sticky).
-    spend: Option<ObservedSpend>,
+    /// The last `ring_cap` accepted blocks' facts, oldest→newest. A rollback truncates
+    /// this to the target and the window's non-final facts recompute from what survives;
+    /// an evicted fact is finalized into the sticky aggregates below.
+    ring: VecDeque<BlockFact>,
+    /// The ring's capacity — [`RING_CAP`] in production, lowered only in tests to exercise
+    /// eviction over the small committed window.
+    ring_cap: usize,
+    /// The follow base: the predecessor hash the first appended block linked to, pinned at
+    /// the first append. It is a legitimate rollback target only while nothing has been
+    /// evicted (then it sits exactly one below the oldest retained block); once eviction
+    /// has begun it is below the retained region and rolling back to it is beyond-window.
+    follow_base: Option<[u8; 32]>,
+    /// Set the first time a fact is evicted. Distinguishes a legitimate follow-base
+    /// rollback (nothing evicted, the base is one below the oldest retained fact) from a
+    /// beyond-window one (eviction has begun, so the base is common-prefix-deep).
+    has_evicted: bool,
+    /// A creation finalized on eviction, retained forever: a block evicted below the ring
+    /// is common-prefix-deep, so rollback never clears it.
+    creation_final: Option<u64>,
+    /// A spend finalized on eviction, retained forever (see `creation_final`).
+    spend_final: Option<ObservedSpend>,
+    /// The verified tip: the linkage parent for the next append and the point the verdict
+    /// is answered as of. `None` before the first accepted block and after a rollback to
+    /// the follow base.
+    tip: Option<Tip>,
+    /// Poisoned by a rollback deeper than the retained horizon: the verdict is then
+    /// [`StallReason::RollbackBeyondWindow`] and the follower must be discarded and
+    /// restarted from a fresh anchor.
+    beyond_window: bool,
 }
 
 impl WindowFollower {
@@ -230,9 +323,14 @@ impl WindowFollower {
             require_through,
             schedule,
             nonces: BTreeMap::new(),
+            ring: VecDeque::new(),
+            ring_cap: RING_CAP,
+            follow_base: None,
+            has_evicted: false,
+            creation_final: None,
+            spend_final: None,
             tip: None,
-            create_seen: false,
-            spend: None,
+            beyond_window: false,
         }
     }
 
@@ -265,15 +363,29 @@ impl WindowFollower {
         //    number, and without it a hash-linked skipper could vault the tip past
         //    `require_through` without the intervening blocks — the batch oracle's
         //    terminal contiguity check (MissingBlock), enforced here per append.
-        if let Some(prev) = &self.tip {
-            if view.prev_hash != Some(prev.block_hash) {
-                return Err(AppendRefusal::BrokenLink);
+        match &self.tip {
+            Some(prev) => {
+                if view.prev_hash != Some(prev.block_hash) {
+                    return Err(AppendRefusal::BrokenLink);
+                }
+                // Checked add: block_number is an attacker-chosen field inside the signed
+                // header body, so a u64::MAX tip must refuse its successor fail-closed —
+                // never an overflow panic (untrusted bytes never panic, crate-wide).
+                if prev.block_number.checked_add(1) != Some(view.block_number) {
+                    return Err(AppendRefusal::NotContiguous);
+                }
             }
-            // Checked add: block_number is an attacker-chosen field inside the signed
-            // header body, so a u64::MAX tip must refuse its successor fail-closed —
-            // never an overflow panic (untrusted bytes never panic, crate-wide).
-            if prev.block_number.checked_add(1) != Some(view.block_number) {
-                return Err(AppendRefusal::NotContiguous);
+            // First block of the (re-)anchored window. If a follow base was pinned — the
+            // follower base-rolled-back and is re-appending from the window start — the
+            // re-appended first block MUST link to that base, so the follower cannot be
+            // re-anchored onto a different fork. On the very first append there is no base
+            // yet (trust starts at the first block), so no link is checked.
+            None => {
+                if let Some(base) = self.follow_base
+                    && view.prev_hash != Some(base)
+                {
+                    return Err(AppendRefusal::BrokenLink);
+                }
             }
         }
         // 3. Select this block's epoch nonce by its slot — a map lookup, never a mutated
@@ -299,20 +411,112 @@ impl WindowFollower {
         })?;
 
         // 6. Every check passed: commit. Nothing above mutated `self`, so the follower is
-        //    untouched on any refusal.
-        if facts.created_here {
-            self.create_seen = true;
+        //    untouched on any refusal. Pin the follow base on the first append (the
+        //    predecessor the window hangs from), push this block's fact, and evict +
+        //    finalize the oldest if the ring is over capacity.
+        if self.follow_base.is_none() {
+            self.follow_base = facts.view.prev_hash;
         }
-        if let Some(spending_txid) = facts.spent_by {
-            self.spend.get_or_insert(ObservedSpend {
-                at_height: facts.view.block_number,
-                at_slot: facts.view.slot,
+        let fact = BlockFact {
+            height: facts.view.block_number,
+            slot: facts.view.slot,
+            block_hash: facts.view.block_hash,
+            created_here: facts.created_here,
+            spending_txid: facts.spent_by,
+        };
+        self.ring.push_back(fact);
+        if self.ring.len() > self.ring_cap {
+            let evicted = self
+                .ring
+                .pop_front()
+                .expect("a ring over capacity is non-empty");
+            self.finalize(evicted);
+        }
+        self.tip = Some(Tip {
+            block_number: fact.height,
+            slot: fact.slot,
+            block_hash: fact.block_hash,
+        });
+        Ok(Appended {
+            block_number: fact.height,
+        })
+    }
+
+    /// Fold an evicted fact into the sticky finalized aggregates. A fact evicted below the
+    /// ring is `RING_CAP`-deep and common-prefix-immune, so its verdict contribution can
+    /// never be rolled back — [`WindowFollower::rollback`] never clears these.
+    fn finalize(&mut self, evicted: BlockFact) {
+        self.has_evicted = true;
+        if evicted.created_here {
+            self.creation_final.get_or_insert(evicted.height);
+        }
+        if let Some(spending_txid) = evicted.spending_txid {
+            self.spend_final.get_or_insert(ObservedSpend {
+                at_height: evicted.height,
+                at_slot: evicted.slot,
                 spending_txid,
             });
         }
-        let block_number = facts.view.block_number;
-        self.tip = Some(facts.view);
-        Ok(Appended { block_number })
+    }
+
+    /// Roll the follower back to the point `(slot, hash)` — a chain-sync `RollBackward`.
+    /// The 32-byte `hash` is the authoritative block identifier; `slot` accompanies it for
+    /// chain-sync `Point` fidelity. Three arms (see [`Rollback`]): a target still in the
+    /// fact ring truncates the accepted run to it; the follow base empties the window but
+    /// keeps the follower anchored; anything deeper poisons the follower fail-closed. A
+    /// rollback never clears the finalized aggregates or the nonce map.
+    pub fn rollback(&mut self, _slot: u64, hash: &[u8; 32]) -> Rollback {
+        // In-ring: truncate the accepted run to end at the target and restore the tip from
+        // its retained fact. The survivors stay contiguous (a truncated prefix of a
+        // contiguous run), so the window's facts recompute correctly from them + finals.
+        if let Some(pos) = self.ring.iter().position(|f| &f.block_hash == hash) {
+            self.ring.truncate(pos + 1);
+            let tail = *self.ring.back().expect("the truncated ring is non-empty");
+            self.tip = Some(Tip {
+                block_number: tail.height,
+                slot: tail.slot,
+                block_hash: tail.block_hash,
+            });
+            return Rollback::Truncated {
+                tip_height: tail.height,
+            };
+        }
+        // The follow base — reachable only while nothing has been evicted (then it sits
+        // exactly one below the oldest retained fact). Empty the window but stay anchored:
+        // the finalized aggregates are kept (they are common-prefix-deep either way).
+        if !self.has_evicted && self.follow_base == Some(*hash) {
+            self.ring.clear();
+            self.tip = None;
+            return Rollback::ToBase;
+        }
+        // Deeper than retained: below the ring and not the base, i.e. deeper than the
+        // common-prefix horizon the ring covers. The follower cannot reconstruct the
+        // intervening facts — fail closed and require a restart.
+        self.beyond_window = true;
+        Rollback::BeyondWindow
+    }
+
+    /// The first observed spend across the finalized aggregate and the ring, if any. The
+    /// finalized spend (if present) is deeper than every ring fact, so it is the earliest;
+    /// otherwise the earliest ring fact carrying a spend. An outpoint is spent at most once
+    /// on a chain, so there is never a conflicting pair.
+    fn effective_spend(&self) -> Option<ObservedSpend> {
+        if let Some(spend) = self.spend_final {
+            return Some(spend);
+        }
+        self.ring.iter().find_map(|f| {
+            f.spending_txid.map(|spending_txid| ObservedSpend {
+                at_height: f.height,
+                at_slot: f.slot,
+                spending_txid,
+            })
+        })
+    }
+
+    /// Whether the watched outpoint's creation has been observed — finalized on eviction or
+    /// still in the ring.
+    fn effective_create_seen(&self) -> bool {
+        self.creation_final.is_some() || self.ring.iter().any(|f| f.created_here)
     }
 
     /// The current three-valued windowed verdict, answered as of the verified tip under
@@ -322,20 +526,35 @@ impl WindowFollower {
     /// or below the certified anchor, and be fresh, or it is a distinct-reason
     /// [`WatchVerdict::Stalled`] — never a false [`WatchVerdict::Unspent`].
     pub fn verdict(&self, freshness: Freshness) -> WatchVerdict {
-        if let Some(spend) = &self.spend {
+        // A beyond-window rollback poisons the follower: it can no longer reconstruct its
+        // window, so it refuses fail-closed until the caller discards it. Checked first so
+        // even a finalized spend cannot mask that the follower is unusable.
+        if self.beyond_window {
+            let verified_through = self.tip.map_or(0, |t| t.block_number);
+            return stalled(verified_through, StallReason::RollbackBeyondWindow);
+        }
+        if let Some(spend) = self.effective_spend() {
             return WatchVerdict::SpentObserved {
                 at_height: spend.at_height,
                 at_slot: spend.at_slot,
                 spending_txid: spend.spending_txid,
             };
         }
-        let Some(tip) = &self.tip else {
-            return stalled(0, StallReason::EmptyWindow);
+        let Some(tip) = self.tip else {
+            // No verified tip to answer as of: a follower that base-rolled-back stays
+            // anchored (a follow base is pinned) but has not re-observed creation, distinct
+            // from a fresh follower that never appended (EmptyWindow).
+            let reason = if self.follow_base.is_some() {
+                StallReason::CreationNotObserved
+            } else {
+                StallReason::EmptyWindow
+            };
+            return stalled(0, reason);
         };
-        // Contiguity is enforced per append (hash link + checked number+1), so every
-        // accepted run also satisfies the batch's terminal contiguity check — pairwise
-        // +1 is strictly stronger than the batch's end-to-end count.
-        if !self.create_seen {
+        // Contiguity is enforced per append (hash link + checked number+1) and preserved by
+        // truncation (a prefix of a contiguous run is contiguous), so every accepted run
+        // also satisfies the batch's terminal contiguity check.
+        if !self.effective_create_seen() {
             return stalled(tip.block_number, StallReason::CreationNotObserved);
         }
         if tip.block_number < self.require_through {
@@ -401,6 +620,15 @@ mod tests {
             tx_id: [0u8; 32],
             index: 0,
         }
+    }
+
+    /// The transaction created in the preprod window's first block (4921916): its `#1`
+    /// output is spent in block[1] (4921917).
+    fn beaa9166() -> [u8; 32] {
+        hex::decode("beaa9166c061e56457b5d84de4b3d15c9386b202d2585ff247f47af0dcd32a5e")
+            .expect("hex")
+            .try_into()
+            .expect("32 bytes")
     }
 
     /// Load every `<prefix>-<slot>.block` with its `.eta0` sidecar, ordered by slot.
@@ -584,13 +812,20 @@ mod tests {
         }
         let nonces_after_cross = follower.nonces.clone();
 
-        // Roll back below the turn: reset the tip to the last pre-turn header.
+        // Roll back below the turn to the last pre-turn block (still in the ring): a real
+        // in-ring rollback, truncating the post-turn side off the accepted run.
         let last_pre = run
             .iter()
             .rev()
             .find(|(slot, _, _)| schedule.epoch_of(*slot) == pre_epoch)
             .expect("a pre-turn block exists");
-        follower.tip = Some(HeaderView::from_block_cbor(&last_pre.1).expect("decode"));
+        let last_pre_view = HeaderView::from_block_cbor(&last_pre.1).expect("decode");
+        assert_eq!(
+            follower.rollback(last_pre_view.slot, &last_pre_view.block_hash),
+            Rollback::Truncated {
+                tip_height: last_pre_view.block_number
+            },
+        );
 
         // Re-append every post-turn block with NO re-staging — selection is by slot, so
         // each still picks η0(post) and verifies.
@@ -604,7 +839,81 @@ mod tests {
         }
         assert_eq!(
             follower.nonces, nonces_after_cross,
-            "append never mutated the nonce map across the cross or the re-append",
+            "rollback and append never mutated the nonce map across the cross or the re-append",
+        );
+    }
+
+    /// Eviction IS finalization: with a tiny test-only ring cap, a spend observed early in
+    /// the window is evicted below the cap as the window grows — and because a fact
+    /// evicted `ring_cap`-deep is rollback-immune (Ouroboros common prefix), eviction
+    /// folds it into the sticky `spend_final`/`creation_final` aggregates rollback never
+    /// clears. So `SpentObserved` survives even though the spend's own fact is long gone
+    /// from the ring. Watches beaa9166…#1 (created in block[0], spent in block[1]).
+    #[test]
+    fn eviction_finalizes_a_spend_that_survives_the_ring_cap() {
+        let watch = OutPoint {
+            tx_id: beaa9166(),
+            index: 1,
+        };
+        let rows = load_run("preprod-");
+        assert!(rows.len() >= 20, "expected the 22-block window");
+        let eta0 = rows[0].2;
+        let mut follower = WindowFollower::new(watch, &anchor(), 4_921_937, preprod_schedule());
+        follower.supply_next_eta0(300, eta0);
+        // Force eviction long before the 22-block window ends: block[1]'s spend fact is
+        // evicted once four newer blocks have been appended over it.
+        follower.ring_cap = 4;
+        for (slot, bytes, _) in &rows {
+            follower
+                .append(bytes)
+                .unwrap_or_else(|e| panic!("block at slot {slot} accepted, got {e:?}"));
+        }
+
+        // The spend (block[1]) and creation (block[0]) were finalized on eviction; their
+        // facts have left the small ring entirely.
+        assert_eq!(
+            follower.creation_final,
+            Some(4_921_916),
+            "the creation was finalized when block[0] was evicted",
+        );
+        assert!(
+            follower.spend_final.is_some(),
+            "the spend was finalized when block[1] was evicted",
+        );
+        assert!(
+            follower.ring.iter().all(|f| f.spending_txid.is_none()),
+            "the spend fact is no longer in the ring — the verdict rests on the finalized aggregate",
+        );
+
+        let fresh = Freshness {
+            slot_now: 128_046_016 + 60,
+            max_lag: 100_000,
+        };
+        assert!(
+            matches!(
+                follower.verdict(fresh),
+                WatchVerdict::SpentObserved {
+                    at_height: 4_921_917,
+                    ..
+                }
+            ),
+            "SpentObserved survives eviction of the spending block's fact",
+        );
+
+        // Batch-equivalence holds even under eviction: the small-cap follower's terminal
+        // verdict equals the batch (which never evicts — it re-scans the whole window).
+        let blocks: Vec<Vec<u8>> = rows.iter().map(|(_, bytes, _)| bytes.clone()).collect();
+        assert_eq!(
+            follower.verdict(fresh),
+            crate::window::verify_watched_window(
+                watch,
+                &anchor(),
+                4_921_937,
+                &blocks,
+                &eta0,
+                fresh
+            ),
+            "eviction-as-finalization preserves the batch equivalence",
         );
     }
 }
