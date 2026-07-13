@@ -35,7 +35,11 @@
 
 /**
  * `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
- * spend of the watched outpoint — a definite refuse, authoritative regardless of freshness.
+ * spend of the watched outpoint — a definite refuse. Authoritative against the verified
+ * window regardless of freshness; whether that authority is Mithril-quorum-backed or
+ * merely header-vouched is the two-region distinction the Rust `SpendRegion` carries and
+ * a later ABI slice surfaces here. Until then treat it as resting on the same
+ * `mithril_quorum` assumption a no-spend answer does: a definite refuse either way.
  */
 #define SEXTANT_WATCH_SPEND_OBSERVED 2
 
@@ -59,6 +63,10 @@
 /**
  * `SextantWatchVerdict.assumptions` bit: the window sits inside a region a Mithril
  * quorum certified (the tip is at or below the caller-supplied certified anchor height).
+ * SURFACED, not per-block verified: the read path binds no served block to the certified
+ * transaction root, so this bit means "trust the served chain is the certified one", not
+ * a proof of it — a consumer weighs it. When it is clear (an answer whose tip is above
+ * the certified anchor), the region is header-verified but NOT quorum-backed.
  */
 #define SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM (1 << 0)
 
