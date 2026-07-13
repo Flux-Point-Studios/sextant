@@ -1,0 +1,24 @@
+[package]
+name = "sentry"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The live windowed-unspent follower transport (BEYOND-DoD Epic F, F6). The
+# sans-io orchestration core (this lib) drives a `sextant::follow::WindowFollower`
+# from resolved chain-sync events; the binary (F6b) sources those events from a
+# node-to-node relay. Not part of the sextant lib or its harness.
+
+[lib]
+name = "sentry"
+path = "src/lib.rs"
+
+[dependencies]
+# The verifier core. Default (wasm-safe) graph only — the sans-io driver composes
+# the follower's append/rollback/re_anchor/verdict, none of which need the mithril
+# feature (the anchor's certified root is a value; verify_chain_anchored lives in
+# the F6b transport binary, not here).
+sextant = { path = "../.." }
+
+[dev-dependencies]
+hex = "0.4"
