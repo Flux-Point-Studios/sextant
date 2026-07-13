@@ -865,14 +865,22 @@ fn region_code(region: SpendRegion) -> u8 {
 }
 
 /// The C stall/refusal code an [`AppendRefusal`] surfaces at [`sextant_follower_append`].
-/// Reuses the batch-equivalence map [`AppendRefusal::as_stall_reason`] + [`stall_code`], so
-/// the boundary reports the SAME reason the batch would over the refused prefix; the
-/// follower-only [`AppendRefusal::EpochNonceUnavailable`] (which has no single-epoch batch
-/// counterpart, hence `None`) gets the follower code [`SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE`].
+/// Exhaustive on the refusal itself (no wildcard, no route through an `Option`): the
+/// `#[non_exhaustive]` relaxation does not apply in-crate, so a new refusal fails to compile
+/// here until it is given a code — the same tripwire discipline [`stall_code`] holds, and
+/// unlike an `as_stall_reason().unwrap_or(..)` a future follower-only refusal cannot silently
+/// collapse to the wrong code. The batch-mapped refusals report the SAME code the batch
+/// stalls with over the refused prefix (mirroring [`AppendRefusal::as_stall_reason`]); the
+/// follower-only [`AppendRefusal::EpochNonceUnavailable`] has no batch counterpart.
 fn refusal_code(refusal: AppendRefusal) -> u8 {
-    match refusal.as_stall_reason() {
-        Some(reason) => stall_code(reason),
-        None => SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE,
+    match refusal {
+        AppendRefusal::Decode | AppendRefusal::BrokenLink | AppendRefusal::Crypto => {
+            SEXTANT_WATCH_STALL_BROKEN_SEGMENT
+        }
+        AppendRefusal::NotContiguous => SEXTANT_WATCH_STALL_MISSING_BLOCK,
+        AppendRefusal::BodyCommitmentMismatch => SEXTANT_WATCH_STALL_BODY_COMMITMENT_MISMATCH,
+        AppendRefusal::MalformedBody => SEXTANT_WATCH_STALL_MALFORMED_BODY,
+        AppendRefusal::EpochNonceUnavailable => SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE,
     }
 }
 
@@ -1597,6 +1605,29 @@ mod tests {
             region: SpendRegion::HeaderVouched,
         });
         assert_eq!(vouched.spend_region, SEXTANT_WATCH_REGION_HEADER_VOUCHED);
+    }
+
+    /// `refusal_code` is a direct exhaustive tripwire, but must stay consistent with the
+    /// batch-equivalence map: for every refusal that HAS a batch counterpart it reports the
+    /// same code the batch stalls with (`as_stall_reason` + `stall_code`); the follower-only
+    /// `EpochNonceUnavailable` reports the follower code. Pins the intended duplication so
+    /// the two mappings cannot silently diverge.
+    #[test]
+    fn refusal_code_agrees_with_the_batch_equivalence_map() {
+        for refusal in [
+            AppendRefusal::Decode,
+            AppendRefusal::BrokenLink,
+            AppendRefusal::NotContiguous,
+            AppendRefusal::Crypto,
+            AppendRefusal::BodyCommitmentMismatch,
+            AppendRefusal::MalformedBody,
+            AppendRefusal::EpochNonceUnavailable,
+        ] {
+            let expected = refusal
+                .as_stall_reason()
+                .map_or(SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE, stall_code);
+            assert_eq!(refusal_code(refusal), expected, "{refusal:?}");
+        }
     }
 
     #[test]

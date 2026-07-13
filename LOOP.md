@@ -875,9 +875,11 @@ needs a row in Evidence.
         `region_code` tripwire; `sextant_verify_watched_window` now surfaces it too (batch → HeaderVouched).
         AS-BUILT (loop honesty): (i) RETURN CONVENTION — every mutation/read export returns i32 where
         NEGATIVE is a boundary error (SextantStatus, incl. ErrPanic via `guard`) and >=0 is the domain
-        outcome; `append` = 0 accepted (out_block_number) / positive refusal code (`refusal_code` reuses
-        the batch-equivalence map `AppendRefusal::as_stall_reason`+`stall_code`, None→`_EPOCH_NONCE_
-        UNAVAILABLE`=11), `rollback`/`re_anchor` return their own outcome-const families
+        outcome; `append` = 0 accepted (out_block_number) / positive refusal code (`refusal_code` is a
+        DIRECT exhaustive match on `AppendRefusal` — a compile-time tripwire like `stall_code`, reporting
+        the same code the batch stalls with, `EpochNonceUnavailable`→`_EPOCH_NONCE_UNAVAILABLE`=11; a
+        unit test pins it consistent with `as_stall_reason`), `rollback`/`re_anchor` return their own
+        outcome-const families
         (`SEXTANT_FOLLOWER_ROLLBACK_{TRUNCATED=1,TO_BASE=2,BEYOND_WINDOW=3}`,
         `SEXTANT_FOLLOWER_REANCHOR_{NOT_MONOTONE=1,ADVANCED=2,ADVANCED_SPEND_CERTIFIED=3}`), `verdict`/
         `new` per the brief. (ii) `re_anchor` takes the 32-byte `anchor_root` (the `out_ct_root` of an
@@ -892,6 +894,16 @@ needs a row in Evidence.
         `project_watch_verdict` unit test pins the MithrilCertified region code (unreachable via the
         committed window's spend). smoke.c link-references all 7 exports (symbol-retention on the Linux
         artifact). `scripts/harness.sh --full` exit 0 (header drift/leak/honest-scope gates green).
+        SELF-RED-TEAM `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — all 6 axes sound (paired Box
+        into/from_raw + every deref null-guarded + all guarded except the non-panicking `new`; no false
+        NO_SPEND / false MithrilCertified: exhaustive field-zeroing project + exact `hex_encode32`
+        round-trip + txid-bound cert; sign-unambiguous return codes; `spend_region` byte-identical
+        layout; all mappers wildcard-free tripwires; opaque header, no leak). One LOW (the pre-hardening
+        `refusal_code` `None`-route tripwire gap) CLOSED in-branch by the direct exhaustive match; one
+        INFO (anchor provenance = a surfaced assumption, same as the batch path, out of the hostile-DATA-
+        provider threat model) accepted. All four Woodpecker contexts green (pr+push harness+artifacts,
+        pipeline 237/236 — the artifacts leg compiled+ran smoke.c on Linux). PARKED for the operator's
+        independent red-team per the Merge policy.
   - [ ] F6 — tools/sentry transport + live preprod evidence (member). GREENFIELD chain-sync loop
         (find_intersect, RollForward/RollBackward, agency/idle) — budget it as new code. BOOTSTRAP
         (critique fix — find_intersect serves only SUCCESSORS, and Koios tx_info yields the creating
