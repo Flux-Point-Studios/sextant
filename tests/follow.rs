@@ -570,6 +570,70 @@ fn in_ring_rollback_truncates_and_reconverges_with_the_batch() {
     );
 }
 
+/// A `RollBackward` that reorgs a spend OUT, then a re-append that re-observes it — the
+/// safety-relevant rollback arm for the genuinely-spent `beaa9166…#1` (spent in block[1]).
+/// The full window is `SpentObserved`; rolling back to block[0] (below the spend) removes
+/// it, so the verdict is a no-spend non-answer (never a lingering false SpentObserved AND
+/// never a false Unspent) equal to the batch over `[block0]`; re-appending block[1]
+/// re-observes the spend. Pins the "a rollback cannot strand a stale spend, and cannot
+/// lose a real one on re-append" property with a truly-spent outpoint.
+#[test]
+fn rollback_reorgs_a_spend_out_and_re_append_re_observes_it() {
+    let window = preprod_window();
+    let mut follower = preprod_follower(watched(1), eta0());
+    for b in &window {
+        follower
+            .append(b)
+            .expect("authentic in-order block accepted");
+    }
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::SpentObserved { at_height: 4_921_917, spending_txid, .. }
+                if spending_txid == hash32(SPENDING_TX)
+        ),
+        "the full window observes the spend of #1 at block[1]",
+    );
+
+    // Roll back to block[0] (below the spending block[1]): the spend is reorged out.
+    let base = HeaderView::from_block_cbor(&window[0]).unwrap();
+    assert_eq!(
+        follower.rollback(base.slot, &base.block_hash),
+        Rollback::Truncated {
+            tip_height: 4_921_916
+        },
+    );
+    let after = follower.verdict(fresh());
+    assert!(
+        !matches!(after, WatchVerdict::SpentObserved { .. }),
+        "a spend reorged out must not linger, got {after:?}",
+    );
+    assert!(
+        !matches!(after, WatchVerdict::Unspent { .. }),
+        "and the shortened window is not a false Unspent, got {after:?}",
+    );
+    assert_eq!(
+        after,
+        batch(watched(1), &window[..=0], &eta0()),
+        "the reorged verdict equals the batch over the surviving [block0] prefix",
+    );
+
+    // Re-append block[1]: the spend is re-observed on the (same, real) continuation.
+    follower
+        .append(&window[1])
+        .expect("the real successor re-appends");
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::SpentObserved {
+                at_height: 4_921_917,
+                ..
+            }
+        ),
+        "re-appending the spending block re-observes the spend",
+    );
+}
+
 /// A rollback to the follow base — the predecessor the first appended block hung from
 /// (its `prev_hash`, in the block[0] fixture) — empties the window but keeps the follower
 /// anchored: the verdict becomes `Stalled{CreationNotObserved}` (creation is no longer
