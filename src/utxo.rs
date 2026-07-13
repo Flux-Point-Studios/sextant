@@ -241,6 +241,68 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
     Ok(spends)
 }
 
+/// The outpoints in the transaction body's input set at CBOR map key `key`, in array order —
+/// `0` = inputs (consumed by a phase-2-valid transaction), `13` = collateral inputs (consumed
+/// by a phase-2-INVALID one). Empty if the key is absent (a transaction with no collateral).
+/// Unlike [`decode_spends`], which unions both as "could be spent", this reads exactly ONE
+/// set, so a UTxO-set apply consumes the inputs a valid transaction spends and the collateral
+/// an invalid one spends — never both.
+pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> {
+    let mut d = Decoder::new(tx_bytes);
+    let entries = d
+        .map()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    for _ in 0..entries {
+        if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
+            return decode_input_vec(&mut d);
+        }
+        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+    }
+    Ok(Vec::new())
+}
+
+/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped) into an ordered `Vec`.
+fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
+    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
+        let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
+        if tag.as_u64() != 258 {
+            return Err(UtxoError::MalformedTx);
+        }
+    }
+    let count = d
+        .array()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    let mut out = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        out.push(decode_outpoint(d)?);
+    }
+    Ok(out)
+}
+
+/// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
+/// the count of created outpoints `(tx_id, 0..n)`. A definite array is required (fail-closed on
+/// an indefinite one). A body with no outputs key is malformed.
+pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
+    let mut d = Decoder::new(tx_bytes);
+    let entries = d
+        .map()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    for _ in 0..entries {
+        if d.u64().map_err(|_| UtxoError::MalformedTx)? == 1 {
+            let count = d
+                .array()
+                .map_err(|_| UtxoError::MalformedTx)?
+                .ok_or(UtxoError::MalformedTx)?;
+            return usize::try_from(count).map_err(|_| UtxoError::MalformedTx);
+        }
+        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+    }
+    Err(UtxoError::MalformedTx)
+}
+
 /// Decode a `set<transaction_input>` (bare array or tag-258 wrapped) into `spends`.
 fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {

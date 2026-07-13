@@ -6,6 +6,7 @@
 pub mod chain;
 mod curve;
 pub mod ed25519;
+pub mod effects;
 pub mod ffi;
 pub mod follow;
 mod hash;

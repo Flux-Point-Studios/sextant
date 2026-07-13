@@ -85,7 +85,7 @@ pub fn verify_body_commitment(block_bytes: &[u8]) -> Result<HeaderView, BindErro
 /// segment hashes concatenated in block order —
 /// `blake2b256( blake2b256(tx_bodies) ‖ blake2b256(tx_witness_sets) ‖
 /// blake2b256(auxiliary_data) ‖ blake2b256(invalid_transactions) )`.
-fn hash_alonzo_seg_wits(block_bytes: &[u8], spans: &BlockBodySpans) -> [u8; 32] {
+pub(crate) fn hash_alonzo_seg_wits(block_bytes: &[u8], spans: &BlockBodySpans) -> [u8; 32] {
     let mut preimage = [0u8; 128];
     preimage[0..32].copy_from_slice(&blake2b256(&block_bytes[spans.tx_bodies.clone()]));
     preimage[32..64].copy_from_slice(&blake2b256(&block_bytes[spans.tx_witness_sets.clone()]));
@@ -517,7 +517,7 @@ pub fn certify_spend_region(
 /// verbatim, breaks and all). An ill-formed region — a non-array, a body that does not
 /// decode, or trailing bytes after the end — fails closed (`Err`), never silently
 /// dropping a body (a dropped body is a spend a watcher would wrongly read as unspent).
-fn tx_body_spans(block: &[u8], region: &Range<usize>) -> Result<Vec<Range<usize>>, ()> {
+pub(crate) fn tx_body_spans(block: &[u8], region: &Range<usize>) -> Result<Vec<Range<usize>>, ()> {
     let base = region.start;
     let mut d = Decoder::new(&block[region.clone()]);
     let mut spans = Vec::new();
