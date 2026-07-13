@@ -7,6 +7,7 @@ pub mod chain;
 mod curve;
 pub mod ed25519;
 pub mod ffi;
+pub mod follow;
 mod hash;
 pub mod header;
 pub mod inclusion;

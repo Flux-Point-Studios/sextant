@@ -95,6 +95,73 @@ fn hash_alonzo_seg_wits(block_bytes: &[u8], spans: &BlockBodySpans) -> [u8; 32] 
     blake2b256(&preimage)
 }
 
+/// The read-path facts a single block contributes to a windowed spend scan: its
+/// decoded header, whether it created the watched outpoint, and — if it spent it —
+/// the id of the spending transaction.
+///
+/// The shared per-block scan unit: the batch [`verify_watched_window`] and the
+/// incremental [`crate::follow::WindowFollower`] both extract a block's facts through
+/// [`scan_block_facts`], so the follower is a faithful incremental form of the frozen
+/// batch oracle rather than a parallel re-implementation.
+pub(crate) struct BlockFacts {
+    /// The block's decoded, body-committed header view.
+    pub view: HeaderView,
+    /// Whether the watched outpoint's creating transaction, producing an output at the
+    /// watched index, appears in this block.
+    pub created_here: bool,
+    /// The spending transaction id, if a transaction in this block consumes the
+    /// watched outpoint.
+    pub spent_by: Option<[u8; 32]>,
+}
+
+/// Why [`scan_block_facts`] could not extract a block's facts. These are the body-side
+/// failures only; a header link/crypto failure is a separate concern the caller checks
+/// via [`crate::chain::verify_header`].
+pub(crate) enum ScanFailure {
+    /// The block CBOR did not decode as a Praos block.
+    Decode,
+    /// The bodies did not hash to the header's `block_body_hash` commitment.
+    BodyCommitmentMismatch,
+    /// A body was not a decodable transaction — a producer cannot hide a spend behind
+    /// a malformed body; the scan fails closed.
+    MalformedBody,
+}
+
+/// Bind a block's bodies to its header commitment, then scan them for the watched
+/// outpoint's creation and any spend of it. Returns the block's [`BlockFacts`] or the
+/// body-side failure that stopped the scan; does no header link/crypto check.
+pub(crate) fn scan_block_facts(block: &[u8], watch: &OutPoint) -> Result<BlockFacts, ScanFailure> {
+    let (view, spans) = HeaderView::decode_block(block).map_err(|_| ScanFailure::Decode)?;
+    if hash_alonzo_seg_wits(block, &spans) != view.block_body_hash {
+        return Err(ScanFailure::BodyCommitmentMismatch);
+    }
+    let body_spans =
+        tx_body_spans(block, &spans.tx_bodies).map_err(|()| ScanFailure::MalformedBody)?;
+    let mut created_here = false;
+    for body in body_spans {
+        let tx = &block[body];
+        let txid = blake2b256(tx);
+        // Creation is observed only when the creating transaction actually produced an
+        // output at the watched index — a phantom index is never read as created.
+        if txid == watch.tx_id && output_exists(tx, watch.index as usize).unwrap_or(false) {
+            created_here = true;
+        }
+        let spends = decode_spends(tx).map_err(|_| ScanFailure::MalformedBody)?;
+        if spends.contains(watch) {
+            return Ok(BlockFacts {
+                view,
+                created_here,
+                spent_by: Some(txid),
+            });
+        }
+    }
+    Ok(BlockFacts {
+        view,
+        created_here,
+        spent_by: None,
+    })
+}
+
 /// The assumptions a windowed-unspent verdict rests on. Both are MANDATORY
 /// (non-`Option`) data, not a docstring: an [`WatchVerdict::Unspent`] cannot be
 /// constructed without stamping the scope it holds under, so a consumer always sees
@@ -275,47 +342,42 @@ pub fn verify_watched_window(
     }
 
     // 2. Per block, in order: bind the bodies to the header commitment, then scan the
-    //    bound bodies for the outpoint's creation or a spend of it.
+    //    bound bodies for the outpoint's creation or a spend of it, through the same
+    //    per-block unit the incremental follower uses.
     let mut start_number: Option<u64> = None;
     let mut verified_through: u64 = 0;
     let mut tip: Option<HeaderView> = None;
     let mut create_seen = false;
 
     for block in blocks {
-        let block = block.as_ref();
-        // verify_segment already decoded every header, so decode_block cannot fail
-        // here; fail closed rather than panic on an impossible re-decode.
-        let Ok((view, spans)) = HeaderView::decode_block(block) else {
-            return stalled(verified_through, StallReason::BrokenSegment);
-        };
-        if hash_alonzo_seg_wits(block, &spans) != view.block_body_hash {
-            return stalled(verified_through, StallReason::BodyCommitmentMismatch);
-        }
-        let Ok(body_spans) = tx_body_spans(block, &spans.tx_bodies) else {
-            return stalled(verified_through, StallReason::MalformedBody);
-        };
-        for body in body_spans {
-            let tx = &block[body];
-            let txid = blake2b256(tx);
-            // Creation is observed only when the creating transaction actually produced
-            // an output at the watched index — a phantom index is never read as created.
-            if txid == watch.tx_id && output_exists(tx, watch.index as usize).unwrap_or(false) {
-                create_seen = true;
+        // verify_segment already decoded every header, so a decode failure here is
+        // impossible; fail closed to BrokenSegment rather than panic on an impossible
+        // re-decode, exactly as before.
+        let facts = match scan_block_facts(block.as_ref(), &watch) {
+            Ok(facts) => facts,
+            Err(ScanFailure::Decode) => {
+                return stalled(verified_through, StallReason::BrokenSegment);
             }
-            let Ok(spends) = decode_spends(tx) else {
+            Err(ScanFailure::BodyCommitmentMismatch) => {
+                return stalled(verified_through, StallReason::BodyCommitmentMismatch);
+            }
+            Err(ScanFailure::MalformedBody) => {
                 return stalled(verified_through, StallReason::MalformedBody);
-            };
-            if spends.contains(&watch) {
-                return WatchVerdict::SpentObserved {
-                    at_height: view.block_number,
-                    at_slot: view.slot,
-                    spending_txid: txid,
-                };
             }
+        };
+        if facts.created_here {
+            create_seen = true;
         }
-        start_number.get_or_insert(view.block_number);
-        verified_through = view.block_number;
-        tip = Some(view);
+        if let Some(spending_txid) = facts.spent_by {
+            return WatchVerdict::SpentObserved {
+                at_height: facts.view.block_number,
+                at_slot: facts.view.slot,
+                spending_txid,
+            };
+        }
+        start_number.get_or_insert(facts.view.block_number);
+        verified_through = facts.view.block_number;
+        tip = Some(facts.view);
     }
 
     // 3. No spend observed. Require a gap-free run that observed the outpoint's
