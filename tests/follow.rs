@@ -26,10 +26,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sextant::follow::{AppendRefusal, SlotSchedule, WindowFollower};
+use sextant::follow::{AppendRefusal, Rollback, SlotSchedule, WindowFollower};
 use sextant::header::HeaderView;
 use sextant::utxo::{CertifiedTransactions, OutPoint};
-use sextant::window::{Freshness, WatchVerdict, verify_watched_window};
+use sextant::window::{Freshness, StallReason, WatchVerdict, verify_watched_window};
 
 /// Epoch-300 active nonce (Koios); the preprod window's shared epoch nonce.
 const EPOCH_300_ETA0: &str = "aa845533c5f8631a864010ae89c23ee1cee0ed7717e4ac00a25ad50f4eeb6c30";
@@ -519,4 +519,126 @@ fn refused_append_leaves_the_follower_able_to_resume() {
         .append(&window[2])
         .expect("the correct next block resumes following");
     assert_eq!(appended.block_number, 4_921_918);
+}
+
+// --- F3: rollback truncation + eviction-as-finalization -----------------------------
+
+/// A chain-sync `RollBackward` to a block still in the follower's fact ring truncates the
+/// accepted run to end at that block and recomputes the window's facts from the
+/// survivors, so the verdict re-converges to the batch over the surviving prefix — then
+/// re-appending the successors re-converges to the full-window verdict. The whole
+/// 22-block window fits well inside the default ring, so nothing is finalized here; this
+/// pins the in-ring arm against the frozen batch oracle.
+#[test]
+fn in_ring_rollback_truncates_and_reconverges_with_the_batch() {
+    let window = preprod_window();
+    let mut follower = preprod_follower(watched(0), eta0());
+    for b in &window {
+        follower
+            .append(b)
+            .expect("authentic in-order block accepted");
+    }
+    assert_eq!(
+        follower.verdict(fresh()),
+        batch(watched(0), &window, &eta0()),
+        "the full window matches the batch",
+    );
+
+    // Roll back to block[10]'s point (still in the ring).
+    let target = HeaderView::from_block_cbor(&window[10]).unwrap();
+    assert_eq!(
+        follower.rollback(target.slot, &target.block_hash),
+        Rollback::Truncated {
+            tip_height: target.block_number
+        },
+        "a target still in the ring is an in-ring truncation",
+    );
+    assert_eq!(
+        follower.verdict(fresh()),
+        batch(watched(0), &window[..=10], &eta0()),
+        "after truncation the follower equals the batch over the surviving prefix",
+    );
+
+    // Re-append the successors: the follower re-converges to the full-window verdict.
+    for b in &window[11..] {
+        follower.append(b).expect("re-appended successor accepted");
+    }
+    assert_eq!(
+        follower.verdict(fresh()),
+        batch(watched(0), &window, &eta0()),
+        "re-appending the tail re-converges to the full-window verdict",
+    );
+}
+
+/// A rollback to the follow base — the predecessor the first appended block hung from
+/// (its `prev_hash`, in the block[0] fixture) — empties the window but keeps the follower
+/// anchored: the verdict becomes `Stalled{CreationNotObserved}` (creation is no longer
+/// observed in the emptied window, distinct from a never-started `EmptyWindow`), and
+/// re-appending from block[0] re-converges with the batch.
+#[test]
+fn rollback_to_the_follow_base_stalls_creation_not_observed_then_re_appends() {
+    let window = preprod_window();
+    let mut follower = preprod_follower(watched(0), eta0());
+    for b in window.iter().take(4) {
+        follower.append(b).expect("prefix block accepted");
+    }
+    let base = HeaderView::from_block_cbor(&window[0])
+        .unwrap()
+        .prev_hash
+        .expect("a window block has a parent (the follow base)");
+    assert_eq!(
+        follower.rollback(0, &base),
+        Rollback::ToBase,
+        "the block[0] predecessor is the follow base",
+    );
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::Stalled {
+                reason: StallReason::CreationNotObserved,
+                ..
+            }
+        ),
+        "an emptied-to-base window has not re-observed the outpoint's creation",
+    );
+
+    for b in window.iter().take(4) {
+        follower
+            .append(b)
+            .expect("re-append from the base accepted");
+    }
+    assert_eq!(
+        follower.verdict(fresh()),
+        batch(watched(0), &window[..4], &eta0()),
+        "re-appending from the base re-converges with the batch",
+    );
+}
+
+/// A rollback to a point the follower does not retain — neither in the ring nor the
+/// follow base — is deeper than the common-prefix horizon the ring covers, so it is
+/// fail-closed: the follower is poisoned and its verdict is `Stalled{RollbackBeyondWindow}`
+/// until the caller discards it and restarts from a fresh anchor. NEVER a false verdict.
+#[test]
+fn rollback_beyond_the_window_poisons_the_follower() {
+    let window = preprod_window();
+    let mut follower = preprod_follower(watched(0), eta0());
+    for b in window.iter().take(4) {
+        follower.append(b).expect("prefix block accepted");
+    }
+    let fabricated = [0xABu8; 32];
+    assert_eq!(
+        follower.rollback(999, &fabricated),
+        Rollback::BeyondWindow,
+        "an unretained target is beyond the window",
+    );
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::Stalled {
+                reason: StallReason::RollbackBeyondWindow,
+                ..
+            }
+        ),
+        "a beyond-window rollback poisons the follower fail-closed",
+    );
 }

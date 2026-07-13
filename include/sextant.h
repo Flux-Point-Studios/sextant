@@ -120,6 +120,14 @@
 #define SEXTANT_WATCH_STALL_TIP_TOO_OLD 9
 
 /**
+ * An incremental follower was rolled back deeper than the horizon it retains, so it can
+ * no longer reconstruct the window; discard and restart from a fresh anchor. Additive
+ * and backward-compatible: no current C export can yet produce it (the follower gains
+ * its own boundary in a later slice), so an ABI-3 consumer never observes this value.
+ */
+#define SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW 10
+
+/**
  * Every verdict the boundary can return, as one flat `#[repr(i32)]` enum. All bands
  * are defined unconditionally (only the mithril *function* is feature-gated) so the
  * committed header and the numbering are identical across build configs. Negative =
