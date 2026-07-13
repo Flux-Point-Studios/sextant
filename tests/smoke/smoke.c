@@ -140,9 +140,50 @@ int main(void) {
     CHECK(sextant_verify_watched_window(NULL, wlens, 1, eta0, 0, wtxid, 0, 0, 0, 0, &wv) ==
           ErrNullPointer);
 
+    /* ---- The live follower (F5): link-reference every opaque-handle export so a
+     * dead-stripped symbol is a link error here, and drive the boundary contract on
+     * a fresh handle (the full 22-block replay is proven in tests/follower_ffi.rs).
+     * A garbage block is refused (never accepted), the empty follower stalls (never a
+     * no-spend), and the handle is destroyed. */
+    SextantFollower *f =
+        sextant_follower_new(wtxid, 0, 4927469, 4921937, 300, 127958400, 432000);
+    CHECK(f != NULL);
+    CHECK(sextant_follower_new(NULL, 0, 0, 0, 0, 0, 0) == NULL);
+    CHECK(sextant_follower_supply_next_eta0(f, 300, eta0) == Ok);
+
+    /* A garbage block does not decode -> a POSITIVE refusal code, never accepted (0)
+     * and never a boundary error (<0). */
+    uint64_t appended_at = 0;
+    int32_t rc_a = sextant_follower_append(f, b0, sizeof b0, &appended_at);
+    CHECK(rc_a == SEXTANT_WATCH_STALL_BROKEN_SEGMENT);
+
+    /* An empty follower cannot answer -> STALLED, never a false no-spend. */
+    SextantWatchVerdict fv;
+    memset(&fv, 0, sizeof fv);
+    CHECK(sextant_follower_verdict(f, 0, 100000, &fv) == Ok);
+    CHECK(fv.kind == SEXTANT_WATCH_STALLED);
+    CHECK(fv.kind != SEXTANT_WATCH_NO_SPEND_OBSERVED);
+
+    /* Re-anchor holding the certified height advances (no proof, no observed spend). */
+    uint8_t root[32];
+    memset(root, 0, sizeof root);
+    CHECK(sextant_follower_re_anchor(f, 4927469, root, NULL, 0) ==
+          SEXTANT_FOLLOWER_REANCHOR_ADVANCED);
+
+    /* A rollback to an unretained point poisons the follower fail-closed. */
+    uint64_t rb_tip = 0;
+    CHECK(sextant_follower_rollback(f, 0, wtxid, &rb_tip) ==
+          SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW);
+
+    /* Null guards, then destroy (and a null destroy is a no-op). */
+    CHECK(sextant_follower_append(NULL, b0, sizeof b0, &appended_at) == ErrNullPointer);
+    CHECK(sextant_follower_verdict(f, 0, 0, NULL) == ErrNullPointer);
+    sextant_follower_destroy(f);
+    sextant_follower_destroy(NULL);
+
     printf("smoke: ok (abi=%u verify_segment rc=%d index=%lld header rc=%d msg=\"%s\" "
-           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d watch_kind=%u)\n",
+           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d watch_kind=%u follow_rc=%d)\n",
            sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg,
-           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof, wv.kind);
+           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof, wv.kind, rc_a);
     return 0;
 }

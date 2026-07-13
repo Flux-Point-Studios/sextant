@@ -9,9 +9,11 @@
  * ABI contract version. A consumer asserts `sextant_abi_version() == SEXTANT_ABI_VERSION`
  * at load; cbindgen emits it into the header as a `#define`. Bumped 1→2 for the UTxO
  * read export and the certified-transactions out-params on the anchored verify; 2→3 for
- * the windowed watch-verdict export ([`sextant_verify_watched_window`]).
+ * the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
+ * follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
+ * [`SextantWatchVerdict`] reserved byte as `spend_region`.
  */
-#define SEXTANT_ABI_VERSION 3
+#define SEXTANT_ABI_VERSION 4
 
 /**
  * The only defined `spend_status` value a verified read returns. The read path can
@@ -37,9 +39,9 @@
  * `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
  * spend of the watched outpoint — a definite refuse. Authoritative against the verified
  * window regardless of freshness; whether that authority is Mithril-quorum-backed or
- * merely header-vouched is the two-region distinction the Rust `SpendRegion` carries and
- * a later ABI slice surfaces here. Until then treat it as resting on the same
- * `mithril_quorum` assumption a no-spend answer does: a definite refuse either way.
+ * merely header-vouched is carried in `spend_region` (`SEXTANT_WATCH_REGION_*`). A
+ * `HEADER_VOUCHED` spend rests on the same `mithril_quorum` assumption a no-spend answer
+ * does; only a `MITHRIL_CERTIFIED` spend is authoritative independent of it.
  */
 #define SEXTANT_WATCH_SPEND_OBSERVED 2
 
@@ -128,12 +130,77 @@
 #define SEXTANT_WATCH_STALL_TIP_TOO_OLD 9
 
 /**
- * An incremental follower was rolled back deeper than the horizon it retains, so it can
- * no longer reconstruct the window; discard and restart from a fresh anchor. Additive
- * and backward-compatible: no current C export can yet produce it (the follower gains
- * its own boundary in a later slice), so an ABI-3 consumer never observes this value.
+ * An incremental follower ([`sextant_follower_new`]) was rolled back deeper than the
+ * horizon it retains, so it can no longer reconstruct the window; discard and restart
+ * from a fresh anchor. Produced by [`sextant_follower_verdict`] after a rollback returned
+ * [`SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW`]; the batch window verify never yields it.
  */
 #define SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW 10
+
+/**
+ * A follower [`sextant_follower_append`] crossed an epoch boundary before the epoch's η0
+ * was staged via [`sextant_follower_supply_next_eta0`]. Fail-closed and liveness-only:
+ * the block does not advance the tip, and appending it again after the nonce is staged
+ * still succeeds. Follower-only — the single-epoch batch window verify has no counterpart.
+ */
+#define SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE 11
+
+/**
+ * `SextantWatchVerdict.spend_region` (meaningful only when `kind == SEXTANT_WATCH_SPEND_OBSERVED`):
+ * the spending transaction is proven a member of the genesis-anchored Mithril-certified
+ * transaction set — quorum-backed, authoritative independent of the `mithril_quorum`
+ * assumption. `0` (n/a) for the other kinds.
+ */
+#define SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED 1
+
+/**
+ * `SextantWatchVerdict.spend_region`: the spend was observed in a header-verified,
+ * hash-linked, body-committed block NOT bound to the certified set — authoritative
+ * against the verified window, but resting on the same `mithril_quorum` assumption a
+ * no-spend verdict does. Upgrades to [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`] only via
+ * a [`sextant_follower_re_anchor`] inclusion proof of the spending tx (never height).
+ */
+#define SEXTANT_WATCH_REGION_HEADER_VOUCHED 2
+
+/**
+ * [`sextant_follower_rollback`] outcome: the target was still in the fact ring; the
+ * accepted run was truncated to end at it and `out_tip_height` carries the new tip. The
+ * follower stays live — re-append the target's successors.
+ */
+#define SEXTANT_FOLLOWER_ROLLBACK_TRUNCATED 1
+
+/**
+ * [`sextant_follower_rollback`] outcome: the target was the follow base; the window is
+ * empty but the follower stays anchored (re-append from the first block).
+ */
+#define SEXTANT_FOLLOWER_ROLLBACK_TO_BASE 2
+
+/**
+ * [`sextant_follower_rollback`] outcome: the target was deeper than the retained horizon;
+ * the follower is poisoned and its verdict is now
+ * [`SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW`]. Discard it and restart from a fresh anchor.
+ */
+#define SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW 3
+
+/**
+ * [`sextant_follower_re_anchor`] outcome: the new anchor's block number is below the
+ * current anchor height; refused, so the certified region only ever grows. Untouched.
+ */
+#define SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE 1
+
+/**
+ * [`sextant_follower_re_anchor`] outcome: the certified anchor advanced (or held) but the
+ * observed spend (if any) was not upgraded — no proof, or a proof that did not attest the
+ * observed spend against the new anchor's certified root.
+ */
+#define SEXTANT_FOLLOWER_REANCHOR_ADVANCED 2
+
+/**
+ * [`sextant_follower_re_anchor`] outcome: the anchor advanced (or held) AND the supplied
+ * inclusion proof certified the observed spend — its region is now
+ * [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`].
+ */
+#define SEXTANT_FOLLOWER_REANCHOR_ADVANCED_SPEND_CERTIFIED 3
 
 /**
  * Every verdict the boundary can return, as one flat `#[repr(i32)]` enum. All bands
@@ -195,6 +262,12 @@ enum SextantStatus
 #ifndef __cplusplus
 typedef int32_t SextantStatus;
 #endif // __cplusplus
+
+/**
+ * Opaque handle to a live [`WindowFollower`]. Its fields never cross the boundary
+ * (cbindgen emits it as an opaque forward declaration); a caller holds only the pointer.
+ */
+typedef struct SextantFollower SextantFollower;
 
 /**
  * Per-verdict detail carried alongside the status code, so a caller can point at the
@@ -335,9 +408,15 @@ typedef struct {
    */
   uint8_t stall_reason;
   /**
+   * Which trust region a spend was observed in, when `kind == SPEND_OBSERVED`
+   * (`SEXTANT_WATCH_REGION_*`). `0` (n/a) for the other kinds. Occupies a byte that was
+   * reserved padding before ABI 4 — same layout, newly meaningful (hence the ABI bump).
+   */
+  uint8_t spend_region;
+  /**
    * Explicit alignment padding; zeroed on write so the struct is fully deterministic.
    */
-  uint8_t _reserved[4];
+  uint8_t _reserved[3];
   /**
    * The Mithril-certified anchor height the window rests on, when `kind == NO_SPEND_OBSERVED`.
    */
@@ -516,6 +595,137 @@ int32_t sextant_verify_watched_window(const uint8_t *const *block_ptrs,
                                       uint64_t freshness_slot_now,
                                       uint64_t freshness_max_lag,
                                       SextantWatchVerdict *out);
+
+/**
+ * Start following for a spend of the outpoint `(watched_txid, watched_index)`, answered
+ * as of a verified tip at or above `require_through`, inside the Mithril-certified region
+ * bounded by `anchor_height`, with epochs laid out by the `schedule_*` triple
+ * (`epoch`, its first slot, and the constant epoch length in slots). Stage each epoch's
+ * nonce with [`sextant_follower_supply_next_eta0`] before appending its blocks.
+ *
+ * Returns the heap-allocated handle, or null if `watched_txid` is null. Pair with exactly
+ * one [`sextant_follower_destroy`].
+ *
+ * # Safety
+ * `watched_txid` must be null or point to 32 readable bytes. The returned pointer is owned
+ * by the caller and valid until passed to [`sextant_follower_destroy`].
+ */
+SextantFollower *sextant_follower_new(const uint8_t *watched_txid,
+                                      uint16_t watched_index,
+                                      uint64_t anchor_height,
+                                      uint64_t require_through,
+                                      uint64_t schedule_epoch,
+                                      uint64_t schedule_epoch_first_slot,
+                                      uint64_t schedule_epoch_length_slots);
+
+/**
+ * Free a follower handle produced by [`sextant_follower_new`]. A null handle is a no-op.
+ *
+ * # Safety
+ * `handle` must be null or a pointer returned by [`sextant_follower_new`] that has not
+ * already been destroyed. After this call the pointer is dangling and must not be reused.
+ */
+void sextant_follower_destroy(SextantFollower *handle);
+
+/**
+ * Stage the epoch nonce η0 for `epoch`. The follower selects it for any appended block
+ * whose slot the schedule places in `epoch`. Overwritable: a mis-fetched nonce can be
+ * corrected before a block is accepted under it (a wrong nonce only makes a block fail to
+ * verify — liveness — never verify falsely).
+ *
+ * Returns `0` on success, or [`SextantStatus::ErrNullPointer`] for a null handle/`eta0`.
+ *
+ * # Safety
+ * `handle` must be a live follower handle; `eta0` must point to 32 readable bytes.
+ */
+int32_t sextant_follower_supply_next_eta0(SextantFollower *handle,
+                                          uint64_t epoch,
+                                          const uint8_t *eta0);
+
+/**
+ * Verify and fold one block (ledger `[era, block]` CBOR) into the follower. The block
+ * must decode, link to the verified tip by hash with block-number `tip + 1`, have its
+ * operational certificate / leader-VRF (against its epoch nonce) / KES verify, and have
+ * its bodies bind to its header commitment; only then is it accepted.
+ *
+ * Returns `0` on acceptance (`*out_block_number` = the new verified tip height), a
+ * POSITIVE refusal code (`SEXTANT_WATCH_STALL_*`, incl.
+ * [`SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE`]) if the block did not extend the tip —
+ * a refusal leaves the follower UNTOUCHED, so a later correct block still appends — or a
+ * negative [`SextantStatus`] for a boundary error. `out_block_number` is untouched on a
+ * non-zero return.
+ *
+ * # Safety
+ * `handle` must be a live follower handle; `block` must point to `block_len` readable
+ * bytes; `out_block_number` must be null or point to a writable `u64`.
+ */
+int32_t sextant_follower_append(SextantFollower *handle,
+                                const uint8_t *block,
+                                uintptr_t block_len,
+                                uint64_t *out_block_number);
+
+/**
+ * Roll the follower back to the point `(slot, hash)` — a chain-sync `RollBackward`. The
+ * 32-byte `hash` is the authoritative block identifier; `slot` accompanies it for `Point`
+ * fidelity.
+ *
+ * Returns one of [`SEXTANT_FOLLOWER_ROLLBACK_TRUNCATED`] (in-ring; `*out_tip_height` = the
+ * new verified tip), [`SEXTANT_FOLLOWER_ROLLBACK_TO_BASE`] (rolled back to the follow base;
+ * `*out_tip_height` = 0), or [`SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW`] (deeper than the
+ * retained horizon — the follower is poisoned, discard it); or a negative [`SextantStatus`]
+ * for a boundary error. `out_tip_height` is written on any non-negative return.
+ *
+ * # Safety
+ * `handle` must be a live follower handle; `hash` must point to 32 readable bytes;
+ * `out_tip_height` must be null or point to a writable `u64`.
+ */
+int32_t sextant_follower_rollback(SextantFollower *handle,
+                                  uint64_t slot,
+                                  const uint8_t *hash,
+                                  uint64_t *out_tip_height);
+
+/**
+ * Advance the certified anchor to `(anchor_height, anchor_root)` — monotone in block
+ * number, so a lower anchor is [`SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE`] and the certified
+ * region only grows. If `proof` is non-null AND the follower has observed a spend, the
+ * spend's inclusion in the new anchor's certified transaction set is verified against
+ * `anchor_root`; on success the spend's region upgrades to
+ * [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`]. Height NEVER upgrades a spend — only a proof
+ * that recomputes to the certified root does.
+ *
+ * `anchor_root` MUST be the `out_ct_root` of a prior
+ * [`sextant_mithril_verify_chain_anchored`]: the boundary cannot verify a caller-fabricated
+ * root's provenance, so — exactly as the batch window verify does with `anchor_height` — it
+ * surfaces the `mithril_quorum` assumption rather than checking it.
+ *
+ * Returns one of [`SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE`] /
+ * [`SEXTANT_FOLLOWER_REANCHOR_ADVANCED`] / [`SEXTANT_FOLLOWER_REANCHOR_ADVANCED_SPEND_CERTIFIED`],
+ * or a negative [`SextantStatus`] for a boundary error.
+ *
+ * # Safety
+ * `handle` must be a live follower handle; `anchor_root` must point to 32 readable bytes;
+ * `proof` must be null (iff `proof_len` is 0) or point to `proof_len` readable bytes.
+ */
+int32_t sextant_follower_re_anchor(SextantFollower *handle,
+                                   uint64_t anchor_height,
+                                   const uint8_t *anchor_root,
+                                   const uint8_t *proof,
+                                   uintptr_t proof_len);
+
+/**
+ * Read the follower's current three-valued windowed verdict, answered as of the verified
+ * tip under the caller's freshness bound (`freshness_slot_now` / `freshness_max_lag`), and
+ * marshal it into `*out`. Branch on `out.kind` — a spend or a stall is STILL a `0` return
+ * (the verdict is in the struct); only a null pointer is a negative [`SextantStatus`].
+ *
+ * # Safety
+ * `handle` must be a live follower handle; `out` must point to a writable
+ * [`SextantWatchVerdict`].
+ */
+int32_t sextant_follower_verdict(SextantFollower *handle,
+                                 uint64_t freshness_slot_now,
+                                 uint64_t freshness_max_lag,
+                                 SextantWatchVerdict *out);
 
 #if defined(SEXTANT_MITHRIL)
 /**

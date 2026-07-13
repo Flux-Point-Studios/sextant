@@ -271,8 +271,8 @@ fn status_message_sizes_then_copies() {
 }
 
 #[test]
-fn abi_version_is_three() {
-    assert_eq!(sextant_abi_version(), 3);
+fn abi_version_is_four() {
+    assert_eq!(sextant_abi_version(), 4);
     assert_eq!(sextant_abi_version(), SEXTANT_ABI_VERSION);
 }
 
