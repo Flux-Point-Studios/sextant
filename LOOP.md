@@ -840,7 +840,10 @@ needs a row in Evidence.
         non-interactive loop can't run, so they moved to F4b; F4 ships the type-level two-region honesty +
         the sound proof-gated mechanism + the sharpened docs, all provable on committed fixtures. Next: F4b,
         then F5.
-  - [ ] F4b — F2-red-team HIGH closure + true-window-spend MithrilCertified end-to-end (lib + harvest).
+  - [~] F4b — F2-red-team HIGH closure + true-window-spend MithrilCertified end-to-end (lib + harvest).
+        PARKED (BLOCKED on an operator-run network harvest — the non-interactive loop cannot fetch; do
+        F5 first, then F4b + F6 as the network batch). The `[~]` marker keeps the loop's "first unchecked
+        `[ ]`" selector from grabbing this before F5.
         DECIDED APPROACH for the `mithril_quorum` surfaced-not-verified boundary (option B, the lighter
         in-scope one): thread the certified anchor SLOT into `CertifiedTransactions` (a new `certified_slot`
         field) and REJECT an in-region served block whose slot > anchor_slot as inconsistent — it claims to
