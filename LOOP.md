@@ -895,8 +895,16 @@ needs a row in Evidence.
 - Zig embedding layer is out of scope until the Rust core's DoD is green.
 
 ## Merge policy
-- Auto-merge: yes. Merge requires all of: CI harness check green,
-  red-team VERDICT: SHIP, no unresolved review threads.
+- Auto-merge: NO for Epic F/N/A slices (changed 2026-07-13 after F3 auto-merged
+  on the loop's own red-team, bypassing the independent gate that has caught every
+  prior CRITICAL). An iteration BUILDS, opens the PR, self-red-teams, and then PARKS
+  the PR with a one-line handoff comment — it does NOT merge. The OPERATOR's
+  independent `fluxpoint-loop:red-team-reviewer` pass (a fresh, attack-specific brief)
+  is the merge gate; the operator merges on its SHIP. Rationale: this project's
+  pattern is that a second, sharply-briefed red-team finds what a generic first pass
+  misses (the truncation CRITICAL surfaced exactly that way).
+- Merge still requires all of: CI harness check green, an independent red-team
+  VERDICT: SHIP, no unresolved review threads.
 - Method: squash; delete branch on merge; sync default branch after.
 - Merge-triggers-deploy repos: n/a (library; releases tag manually until
   the Live line is close).
