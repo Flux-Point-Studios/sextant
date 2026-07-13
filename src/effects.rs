@@ -83,10 +83,23 @@ pub fn extract_block_effects(block: &[u8]) -> Result<BlockEffects, ExtractError>
     })
 }
 
+/// Collapse a consumed-input list to unique outpoints, in the order the UTxO set will remove
+/// them. Collateral inputs (key 13) may LEGALLY list the same UTxO more than once — Conway's
+/// `nonempty_set` and Babbage's array both preserve on-wire duplicates, and pallas `consumes()`
+/// de-dups for the same reason. Left un-collapsed, a duplicate makes [`crate::utxoset::UtxoSet`]
+/// remove the outpoint once, then fail `SpendOfUnknownOutput` on the repeat and reject the whole
+/// (valid, on-chain) block — a permanent wedge. Normal inputs (key 0) are a ledger-enforced set,
+/// but the same collapse is applied for defense in depth.
+fn unique_spent(mut v: Vec<OutPoint>) -> Vec<OutPoint> {
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 /// A phase-2-VALID transaction: it consumes its inputs (body key 0) and produces its outputs
 /// (key 1) as `(tx_id, 0..output_count)`.
 fn valid_tx_effect(tx: &[u8], tx_id: [u8; 32]) -> Result<TxEffect, ExtractError> {
-    let spent = inputs_at(tx, 0).map_err(|_| ExtractError::MalformedBody)?;
+    let spent = unique_spent(inputs_at(tx, 0).map_err(|_| ExtractError::MalformedBody)?);
     let n = output_count(tx).map_err(|_| ExtractError::MalformedBody)?;
     let mut created = Vec::with_capacity(n);
     for idx in 0..n {
@@ -103,7 +116,7 @@ fn valid_tx_effect(tx: &[u8], tx_id: [u8; 32]) -> Result<TxEffect, ExtractError>
 /// so it is caught by the [`ExtractError::CollateralReturnWithoutOutputs`] guard only when
 /// key 16 is present without a key-1 outputs array (a shape the modelled eras never emit).
 fn invalid_tx_effect(tx: &[u8], tx_id: [u8; 32], i: usize) -> Result<TxEffect, ExtractError> {
-    let spent = inputs_at(tx, 13).map_err(|_| ExtractError::MalformedBody)?;
+    let spent = unique_spent(inputs_at(tx, 13).map_err(|_| ExtractError::MalformedBody)?);
     let created = if has_body_key(tx, 16).map_err(|_| ExtractError::MalformedBody)? {
         let idx = output_count(tx)
             .map_err(|_| ExtractError::CollateralReturnWithoutOutputs { tx_index: i })?;
@@ -173,6 +186,41 @@ mod tests {
         assert_eq!(
             decode_invalid_transactions(&[0x9f, 0x01, 0x03, 0xff]).unwrap(),
             BTreeSet::from([1usize, 3usize])
+        );
+    }
+
+    /// A minimal invalid-tx body `{13: [X, X], 1: []}` — collateral lists the same outpoint
+    /// twice (legal: the ledger consumes it once). The extracted `spent` must be de-duplicated,
+    /// else `UtxoSet::apply` removes X once then trips `SpendOfUnknownOutput` on the repeat and
+    /// rejects the whole on-chain block, permanently wedging the follower.
+    #[test]
+    fn invalid_tx_dedups_duplicate_collateral() {
+        let x_hash = [0xaa_u8; 32];
+        // input X = [ h'aa..aa' (bytes .size 32), 0 ]  ->  82 5820 <32> 00
+        let mut input_x = vec![0x82, 0x58, 0x20];
+        input_x.extend_from_slice(&x_hash);
+        input_x.push(0x00);
+        // tx body = { 13: [X, X], 1: [] }  ->  a2 0d 82 X X 01 80
+        let mut tx = vec![0xa2, 0x0d, 0x82];
+        tx.extend_from_slice(&input_x);
+        tx.extend_from_slice(&input_x);
+        tx.extend_from_slice(&[0x01, 0x80]);
+
+        // Raw decode preserves the on-wire duplicate (the bug source).
+        assert_eq!(inputs_at(&tx, 13).unwrap().len(), 2);
+
+        let effect = invalid_tx_effect(&tx, [0u8; 32], 0).unwrap();
+        assert_eq!(
+            effect.spent,
+            vec![OutPoint {
+                tx_id: x_hash,
+                index: 0
+            }],
+            "duplicate collateral collapses to a single consumed outpoint",
+        );
+        assert!(
+            effect.created.is_empty(),
+            "no collateral return (no key 16)"
         );
     }
 }
