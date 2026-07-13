@@ -274,7 +274,11 @@ fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
         .array()
         .map_err(|_| UtxoError::MalformedTx)?
         .ok_or(UtxoError::MalformedTx)?;
-    let mut out = Vec::with_capacity(count as usize);
+    // Grow as elements decode rather than pre-allocating on the untrusted array count: a
+    // direct caller of `inputs_at` with a body declaring a huge count would otherwise force a
+    // capacity-overflow before any element is read. Each real element is bounds-checked by
+    // `decode_outpoint`, so the vec never exceeds the wire bytes.
+    let mut out = Vec::new();
     for _ in 0..count {
         out.push(decode_outpoint(d)?);
     }
