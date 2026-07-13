@@ -508,24 +508,48 @@ pub fn certify_spend_region(
 }
 
 /// Split a `transaction_bodies` region (block index 1) into the raw byte span of each
-/// transaction body, so the caller can hash each to its id and decode its spends. A
-/// Conway `transaction_bodies` is a definite array; an indefinite or ill-formed one
-/// fails closed (`Err`) rather than silently dropping a body — a dropped body is a
-/// spend a watcher would wrongly read as unspent.
+/// transaction body, so the caller can hash each to its id and decode its spends.
+///
+/// Cardano block CBOR is NON-CANONICAL, so a `transaction_bodies` array is validly
+/// encoded either DEFINITE (`0x8n` / `0x9b…` length) or INDEFINITE (`0x9f … 0xff`) —
+/// real Conway preprod/mainnet blocks use both. Both split into the same per-body raw
+/// spans and hash to the same raw region (the body-commitment bind is over the region
+/// verbatim, breaks and all). An ill-formed region — a non-array, a body that does not
+/// decode, or trailing bytes after the end — fails closed (`Err`), never silently
+/// dropping a body (a dropped body is a spend a watcher would wrongly read as unspent).
 fn tx_body_spans(block: &[u8], region: &Range<usize>) -> Result<Vec<Range<usize>>, ()> {
     let base = region.start;
     let mut d = Decoder::new(&block[region.clone()]);
-    let count = d.array().map_err(|_| ())?.ok_or(())?;
-    // Each element is >= 1 byte, so the region length caps the true element count;
-    // clamp the pre-allocation so a hostile declared count cannot force a large alloc.
-    let mut spans = Vec::with_capacity(count.min(region.len() as u64) as usize);
-    for _ in 0..count {
-        let start = d.position();
-        d.skip().map_err(|_| ())?;
-        spans.push(base + start..base + d.position());
-    }
-    if d.position() != region.len() {
-        return Err(());
+    let mut spans = Vec::new();
+    match d.array().map_err(|_| ())? {
+        // Definite array: exactly `count` bodies, then the region must end.
+        Some(count) => {
+            // Each body is >= 1 byte, so the region length caps the true count; clamp the
+            // pre-allocation so a hostile declared count cannot force a large alloc.
+            spans.reserve(count.min(region.len() as u64) as usize);
+            for _ in 0..count {
+                let start = d.position();
+                d.skip().map_err(|_| ())?;
+                spans.push(base + start..base + d.position());
+            }
+            if d.position() != region.len() {
+                return Err(());
+            }
+        }
+        // Indefinite array: bodies until the break marker, which must be the region's
+        // final byte. `datatype()` reports `Break` at the `0xff`; each body is skipped
+        // (minicbor handles nested indefinite bodies with `alloc`).
+        None => {
+            while d.datatype().map_err(|_| ())? != minicbor::data::Type::Break {
+                let start = d.position();
+                d.skip().map_err(|_| ())?;
+                spans.push(base + start..base + d.position());
+            }
+            // The break is a single `0xff` and must be the region's last byte.
+            if block.get(base + d.position()) != Some(&0xff) || d.position() + 1 != region.len() {
+                return Err(());
+            }
+        }
     }
     Ok(spans)
 }
@@ -533,6 +557,56 @@ fn tx_body_spans(block: &[u8], region: &Range<usize>) -> Result<Vec<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for the F6 live-run finding: a REAL preprod block (4927467) whose
+    /// `transaction_bodies` is an INDEFINITE-length CBOR array (`0x9f … 0xff`) — the
+    /// committed 22-block window is all definite, so the live follower was the first to
+    /// hit one. `tx_body_spans` must split it byte-exactly; the differential against
+    /// pallas proves no body is dropped, duplicated, or misaligned (a dropped body is a
+    /// spend a watcher would wrongly read as unspent). The body-commitment bind holds
+    /// over the raw region (breaks included).
+    #[test]
+    fn indefinite_tx_bodies_split_is_byte_exact_vs_pallas() {
+        let hex_txt = std::fs::read_to_string("tests/vectors/indefinite-4927467.block")
+            .expect("read the indefinite-array fixture");
+        let block = hex::decode(hex_txt.trim()).expect("hex");
+        let (view, spans) = HeaderView::decode_block(&block).expect("decode_block");
+        assert_eq!(
+            block[spans.tx_bodies.start], 0x9f,
+            "the fixture must genuinely exercise the INDEFINITE tx_bodies path",
+        );
+        assert_eq!(
+            hash_alonzo_seg_wits(&block, &spans),
+            view.block_body_hash,
+            "the body commitment binds over the raw indefinite region",
+        );
+
+        let body_spans =
+            tx_body_spans(&block, &spans.tx_bodies).expect("split indefinite tx_bodies");
+        let ours: Vec<String> = body_spans
+            .iter()
+            .map(|s| hex::encode(blake2b256(&block[s.clone()])))
+            .collect();
+        // pallas decodes the same block on an independent path; its per-tx hashes, in
+        // order, must equal our raw-span txids.
+        let pallas = pallas_traverse::MultiEraBlock::decode(&block).expect("pallas decode");
+        let theirs: Vec<String> = pallas.txs().iter().map(|t| t.hash().to_string()).collect();
+        assert!(
+            ours.len() >= 30,
+            "expected the full tx set, got {}",
+            ours.len()
+        );
+        assert_eq!(
+            ours, theirs,
+            "the indefinite-array split must be byte-exact — no body dropped or misaligned",
+        );
+
+        // And every one of those bodies decodes its spends fail-closed (no MalformedBody):
+        // the follower can process the block, not stall on it.
+        for s in &body_spans {
+            crate::utxo::decode_spends(&block[s.clone()]).expect("each body decodes its spends");
+        }
+    }
 
     /// A definite CBOR array of `items` (each already-encoded), prefixed by a
     /// definite-array header. Only small arrays (< 24) are needed here.
@@ -568,9 +642,33 @@ mod tests {
     }
 
     #[test]
-    fn tx_body_spans_rejects_an_indefinite_array() {
-        // 0x9f .. 0xff is an indefinite array; Sextant requires definite bodies.
-        let block = vec![0x9f, 0x01, 0xff];
+    fn tx_body_spans_splits_an_indefinite_array() {
+        // 0x9f .. 0xff is an INDEFINITE array; real Conway blocks use it (see the
+        // indefinite-4927467 fixture), so it splits the same as a definite one.
+        let mut block = vec![0xff, 0xff]; // prefix to prove absolute spans
+        let start = block.len();
+        block.extend_from_slice(&[0x9f, 0x01, 0x02, 0x03, 0xff]);
+        let region = start..block.len();
+        let spans = tx_body_spans(&block, &region).unwrap();
+        assert_eq!(spans.len(), 3);
+        assert_eq!(&block[spans[0].clone()], &[0x01]);
+        assert_eq!(&block[spans[1].clone()], &[0x02]);
+        assert_eq!(&block[spans[2].clone()], &[0x03]);
+    }
+
+    #[test]
+    fn tx_body_spans_rejects_an_indefinite_array_without_a_closing_break() {
+        // The region ends before the break — fail closed rather than a truncated scan (a
+        // dropped body is a spend a watcher would wrongly read as unspent).
+        let block = vec![0x9f, 0x01, 0x02];
+        assert!(tx_body_spans(&block, &(0..block.len())).is_err());
+    }
+
+    #[test]
+    fn tx_body_spans_rejects_bytes_after_an_indefinite_break() {
+        // A trailing byte after the break is inside the region — the break must be the
+        // region's last byte, else a body could hide past it.
+        let block = vec![0x9f, 0x01, 0xff, 0x02];
         assert!(tx_body_spans(&block, &(0..block.len())).is_err());
     }
 
