@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Read-path verifying Cardano client: Rust core (header VRF/KES, Mithril, UTxO verification) with C-ABI + wasm targets."
 repository = "https://github.com/Flux-Point-Studios/sextant"
+license = "Apache-2.0"
 
 # The harvester lives in its own workspace member so its async/network deps
 # (tokio, reqwest, pallas-network) never enter the trust-substrate lib's
