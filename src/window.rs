@@ -251,6 +251,13 @@ pub enum StallReason {
     TipAboveAnchor,
     /// The verified tip is older than the caller's freshness bound.
     TipTooOld,
+    /// An incremental follower ([`crate::follow::WindowFollower`]) was rolled back to a
+    /// point deeper than the horizon it retains — neither a block still in its fact ring
+    /// nor its follow base — so it cannot reconstruct the intervening state. Fail-closed:
+    /// the follower must be discarded and restarted from a fresh anchor. The batch
+    /// [`verify_watched_window`] never produces this (it re-verifies a whole window each
+    /// call and never rolls back); it is a follower-only stall.
+    RollbackBeyondWindow,
 }
 
 /// The caller's recency bound for a windowed verdict. Sextant proves "no spend through

@@ -722,6 +722,11 @@ pub const SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT: u8 = 7;
 pub const SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR: u8 = 8;
 /// The verified tip is older than the caller's freshness bound.
 pub const SEXTANT_WATCH_STALL_TIP_TOO_OLD: u8 = 9;
+/// An incremental follower was rolled back deeper than the horizon it retains, so it can
+/// no longer reconstruct the window; discard and restart from a fresh anchor. Additive
+/// and backward-compatible: no current C export can yet produce it (the follower gains
+/// its own boundary in a later slice), so an ABI-3 consumer never observes this value.
+pub const SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW: u8 = 10;
 
 /// The verdict of a windowed watch check, projected into a caller-allocated fixed-width
 /// `#[repr(C)]` struct — no sizing protocol, no owned buffer crosses the boundary. The
@@ -789,6 +794,7 @@ fn stall_code(reason: StallReason) -> u8 {
         StallReason::WindowTooShort => SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT,
         StallReason::TipAboveAnchor => SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR,
         StallReason::TipTooOld => SEXTANT_WATCH_STALL_TIP_TOO_OLD,
+        StallReason::RollbackBeyondWindow => SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW,
     }
 }
 
