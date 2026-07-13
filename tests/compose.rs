@@ -89,7 +89,7 @@ fn extract_apply_pipeline_over_the_contiguous_preprod_segment() {
         hash: first.prev_hash,
     };
     let mut set = UtxoSet::from_snapshot(base, external.iter().copied(), 4000);
-    assert_eq!(set.len(), external.len());
+    assert_eq!(set.len().unwrap(), external.len());
 
     // Apply the whole segment in order — every block must succeed: contiguity holds and, because
     // the set is complete from the seed, every consumed outpoint is present (an in-block or
@@ -115,27 +115,33 @@ fn extract_apply_pipeline_over_the_contiguous_preprod_segment() {
     );
     for o in &live {
         assert!(
-            set.is_unspent(o),
+            set.is_unspent(o).unwrap(),
             "a created-and-unspent output must be a member"
         );
     }
     for o in &spent {
-        assert!(!set.is_unspent(o), "a spent outpoint must be gone");
+        assert!(!set.is_unspent(o).unwrap(), "a spent outpoint must be gone");
     }
     // (external ∪ created) \ spent, and external ∩ created = ∅, so the size is exact.
-    assert_eq!(set.len(), external.len() + created.len() - spent.len());
+    assert_eq!(
+        set.len().unwrap(),
+        external.len() + created.len() - spent.len()
+    );
 
     // A full rollback of the segment restores the seeded base, outpoint-for-outpoint.
     set.rollback_to(&base.hash)
         .expect("rollback to the seeded base");
     assert_eq!(set.tip(), Some(base));
-    assert_eq!(set.len(), external.len());
+    assert_eq!(set.len().unwrap(), external.len());
     for o in &external {
-        assert!(set.is_unspent(o), "a base outpoint is restored by rollback");
+        assert!(
+            set.is_unspent(o).unwrap(),
+            "a base outpoint is restored by rollback"
+        );
     }
     for o in &live {
         assert!(
-            !set.is_unspent(o),
+            !set.is_unspent(o).unwrap(),
             "a segment-created outpoint is reversed by rollback"
         );
     }

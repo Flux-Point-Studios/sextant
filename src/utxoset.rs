@@ -17,15 +17,22 @@
 //! * **Contiguity** — a block must extend the tip by `prev_hash`/number+1, or it is refused.
 //! * **Completeness is load-bearing** — the set is complete from its base, so a transaction
 //!   spending an outpoint NOT in the set is a malformed/out-of-order block, not a silent skip.
-//! * **Fail-closed** — every refusal leaves the set exactly as it was; a partially-applied
-//!   block is reverted before the error returns.
+//! * **Fail-closed and ATOMIC** — a block's mutations run in one store transaction; on any
+//!   refusal (a logic error or a persistent-store I/O failure) the transaction is aborted and
+//!   the store is exactly as it was, and the tip/undo advance only after it commits. There is no
+//!   hand-rolled, itself-fallible revert that could leave a torn set.
 //! * **Eviction-as-finalization** — only the last `depth` blocks are reversible (the Praos
 //!   stability window, k = 2160); older application is finalized, matching what a rollback can
 //!   reach on a live chain.
 //!
-//! Rollback is exact: each applied block records its ordered insert/remove operations, and an
-//! undo replays them in reverse — so an outpoint created and then spent *within one block*
-//! (in-block transaction chaining) reverses to its true pre-block absence.
+//! Rollback is exact: each applied block records its ordered insert/remove operations, and a
+//! rollback replays them in reverse inside one atomic transaction — so an outpoint created and
+//! then spent *within one block* (in-block transaction chaining) reverses to its true pre-block
+//! absence, and a store failure mid-rollback leaves the set unchanged rather than wedged.
+
+//! The membership backing is abstracted behind [`UtxoStore`] (default in-memory [`MemStore`]):
+//! the wasm/mobile core carries only the set-in-RAM path, while a native host swaps in a
+//! persistent store (redb) via [`UtxoSet::with_store`] without any file I/O entering this core.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -83,6 +90,8 @@ pub enum ApplyError {
     /// A transaction creates an outpoint already in the set — impossible on a valid chain
     /// (a fresh transaction id is unique), so a red flag, not a silent overwrite.
     DuplicateOutput(OutPoint),
+    /// The backing store failed (persistent-store I/O). The block is not applied.
+    Store(StoreError),
 }
 
 /// Why a rollback failed. The set is left UNCHANGED.
@@ -91,9 +100,143 @@ pub enum RollbackError {
     /// The target point is not reachable within the retained (`depth`-deep) undo history — it
     /// is finalized (older than the rollback window) or was never on the applied chain.
     Unreachable,
+    /// The backing store failed (persistent-store I/O) while reversing a block.
+    Store(StoreError),
 }
 
-/// One applied block's exact forward operations, for an exact reverse.
+/// A storage-layer failure — disk I/O in a persistent store, and nothing else. The in-memory
+/// [`MemStore`] never produces one; a redb/sqlite adapter maps its I/O errors here so a read or
+/// write failure fails the verdict CLOSED rather than answering wrongly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreError(pub String);
+
+/// The membership backing of a [`UtxoSet`] — the ONE seam a persistent store plugs into, so the
+/// sans-io engine and the wasm-safe core stay file-free (redb/sqlite live in a native host
+/// adapter that implements this, never in the trust core). Reads are direct; ALL mutation goes
+/// through an ATOMIC [`UtxoTxn`], so a block applies all-or-nothing: on any error the engine
+/// drops the transaction (abort) and the store is exactly as it was — no hand-rolled, itself-
+/// fallible revert that could leave a torn set.
+pub trait UtxoStore {
+    /// A write transaction over this store — the atomic unit a block's mutations apply within.
+    type Txn<'s>: UtxoTxn
+    where
+        Self: 's;
+    /// Begin a write transaction. Dropping it without [`UtxoTxn::commit`] aborts, restoring the
+    /// pre-transaction state (a rollback the backend guarantees — redb drops its write txn).
+    fn transaction(&mut self) -> Result<Self::Txn<'_>, StoreError>;
+    /// Whether `o` is in the committed set.
+    fn contains(&self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// The number of outpoints in the committed set.
+    fn len(&self) -> Result<usize, StoreError>;
+    /// Whether the committed set holds no outpoints.
+    fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.len()? == 0)
+    }
+}
+
+/// An in-flight write transaction over a [`UtxoStore`]. `insert`/`remove` are read-your-writes
+/// WITHIN the transaction (an output created earlier in a block is visible to a later spend);
+/// `commit` durably persists ALL of them atomically, and dropping without commit aborts.
+pub trait UtxoTxn {
+    /// Insert `o`; `Ok(true)` iff it was newly added (was absent).
+    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// Remove `o`; `Ok(true)` iff it was present.
+    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// Durably persist every mutation in this transaction, atomically.
+    fn commit(self) -> Result<(), StoreError>;
+}
+
+/// The default in-memory store: a `BTreeSet` (wasm-safe, deterministic, like the follower's
+/// `BTreeMap`). Infallible — every method returns `Ok`. The wasm/mobile footprint uses this and
+/// never carries an on-disk full set.
+#[derive(Debug, Default, Clone)]
+pub struct MemStore {
+    set: BTreeSet<OutPoint>,
+}
+
+impl MemStore {
+    /// An empty in-memory store.
+    pub fn new() -> Self {
+        MemStore::default()
+    }
+}
+
+impl FromIterator<OutPoint> for MemStore {
+    fn from_iter<I: IntoIterator<Item = OutPoint>>(iter: I) -> Self {
+        MemStore {
+            set: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl UtxoStore for MemStore {
+    type Txn<'s> = MemTxn<'s>;
+    fn transaction(&mut self) -> Result<MemTxn<'_>, StoreError> {
+        Ok(MemTxn {
+            set: &mut self.set,
+            undo: Vec::new(),
+            committed: false,
+        })
+    }
+    fn contains(&self, o: &OutPoint) -> Result<bool, StoreError> {
+        Ok(self.set.contains(o))
+    }
+    fn len(&self) -> Result<usize, StoreError> {
+        Ok(self.set.len())
+    }
+}
+
+/// An in-memory write transaction: mutations apply to the set immediately (so reads within the
+/// transaction see them) and are recorded; `commit` keeps them, while a drop without commit
+/// reverses them exactly — an infallible, atomic abort.
+pub struct MemTxn<'s> {
+    set: &'s mut BTreeSet<OutPoint>,
+    undo: Vec<Op>,
+    committed: bool,
+}
+
+impl UtxoTxn for MemTxn<'_> {
+    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        let newly = self.set.insert(*o);
+        if newly {
+            self.undo.push(Op::Inserted(*o));
+        }
+        Ok(newly)
+    }
+    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        let present = self.set.remove(o);
+        if present {
+            self.undo.push(Op::Removed(*o));
+        }
+        Ok(present)
+    }
+    fn commit(mut self) -> Result<(), StoreError> {
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for MemTxn<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for op in self.undo.iter().rev() {
+            match op {
+                Op::Inserted(x) => {
+                    self.set.remove(x);
+                }
+                Op::Removed(x) => {
+                    self.set.insert(*x);
+                }
+            }
+        }
+    }
+}
+
+/// One applied block's exact forward operations, retained in the engine's undo log so a later
+/// chain rollback can reverse them (each reversal is itself run inside one atomic transaction).
+#[derive(Clone, Copy)]
 enum Op {
     Inserted(OutPoint),
     Removed(OutPoint),
@@ -107,37 +250,42 @@ struct Undo {
 
 /// A self-verified UTxO set: the outpoints currently unspent, maintained by applying verified
 /// blocks with a bounded rollback history. Sans-io — it is handed a block's effects, never a
-/// socket or a clock.
-pub struct UtxoSet {
-    set: BTreeSet<OutPoint>,
+/// socket or a clock. Generic over its [`UtxoStore`] backing; defaults to the in-memory
+/// [`MemStore`], so `UtxoSet::new(depth)` and the wasm build carry no persistent-store deps,
+/// while a native host swaps in a redb/sqlite store via [`UtxoSet::with_store`].
+pub struct UtxoSet<S: UtxoStore = MemStore> {
+    store: S,
     tip: Option<SetTip>,
     undo: VecDeque<Undo>,
     depth: usize,
 }
 
-impl UtxoSet {
-    /// An empty set at no tip — the start of a from-genesis replay. `depth` is the retained
-    /// rollback window in blocks; a live follower uses the Praos stability window (k = 2160).
+impl UtxoSet<MemStore> {
+    /// An empty in-memory set at no tip. `depth` is the retained rollback window in blocks; a
+    /// live follower uses the Praos stability window (k = 2160).
     pub fn new(depth: usize) -> Self {
-        UtxoSet {
-            set: BTreeSet::new(),
-            tip: None,
-            undo: VecDeque::new(),
-            depth,
-        }
+        UtxoSet::with_store(MemStore::new(), None, depth)
     }
 
-    /// Seed the set from a bootstrapped snapshot: the outpoints unspent as of `tip` (a later
-    /// slice hands over the replay result). The snapshot is the finalized base, so it carries
-    /// no rollback history; the first `apply` must name `tip.hash` as its parent.
+    /// An in-memory set seeded from a bootstrapped snapshot: the outpoints unspent as of `tip`.
+    /// The snapshot is the finalized base (no rollback history); the first `apply` must name
+    /// `tip.hash` as its parent.
     pub fn from_snapshot(
         tip: SetTip,
         unspent: impl IntoIterator<Item = OutPoint>,
         depth: usize,
     ) -> Self {
+        UtxoSet::with_store(unspent.into_iter().collect(), Some(tip), depth)
+    }
+}
+
+impl<S: UtxoStore> UtxoSet<S> {
+    /// Build a set over an arbitrary store — the seam a native host uses to back the set with a
+    /// persistent store already seeded to `tip` (or `None` for an empty from-genesis start).
+    pub fn with_store(store: S, tip: Option<SetTip>, depth: usize) -> Self {
         UtxoSet {
-            set: unspent.into_iter().collect(),
-            tip: Some(tip),
+            store,
+            tip,
             undo: VecDeque::new(),
             depth,
         }
@@ -149,23 +297,25 @@ impl UtxoSet {
     }
 
     /// The number of unspent outpoints held.
-    pub fn len(&self) -> usize {
-        self.set.len()
+    pub fn len(&self) -> Result<usize, StoreError> {
+        self.store.len()
     }
 
     /// Whether the set holds no unspent outpoints.
-    pub fn is_empty(&self) -> bool {
-        self.set.is_empty()
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.store.len()? == 0)
     }
 
     /// Whether `o` is unspent at the applied tip — the Tier-2 membership answer.
-    pub fn is_unspent(&self, o: &OutPoint) -> bool {
-        self.set.contains(o)
+    pub fn is_unspent(&self, o: &OutPoint) -> Result<bool, StoreError> {
+        self.store.contains(o)
     }
 
     /// Apply a verified block: remove every consumed outpoint, add every created one, in
-    /// transaction order. Contiguity is enforced against the current tip. On ANY inconsistency
-    /// the set is left exactly as it was and the error is returned (fail-closed).
+    /// transaction order. Contiguity is enforced against the current tip. The mutations run in
+    /// ONE atomic store transaction — on ANY inconsistency (a logic error or a store failure) the
+    /// transaction is aborted and the store is left exactly as it was; the tip and undo history
+    /// advance only after the transaction commits. No hand-rolled revert, so no torn state.
     pub fn apply(&mut self, block: &BlockEffects) -> Result<(), ApplyError> {
         if let Some(tip) = self.tip {
             // `checked_add`: a tip at u64::MAX has no successor number, so `None` is refused as
@@ -181,25 +331,7 @@ impl UtxoSet {
             }
         }
 
-        let mut ops: Vec<Op> = Vec::new();
-        for tx in &block.txs {
-            for inp in &tx.spent {
-                if self.set.remove(inp) {
-                    ops.push(Op::Removed(*inp));
-                } else {
-                    self.revert(&ops);
-                    return Err(ApplyError::SpendOfUnknownOutput(*inp));
-                }
-            }
-            for out in &tx.created {
-                if self.set.insert(*out) {
-                    ops.push(Op::Inserted(*out));
-                } else {
-                    self.revert(&ops);
-                    return Err(ApplyError::DuplicateOutput(*out));
-                }
-            }
-        }
+        let ops = self.commit_block(block)?;
 
         let tip = SetTip {
             number: block.number,
@@ -217,46 +349,86 @@ impl UtxoSet {
         Ok(())
     }
 
+    /// Apply a block's effects inside one atomic transaction and commit, returning the exact
+    /// forward ops for the undo log. On any logic or store error the transaction is dropped
+    /// (aborted) before returning, so the store is unchanged — the caller does not touch the
+    /// tip/undo on `Err`.
+    fn commit_block(&mut self, block: &BlockEffects) -> Result<Vec<Op>, ApplyError> {
+        let mut ops: Vec<Op> = Vec::new();
+        let mut txn = self.store.transaction().map_err(ApplyError::Store)?;
+        for tx in &block.txs {
+            for inp in &tx.spent {
+                match txn.remove(inp) {
+                    Ok(true) => ops.push(Op::Removed(*inp)),
+                    Ok(false) => return Err(ApplyError::SpendOfUnknownOutput(*inp)),
+                    Err(e) => return Err(ApplyError::Store(e)),
+                }
+            }
+            for out in &tx.created {
+                match txn.insert(out) {
+                    Ok(true) => ops.push(Op::Inserted(*out)),
+                    Ok(false) => return Err(ApplyError::DuplicateOutput(*out)),
+                    Err(e) => return Err(ApplyError::Store(e)),
+                }
+            }
+        }
+        txn.commit().map_err(ApplyError::Store)?;
+        Ok(ops)
+    }
+
     /// Roll the set back so `to` becomes the tip, reversing each later block's exact operations.
     /// `to` must be a point still within the retained undo window: the current tip (a no-op),
     /// a retained block, or the finalized base the window rests on. A target older than the
     /// window is [`RollbackError::Unreachable`] — Praos bounds a real rollback to `depth`, so a
-    /// deeper one is a fault, and the set is left UNCHANGED.
+    /// deeper one is a fault. The reversal runs in ONE atomic transaction and the undo/tip are
+    /// mutated only after it commits, so a store failure mid-reversal leaves the set UNCHANGED
+    /// (never torn, never a block left un-rollbackable).
     pub fn rollback_to(&mut self, to: &[u8; 32]) -> Result<(), RollbackError> {
-        let at_tip = self.tip.map(|t| &t.hash == to).unwrap_or(false);
-        // A valid target is either the current tip or the parent of some retained block (which
-        // becomes the tip once that block and everything after it is undone).
-        let reachable = at_tip || self.undo.iter().any(|u| &u.prev_hash == to);
-        if !reachable {
+        if self.tip.map(|t| &t.hash == to).unwrap_or(false) {
+            return Ok(());
+        }
+        if !self.undo.iter().any(|u| &u.prev_hash == to) {
             return Err(RollbackError::Unreachable);
         }
-        while self.tip.map(|t| &t.hash != to).unwrap_or(false) {
-            let u = self
-                .undo
-                .pop_back()
-                .expect("reachability guarantees a block to undo before reaching `to`");
-            self.revert(&u.ops);
-            self.tip = Some(SetTip {
-                number: u.tip.number.saturating_sub(1),
-                hash: u.prev_hash,
-            });
-        }
-        Ok(())
-    }
-
-    /// Reverse a block's operations in exact reverse order: a removal re-inserts, an insertion
-    /// removes. Applied to the partial ops of a failed block, or a full block on rollback.
-    fn revert(&mut self, ops: &[Op]) {
-        for op in ops.iter().rev() {
-            match op {
-                Op::Inserted(x) => {
-                    self.set.remove(x);
-                }
-                Op::Removed(x) => {
-                    self.set.insert(*x);
-                }
+        // Reverse the trailing undo entries down to the one whose parent is `to`.
+        let mut to_reverse = 0;
+        for u in self.undo.iter().rev() {
+            to_reverse += 1;
+            if &u.prev_hash == to {
+                break;
             }
         }
+        let oldest = &self.undo[self.undo.len() - to_reverse];
+        let new_tip = SetTip {
+            number: oldest.tip.number.saturating_sub(1),
+            hash: oldest.prev_hash,
+        };
+        // Collect the reversed ops (newest block first) into a local so the transaction below
+        // borrows only the store, not the undo log.
+        let reverse_ops: Vec<Op> = self
+            .undo
+            .iter()
+            .rev()
+            .take(to_reverse)
+            .flat_map(|u| u.ops.iter().rev().copied())
+            .collect();
+
+        let mut txn = self.store.transaction().map_err(RollbackError::Store)?;
+        for op in &reverse_ops {
+            let r = match op {
+                Op::Inserted(x) => txn.remove(x),
+                Op::Removed(x) => txn.insert(x),
+            };
+            r.map_err(RollbackError::Store)?;
+        }
+        txn.commit().map_err(RollbackError::Store)?;
+
+        // Committed: advance the engine's own bookkeeping.
+        for _ in 0..to_reverse {
+            self.undo.pop_back();
+        }
+        self.tip = Some(new_tip);
+        Ok(())
     }
 }
 
@@ -292,9 +464,9 @@ mod tests {
     fn apply_creates_and_spends_membership() {
         let mut u = UtxoSet::new(10);
         u.apply(&block(1, &[], &[op(1, 0), op(1, 1)])).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(u.is_unspent(&op(1, 1)));
-        assert_eq!(u.len(), 2);
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(u.is_unspent(&op(1, 1)).unwrap());
+        assert_eq!(u.len().unwrap(), 2);
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -304,9 +476,9 @@ mod tests {
         );
 
         u.apply(&block(2, &[op(1, 0)], &[op(2, 0)])).unwrap();
-        assert!(!u.is_unspent(&op(1, 0)), "spent output is gone");
-        assert!(u.is_unspent(&op(1, 1)), "unspent sibling remains");
-        assert!(u.is_unspent(&op(2, 0)));
+        assert!(!u.is_unspent(&op(1, 0)).unwrap(), "spent output is gone");
+        assert!(u.is_unspent(&op(1, 1)).unwrap(), "unspent sibling remains");
+        assert!(u.is_unspent(&op(2, 0)).unwrap());
     }
 
     #[test]
@@ -330,11 +502,11 @@ mod tests {
         };
         u.apply(&blk).unwrap();
         assert!(
-            !u.is_unspent(&op(1, 0)),
+            !u.is_unspent(&op(1, 0)).unwrap(),
             "created-then-spent in one block is absent"
         );
-        assert!(u.is_unspent(&op(2, 0)));
-        assert_eq!(u.len(), 1);
+        assert!(u.is_unspent(&op(2, 0)).unwrap());
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -355,8 +527,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, ApplyError::SpendOfUnknownOutput(op(9, 9)));
         // Fail-closed: op(1,0) is back, op(2,0) never landed, tip unmoved.
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -364,7 +536,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 1);
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -380,7 +552,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 1);
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -419,9 +591,9 @@ mod tests {
         u.apply(&block(2, &[op(1, 0)], &[op(2, 0)])).unwrap();
         // Roll back block 2: op(1,0) returns, op(2,0) gone, tip back to block 1.
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(u.is_unspent(&op(1, 1)));
-        assert!(!u.is_unspent(&op(2, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(u.is_unspent(&op(1, 1)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -429,7 +601,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 2);
+        assert_eq!(u.len().unwrap(), 2);
     }
 
     #[test]
@@ -453,15 +625,15 @@ mod tests {
             ],
         })
         .unwrap();
-        assert!(!u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(u.is_unspent(&op(3, 0)));
+        assert!(!u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(u.is_unspent(&op(3, 0)).unwrap());
         // Rolling back restores exactly the block-1 state.
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(!u.is_unspent(&op(3, 0)));
-        assert_eq!(u.len(), 1);
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(!u.is_unspent(&op(3, 0)).unwrap());
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -471,9 +643,9 @@ mod tests {
         u.apply(&block(2, &[], &[op(2, 0)])).unwrap();
         u.apply(&block(3, &[op(1, 0)], &[op(3, 0)])).unwrap();
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(!u.is_unspent(&op(3, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(!u.is_unspent(&op(3, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -500,7 +672,7 @@ mod tests {
                 hash: h(3)
             })
         );
-        assert!(u.is_unspent(&op(1, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
     }
 
     #[test]
@@ -524,7 +696,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ApplyError::NotContiguous { .. }));
         assert_eq!(u.tip(), Some(base));
-        assert!(u.is_unspent(&op(1, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
     }
 
     #[test]
@@ -534,7 +706,7 @@ mod tests {
             hash: h(100),
         };
         let mut u = UtxoSet::from_snapshot(base, [op(50, 0), op(60, 1)], 10);
-        assert!(u.is_unspent(&op(50, 0)));
+        assert!(u.is_unspent(&op(50, 0)).unwrap());
         assert_eq!(u.tip(), Some(base));
         // The next block must name the snapshot as its parent and spend from the snapshot set.
         u.apply(&BlockEffects {
@@ -547,9 +719,189 @@ mod tests {
             }],
         })
         .unwrap();
-        assert!(!u.is_unspent(&op(50, 0)));
-        assert!(u.is_unspent(&op(101, 0)));
+        assert!(!u.is_unspent(&op(50, 0)).unwrap());
+        assert!(u.is_unspent(&op(101, 0)).unwrap());
         // Cannot roll back past the finalized snapshot base.
         assert_eq!(u.rollback_to(&h(99)), Err(RollbackError::Unreachable));
+    }
+
+    /// A store whose transaction fails on its `fail_at`-th mutation — injects the persistent-store
+    /// I/O failure the atomicity of `apply`/`rollback_to` must survive. Its transaction aborts on
+    /// drop (reverses the ops it applied), exactly like `MemTxn`, so a failed apply/rollback must
+    /// leave the committed set unchanged.
+    struct FaultyStore {
+        set: BTreeSet<OutPoint>,
+        fail_at: Option<usize>,
+    }
+
+    struct FaultyTxn<'s> {
+        set: &'s mut BTreeSet<OutPoint>,
+        undo: Vec<Op>,
+        committed: bool,
+        count: usize,
+        fail_at: Option<usize>,
+    }
+
+    impl FaultyTxn<'_> {
+        fn tick(&mut self) -> Result<(), StoreError> {
+            self.count += 1;
+            if Some(self.count) == self.fail_at {
+                Err(StoreError("injected I/O failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl UtxoTxn for FaultyTxn<'_> {
+        fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+            self.tick()?;
+            let newly = self.set.insert(*o);
+            if newly {
+                self.undo.push(Op::Inserted(*o));
+            }
+            Ok(newly)
+        }
+        fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+            self.tick()?;
+            let present = self.set.remove(o);
+            if present {
+                self.undo.push(Op::Removed(*o));
+            }
+            Ok(present)
+        }
+        fn commit(mut self) -> Result<(), StoreError> {
+            self.committed = true;
+            Ok(())
+        }
+    }
+
+    impl Drop for FaultyTxn<'_> {
+        fn drop(&mut self) {
+            if self.committed {
+                return;
+            }
+            for op in self.undo.iter().rev() {
+                match op {
+                    Op::Inserted(x) => {
+                        self.set.remove(x);
+                    }
+                    Op::Removed(x) => {
+                        self.set.insert(*x);
+                    }
+                }
+            }
+        }
+    }
+
+    impl UtxoStore for FaultyStore {
+        type Txn<'s> = FaultyTxn<'s>;
+        fn transaction(&mut self) -> Result<FaultyTxn<'_>, StoreError> {
+            Ok(FaultyTxn {
+                set: &mut self.set,
+                undo: Vec::new(),
+                committed: false,
+                count: 0,
+                fail_at: self.fail_at,
+            })
+        }
+        fn contains(&self, o: &OutPoint) -> Result<bool, StoreError> {
+            Ok(self.set.contains(o))
+        }
+        fn len(&self) -> Result<usize, StoreError> {
+            Ok(self.set.len())
+        }
+    }
+
+    #[test]
+    fn apply_is_atomic_under_a_store_failure() {
+        // Seed {A, B}. A block removes A, removes B, creates C — the store fails on the 3rd op
+        // (the create). The whole block must abort: A and B are NOT lost, C never lands, tip
+        // unmoved. (Before the transactional seam, the partial revert lost A and B.)
+        let (a, b, c) = (op(1, 0), op(2, 0), op(3, 0));
+        let store = FaultyStore {
+            set: [a, b].into_iter().collect(),
+            fail_at: Some(3),
+        };
+        let mut set = UtxoSet::with_store(
+            store,
+            Some(SetTip {
+                number: 0,
+                hash: h(0),
+            }),
+            10,
+        );
+        let err = set
+            .apply(&BlockEffects {
+                number: 1,
+                hash: h(1),
+                prev_hash: h(0),
+                txs: vec![TxEffect {
+                    spent: vec![a, b],
+                    created: vec![c],
+                }],
+            })
+            .unwrap_err();
+        assert!(matches!(err, ApplyError::Store(_)));
+        assert!(
+            set.is_unspent(&a).unwrap(),
+            "A restored by abort — not lost"
+        );
+        assert!(
+            set.is_unspent(&b).unwrap(),
+            "B restored by abort — not lost"
+        );
+        assert!(!set.is_unspent(&c).unwrap());
+        assert_eq!(
+            set.tip(),
+            Some(SetTip {
+                number: 0,
+                hash: h(0)
+            })
+        );
+        assert_eq!(set.len().unwrap(), 2);
+    }
+
+    #[test]
+    fn rollback_is_atomic_under_a_store_failure() {
+        // Apply blocks 1 and 2 cleanly, then a rollback whose store fails mid-reversal must leave
+        // the set EXACTLY at block 2 — not torn, and NOT left un-rollbackable. (Before the fix,
+        // the popped undo entry was destroyed and the block became permanently un-rollbackable.)
+        let store = FaultyStore {
+            set: BTreeSet::new(),
+            fail_at: None,
+        };
+        let mut set = UtxoSet::with_store(store, None, 10);
+        set.apply(&block(1, &[], &[op(1, 0)])).unwrap();
+        set.apply(&block(2, &[], &[op(2, 0), op(2, 1)])).unwrap();
+
+        // Arm a fault on the first reversal op, then attempt the rollback.
+        set.store.fail_at = Some(1);
+        let err = set.rollback_to(&h(1)).unwrap_err();
+        assert!(matches!(err, RollbackError::Store(_)));
+        // Unchanged: still at block 2, all outputs present.
+        assert_eq!(
+            set.tip(),
+            Some(SetTip {
+                number: 2,
+                hash: h(2)
+            })
+        );
+        assert!(set.is_unspent(&op(2, 0)).unwrap());
+        assert!(set.is_unspent(&op(2, 1)).unwrap());
+        assert!(set.is_unspent(&op(1, 0)).unwrap());
+
+        // NOT wedged: once the fault clears, the same rollback succeeds.
+        set.store.fail_at = None;
+        set.rollback_to(&h(1)).unwrap();
+        assert_eq!(
+            set.tip(),
+            Some(SetTip {
+                number: 1,
+                hash: h(1)
+            })
+        );
+        assert!(!set.is_unspent(&op(2, 0)).unwrap());
+        assert!(set.is_unspent(&op(1, 0)).unwrap());
     }
 }
