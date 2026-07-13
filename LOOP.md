@@ -1063,7 +1063,31 @@ needs a row in Evidence.
 | 2026-07-13 00:20 UTC | Tier1 slice 4+5 (FINAL — C-ABI windowed watch verdict + ladder reconciliation) — CLOSES Tier-1; independent red-team SHIP, all four Woodpecker contexts green | PR #28 (`42d3caf`), branch `tier1-slice5-cabi-windowed`; `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (the `artifacts` job COMPILED + RAN the new `smoke.c` window leg on Linux — external C linkage of `sextant_verify_watched_window` + the struct crossing the boundary + garbage→STALLED, the leg unbuildable locally on Windows-MSVC). Export `sextant_verify_watched_window` (CORE, default+wasm32, 0 blst) surfaces the 3-valued verdict as fixed-width `#[repr(C)] SextantWatchVerdict{kind,basis,assumptions,stall_reason,_reserved[4],anchor_height,as_of_height,as_of_slot,verified_through,spend_at_height,spend_at_slot,spending_txid[32]}` (88B, no implicit padding, no `-3` sizing); CARRIES `require_through` (truncation defense holds at the C ABI). ABI 2→3. Slice 4: reserved `CertifiedUnspent`/`Attested` tiers de-duplicated onto `SpendStatus` (one home); `WatchBasis` docs only `WatchedWindow`. Independent `fluxpoint-loop:red-team-reviewer` (3rd of the project, hunting the false-accept that bit slices UTxO-pt2 + Tier1-3) VERDICT SHIP — NO false-accept/UB: (1) `project_watch_verdict` disjoint arms, `kind` set explicitly per variant, no path maps Stalled/SpentObserved→`NO_SPEND_OBSERVED`; (2) `require_through` passed through, `<` boundary correct, C-ABI regression proven on real data; (3) EXHAUSTIVELY grepped `src/` to confirm `merkle_root`/`epoch` are read ONLY in mithril.rs + the anchored-verify (never on the window path) — the empty anchor root is genuinely inert, honest-by-construction; (4) honest-scope grep survives because `NO_SPEND` is `s-p-e-n-d` not `spent` (the rename off the brief's `_UNSPENT` is load-bearing); (5) wasm pass-through guard + native `catch_unwind` + the harness's reject-`panic=abort` gate together close the unwind hole; (6) struct written once, `_reserved` explicit, header cbindgen-diff clean. `scripts/harness.sh --full` exit 0 (19 window incl. 5 ffi_boundary + 5 windowed_consumer + all others). Tier-1 windowed-unspent COMPLETE end-to-end (Rust core + C-ABI/WASM + consumer example). |
 
 ## Notes for the next iteration
-State (2026-07-13, latest — Epic F slice F4 two-region honesty + re_anchor BUILT, harness `--full` green locally, loop self-red-team VERDICT SHIP (0 findings, 7 axes), PR #32 PARKED for the operator's independent red-team per the merge policy — the merge gate): **STATUS: DONE holds; Epic F is F1✅ F2✅ F3✅ F4✅ (awaiting operator merge), F4b/F5/F6 open.**
+State (2026-07-13, latest — **OPERATOR-DIRECTED PAUSE at the Epic F core milestone**): **STATUS: DONE holds; Epic F core F1✅ F2✅ F3✅ F4✅ all MERGED to main + each independently red-team-verified; F4b/F5/F6 PINNED, not started.**
+The operator paused here (F1-F4 is the milestone). The lib-level `WindowFollower` is functionally complete
+and sound: incremental append (O(block-bytes), differential-parity with the frozen batch oracle),
+epoch-boundary crossing (slot→epoch nonce map), rollback + eviction-as-finalization (a k-deep spend is
+common-prefix-immune and never lost; a deeper rollback poisons fail-closed), and two-region spend honesty
+(HeaderVouched by default; MithrilCertified ONLY on a verified inclusion proof of the exact spending tx —
+never height; the design-CRITICAL closed in the type). Above the anchor it answers `Unspent{mithril_quorum:
+false}` so a live follower can answer past the ~100-block Mithril lag, honestly surfacing that the region is
+not quorum-backed. Merge policy is now PARK-for-operator-red-team (no auto-merge) after F3 auto-merged.
+RESUME POINT — three pinned slices, in the Plan with critique-amended specs + gating tests:
+ * **F4b** (lib + a network harvest): close the residual `mithril_quorum` freshness HIGH via option B —
+   thread a `certified_slot` into `CertifiedTransactions` and reject an in-region block whose slot exceeds
+   it; PLUS the true-window-spend `760076f2…` MithrilCertified end-to-end (harvest its Mithril inclusion
+   proof from the aggregator). The residual "forge a no-spend within the certified slot range" is Tier-2
+   (Epic N), documented not faked.
+ * **F5** (lib/ffi, NO network): the follower C-ABI — opaque-handle exports
+   `sextant_follower_{new,append,supply_next_eta0,rollback,re_anchor,verdict,destroy}`, `SEXTANT_ABI_VERSION`
+   3→4, `SextantWatchVerdict._reserved[4] → spend_region:u8`, the new stall codes, header regen. Highest-
+   leverage next step (makes the follower C/WASM-consumable) and needs no harvest.
+ * **F6** (workspace member + live evidence): `tools/sentry` — GREENFIELD N2N chain-sync consumer loop
+   (bootstrap-blockfetch the creating block, find_intersect, RollForward/RollBackward), aggregator
+   re-anchor, wall-clock freshness; deterministic mock-peer gate (a) REQUIRED (inject one rollback + one
+   epoch turn) + a live preprod transcript gate (b).
+Each remaining slice: build (loop or direct) → independent red-team → merge on SHIP. No STATUS change —
+the DoD stayed DONE throughout; Epic F is all BEYOND-DoD v0.3.
 This iteration shipped F4: `WatchVerdict::SpentObserved` is no longer uniformly "authoritative regardless of
 freshness" — it carries a `SpendRegion{MithrilCertified, HeaderVouched}`. A spend seen in a header-verified,
 body-committed block is `HeaderVouched` (rests on the same `mithril_quorum` assumption a no-spend does); it
