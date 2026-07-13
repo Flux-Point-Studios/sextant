@@ -281,6 +281,34 @@ fn wrong_epoch_nonce_refuses_the_first_block_crypto() {
     assert_eq!(refusal, AppendRefusal::Crypto);
 }
 
+/// The pinned relation's "follower is MORE correct" case: a spend recorded in an
+/// ACCEPTED prefix stays the verdict even after a later append is REFUSED — the batch
+/// fed the broken tail would collapse to a stall, but the definite refuse was already
+/// observed in verified blocks and a broken tail cannot un-observe it.
+#[test]
+fn recorded_spend_survives_a_refused_append() {
+    let window = preprod_window();
+    let mut follower = WindowFollower::new(watched(1), &anchor(), REQUIRE_THROUGH, eta0());
+    for b in window.iter().take(3) {
+        follower.append(b).expect("clean prefix accepted");
+    }
+    let spent = follower.verdict(fresh());
+    assert!(
+        matches!(
+            spent,
+            WatchVerdict::SpentObserved { at_height: 4_921_917, spending_txid, .. }
+                if spending_txid == hash32(SPENDING_TX)
+        ),
+        "the spend at block[1] is recorded, got {spent:?}",
+    );
+    // A truncated block is refused...
+    let mut bad = window[3].clone();
+    bad.truncate(bad.len() / 2);
+    assert_eq!(follower.append(&bad), Err(AppendRefusal::Decode));
+    // ...and the definite refuse is unchanged by the refusal.
+    assert_eq!(follower.verdict(fresh()), spent);
+}
+
 /// A refused append does not brick the follower: after a refusal it still accepts the
 /// correct next block and advances the verified tip.
 #[test]

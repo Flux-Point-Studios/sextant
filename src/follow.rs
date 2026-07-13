@@ -65,6 +65,13 @@ pub enum AppendRefusal {
     /// The block's `prev_hash` did not link to the follower's verified tip — a gap,
     /// reorder, or fork.
     BrokenLink,
+    /// The block hash-links but its number is not the tip's + 1. A genuinely signed
+    /// header from a colluding elected leader can carry ANY block number, so without
+    /// this check it could vault the verified tip past `require_through` without the
+    /// intervening blocks ever being served — the truncation evasion resurrected by
+    /// number inflation. The batch oracle catches the same shape with its terminal
+    /// contiguity check.
+    NotContiguous,
     /// The block's operational certificate, leader-VRF (against the follower's epoch
     /// nonce), or KES body signature did not verify.
     Crypto,
@@ -87,6 +94,7 @@ impl AppendRefusal {
             AppendRefusal::Decode | AppendRefusal::BrokenLink | AppendRefusal::Crypto => {
                 StallReason::BrokenSegment
             }
+            AppendRefusal::NotContiguous => StallReason::MissingBlock,
             AppendRefusal::BodyCommitmentMismatch => StallReason::BodyCommitmentMismatch,
             AppendRefusal::MalformedBody => StallReason::MalformedBody,
         }
@@ -159,12 +167,20 @@ impl WindowFollower {
         // 1. Decode the header for the link + crypto checks (mirrors verify_segment's
         //    per-header work).
         let view = HeaderView::from_block_cbor(block).map_err(|_| AppendRefusal::Decode)?;
-        // 2. Link to the accepted tip by hash: a gap, reorder, or fork is refused,
-        //    exactly as verify_segment's BrokenLink.
-        if let Some(prev) = &self.tip
-            && view.prev_hash != Some(prev.block_hash)
-        {
-            return Err(AppendRefusal::BrokenLink);
+        // 2. Extend the accepted run: link to the tip by hash (a gap, reorder, or fork
+        //    is refused, exactly as verify_segment's BrokenLink), AND advance the block
+        //    number by exactly one. The number check is load-bearing on its own: a
+        //    genuinely signed header from a colluding elected leader can carry any
+        //    number, and without it a hash-linked skipper could vault the tip past
+        //    `require_through` without the intervening blocks — the batch oracle's
+        //    terminal contiguity check (MissingBlock), enforced here per append.
+        if let Some(prev) = &self.tip {
+            if view.prev_hash != Some(prev.block_hash) {
+                return Err(AppendRefusal::BrokenLink);
+            }
+            if view.block_number != prev.block_number + 1 {
+                return Err(AppendRefusal::NotContiguous);
+            }
         }
         // 3. Crypto: opcert -> leader-VRF (vs eta0) -> KES, the shared per-header unit.
         //    The batch collapses opcert/VRF/KES to BrokenSegment too, so the class, not
@@ -212,9 +228,8 @@ impl WindowFollower {
         let Some(tip) = &self.tip else {
             return stalled(0, StallReason::EmptyWindow);
         };
-        // Contiguity is maintained by construction: every accepted block links to the
-        // previous by hash, so the accepted run is gap-free and the batch's MissingBlock
-        // check can never diverge here.
+        // Contiguity is enforced per append (hash link + number+1), so the accepted run
+        // is gap-free and the batch's terminal MissingBlock check cannot diverge here.
         if !self.create_seen {
             return stalled(tip.block_number, StallReason::CreationNotObserved);
         }
@@ -246,5 +261,85 @@ fn stalled(verified_through: u64, reason: StallReason) -> WatchVerdict {
     WatchVerdict::Stalled {
         verified_through,
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// The two lowest preprod window blocks (4921916, 4921917) and their shared epoch
+    /// nonce, from the committed vectors + `.eta0` sidecars.
+    fn first_two_blocks_and_eta0() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
+        let mut rows: Vec<(u64, Vec<u8>, [u8; 32])> = Vec::new();
+        for entry in fs::read_dir(&dir).expect("read vectors dir") {
+            let path = entry.expect("dir entry").path();
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            if !name.starts_with("preprod-")
+                || path.extension().and_then(|e| e.to_str()) != Some("block")
+            {
+                continue;
+            }
+            let bytes = hex::decode(fs::read_to_string(&path).expect("read block vector").trim())
+                .expect("block hex");
+            let eta0: [u8; 32] = hex::decode(
+                fs::read_to_string(path.with_extension("eta0"))
+                    .expect("read eta0 sidecar")
+                    .trim(),
+            )
+            .expect("eta0 hex")
+            .try_into()
+            .expect("32-byte eta0");
+            let view = HeaderView::from_block_cbor(&bytes).expect("decode block");
+            rows.push((view.slot, bytes, eta0));
+        }
+        rows.sort_by_key(|r| r.0);
+        let eta0 = rows[0].2;
+        assert_eq!(rows[1].2, eta0, "one epoch, one nonce");
+        (rows[0].1.clone(), rows[1].1.clone(), eta0)
+    }
+
+    /// The colluding-elected-leader shape: a genuinely signed header that hash-links to
+    /// the tip but SKIPS a block number could vault the verified tip past
+    /// `require_through` without serving the intervening blocks — the truncation
+    /// evasion resurrected by number inflation. The batch oracle catches it with its
+    /// terminal contiguity check (`MissingBlock`); the follower must refuse the append.
+    /// Simulated with real signed blocks by lowering the carried tip number so the
+    /// genuine successor (hash-links, crypto-valid) presents as a number skip.
+    #[test]
+    fn number_skipping_block_is_refused_not_contiguous() {
+        let (b0, b1, eta0) = first_two_blocks_and_eta0();
+        let anchor = CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 300,
+            block_number: 4_927_469,
+        };
+        let watch = OutPoint {
+            tx_id: [0u8; 32],
+            index: 0,
+        };
+        let mut follower = WindowFollower::new(watch, &anchor, 4_921_937, eta0);
+        follower.append(&b0).expect("the first block is accepted");
+        follower
+            .tip
+            .as_mut()
+            .expect("tip set after the first append")
+            .block_number -= 1;
+        assert_eq!(
+            follower.append(&b1),
+            Err(AppendRefusal::NotContiguous),
+            "a hash-linked block whose number is not tip+1 must be refused",
+        );
+        assert_eq!(
+            AppendRefusal::NotContiguous.as_stall_reason(),
+            StallReason::MissingBlock,
+            "the refusal maps to the batch oracle's contiguity stall",
+        );
     }
 }
