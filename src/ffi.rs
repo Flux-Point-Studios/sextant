@@ -21,12 +21,13 @@ use std::ptr;
 use std::slice;
 
 use crate::chain::{self, ChainError};
+use crate::follow::{AppendRefusal, ReAnchor, Rollback, SlotSchedule, WindowFollower};
 use crate::header::{DecodeError, HeaderView};
 use crate::inclusion::InclusionError;
 use crate::kes::KesError;
 use crate::utxo::{self, CertifiedTransactions, Datum, OutPoint, UtxoError};
 use crate::vrf::VrfError;
-use crate::window::{self, Freshness, StallReason, WatchBasis, WatchVerdict};
+use crate::window::{self, Freshness, SpendRegion, StallReason, WatchBasis, WatchVerdict};
 
 #[cfg(feature = "mithril")]
 use crate::mithril::{
@@ -36,8 +37,10 @@ use crate::mithril::{
 /// ABI contract version. A consumer asserts `sextant_abi_version() == SEXTANT_ABI_VERSION`
 /// at load; cbindgen emits it into the header as a `#define`. Bumped 1→2 for the UTxO
 /// read export and the certified-transactions out-params on the anchored verify; 2→3 for
-/// the windowed watch-verdict export ([`sextant_verify_watched_window`]).
-pub const SEXTANT_ABI_VERSION: u32 = 3;
+/// the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
+/// follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
+/// [`SextantWatchVerdict`] reserved byte as `spend_region`.
+pub const SEXTANT_ABI_VERSION: u32 = 4;
 
 /// The only defined `spend_status` value a verified read returns. The read path can
 /// NEVER establish that an output is currently available to spend (see
@@ -678,9 +681,9 @@ pub const SEXTANT_WATCH_NO_SPEND_OBSERVED: u8 = 1;
 /// `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
 /// spend of the watched outpoint — a definite refuse. Authoritative against the verified
 /// window regardless of freshness; whether that authority is Mithril-quorum-backed or
-/// merely header-vouched is the two-region distinction the Rust `SpendRegion` carries and
-/// a later ABI slice surfaces here. Until then treat it as resting on the same
-/// `mithril_quorum` assumption a no-spend answer does: a definite refuse either way.
+/// merely header-vouched is carried in `spend_region` (`SEXTANT_WATCH_REGION_*`). A
+/// `HEADER_VOUCHED` spend rests on the same `mithril_quorum` assumption a no-spend answer
+/// does; only a `MITHRIL_CERTIFIED` spend is authoritative independent of it.
 pub const SEXTANT_WATCH_SPEND_OBSERVED: u8 = 2;
 /// `SextantWatchVerdict.kind`: the window could not answer (a gap, a failed body
 /// commitment, an unverified segment, an unobserved creation, a short or stale tip). A
@@ -730,11 +733,52 @@ pub const SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT: u8 = 7;
 pub const SEXTANT_WATCH_STALL_TIP_ABOVE_ANCHOR: u8 = 8;
 /// The verified tip is older than the caller's freshness bound.
 pub const SEXTANT_WATCH_STALL_TIP_TOO_OLD: u8 = 9;
-/// An incremental follower was rolled back deeper than the horizon it retains, so it can
-/// no longer reconstruct the window; discard and restart from a fresh anchor. Additive
-/// and backward-compatible: no current C export can yet produce it (the follower gains
-/// its own boundary in a later slice), so an ABI-3 consumer never observes this value.
+/// An incremental follower ([`sextant_follower_new`]) was rolled back deeper than the
+/// horizon it retains, so it can no longer reconstruct the window; discard and restart
+/// from a fresh anchor. Produced by [`sextant_follower_verdict`] after a rollback returned
+/// [`SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW`]; the batch window verify never yields it.
 pub const SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW: u8 = 10;
+/// A follower [`sextant_follower_append`] crossed an epoch boundary before the epoch's η0
+/// was staged via [`sextant_follower_supply_next_eta0`]. Fail-closed and liveness-only:
+/// the block does not advance the tip, and appending it again after the nonce is staged
+/// still succeeds. Follower-only — the single-epoch batch window verify has no counterpart.
+pub const SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE: u8 = 11;
+
+/// `SextantWatchVerdict.spend_region` (meaningful only when `kind == SEXTANT_WATCH_SPEND_OBSERVED`):
+/// the spending transaction is proven a member of the genesis-anchored Mithril-certified
+/// transaction set — quorum-backed, authoritative independent of the `mithril_quorum`
+/// assumption. `0` (n/a) for the other kinds.
+pub const SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED: u8 = 1;
+/// `SextantWatchVerdict.spend_region`: the spend was observed in a header-verified,
+/// hash-linked, body-committed block NOT bound to the certified set — authoritative
+/// against the verified window, but resting on the same `mithril_quorum` assumption a
+/// no-spend verdict does. Upgrades to [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`] only via
+/// a [`sextant_follower_re_anchor`] inclusion proof of the spending tx (never height).
+pub const SEXTANT_WATCH_REGION_HEADER_VOUCHED: u8 = 2;
+
+/// [`sextant_follower_rollback`] outcome: the target was still in the fact ring; the
+/// accepted run was truncated to end at it and `out_tip_height` carries the new tip. The
+/// follower stays live — re-append the target's successors.
+pub const SEXTANT_FOLLOWER_ROLLBACK_TRUNCATED: i32 = 1;
+/// [`sextant_follower_rollback`] outcome: the target was the follow base; the window is
+/// empty but the follower stays anchored (re-append from the first block).
+pub const SEXTANT_FOLLOWER_ROLLBACK_TO_BASE: i32 = 2;
+/// [`sextant_follower_rollback`] outcome: the target was deeper than the retained horizon;
+/// the follower is poisoned and its verdict is now
+/// [`SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW`]. Discard it and restart from a fresh anchor.
+pub const SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW: i32 = 3;
+
+/// [`sextant_follower_re_anchor`] outcome: the new anchor's block number is below the
+/// current anchor height; refused, so the certified region only ever grows. Untouched.
+pub const SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE: i32 = 1;
+/// [`sextant_follower_re_anchor`] outcome: the certified anchor advanced (or held) but the
+/// observed spend (if any) was not upgraded — no proof, or a proof that did not attest the
+/// observed spend against the new anchor's certified root.
+pub const SEXTANT_FOLLOWER_REANCHOR_ADVANCED: i32 = 2;
+/// [`sextant_follower_re_anchor`] outcome: the anchor advanced (or held) AND the supplied
+/// inclusion proof certified the observed spend — its region is now
+/// [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`].
+pub const SEXTANT_FOLLOWER_REANCHOR_ADVANCED_SPEND_CERTIFIED: i32 = 3;
 
 /// The verdict of a windowed watch check, projected into a caller-allocated fixed-width
 /// `#[repr(C)]` struct — no sizing protocol, no owned buffer crosses the boundary. The
@@ -767,8 +811,12 @@ pub struct SextantWatchVerdict {
     /// Why the window could not answer, when `kind == STALLED` (`SEXTANT_WATCH_STALL_*`).
     /// `0` otherwise.
     pub stall_reason: u8,
+    /// Which trust region a spend was observed in, when `kind == SPEND_OBSERVED`
+    /// (`SEXTANT_WATCH_REGION_*`). `0` (n/a) for the other kinds. Occupies a byte that was
+    /// reserved padding before ABI 4 — same layout, newly meaningful (hence the ABI bump).
+    pub spend_region: u8,
     /// Explicit alignment padding; zeroed on write so the struct is fully deterministic.
-    pub _reserved: [u8; 4],
+    pub _reserved: [u8; 3],
     /// The Mithril-certified anchor height the window rests on, when `kind == NO_SPEND_OBSERVED`.
     pub anchor_height: u64,
     /// The verified tip block number the verdict holds as of, when `kind == NO_SPEND_OBSERVED`.
@@ -806,6 +854,60 @@ fn stall_code(reason: StallReason) -> u8 {
     }
 }
 
+/// Map a [`SpendRegion`] to its stable C code. Exhaustive (no wildcard): the
+/// `#[non_exhaustive]` relaxation does not apply in-crate, so a new region fails to compile
+/// here until it is given a code — a tripwire, not a silent `0`.
+fn region_code(region: SpendRegion) -> u8 {
+    match region {
+        SpendRegion::MithrilCertified => SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED,
+        SpendRegion::HeaderVouched => SEXTANT_WATCH_REGION_HEADER_VOUCHED,
+    }
+}
+
+/// The C stall/refusal code an [`AppendRefusal`] surfaces at [`sextant_follower_append`].
+/// Reuses the batch-equivalence map [`AppendRefusal::as_stall_reason`] + [`stall_code`], so
+/// the boundary reports the SAME reason the batch would over the refused prefix; the
+/// follower-only [`AppendRefusal::EpochNonceUnavailable`] (which has no single-epoch batch
+/// counterpart, hence `None`) gets the follower code [`SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE`].
+fn refusal_code(refusal: AppendRefusal) -> u8 {
+    match refusal.as_stall_reason() {
+        Some(reason) => stall_code(reason),
+        None => SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE,
+    }
+}
+
+/// Map a [`Rollback`] to its `(return code, out_tip_height)`. Only `Truncated` carries a
+/// tip height; the others report `0`.
+fn rollback_outcome(r: Rollback) -> (i32, u64) {
+    match r {
+        Rollback::Truncated { tip_height } => (SEXTANT_FOLLOWER_ROLLBACK_TRUNCATED, tip_height),
+        Rollback::ToBase => (SEXTANT_FOLLOWER_ROLLBACK_TO_BASE, 0),
+        Rollback::BeyondWindow => (SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW, 0),
+    }
+}
+
+/// Map a [`ReAnchor`] to its stable C return code.
+fn reanchor_outcome(r: ReAnchor) -> i32 {
+    match r {
+        ReAnchor::NotMonotone => SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE,
+        ReAnchor::Advanced => SEXTANT_FOLLOWER_REANCHOR_ADVANCED,
+        ReAnchor::AdvancedSpendCertified => SEXTANT_FOLLOWER_REANCHOR_ADVANCED_SPEND_CERTIFIED,
+    }
+}
+
+/// Encode 32 raw bytes as a 64-char lowercase-hex string, so a caller's raw certified root
+/// (the `out_ct_root` of an anchored verify) populates the anchor whose `merkle_root`
+/// [`crate::window::certify_spend_region`] hex-decodes. Kept local so `src` needs no hex dep.
+fn hex_encode32(bytes: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(64);
+    for &b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
 /// Project a [`WatchVerdict`] into the fixed boundary struct, zeroing every field not
 /// carried by its kind. The `#[non_exhaustive]` `WatchBasis` matches exhaustively
 /// in-crate, so a future basis is a compile error here until it is banded.
@@ -815,7 +917,8 @@ fn project_watch_verdict(v: WatchVerdict) -> SextantWatchVerdict {
         basis: 0,
         assumptions: 0,
         stall_reason: 0,
-        _reserved: [0u8; 4],
+        spend_region: 0,
+        _reserved: [0u8; 3],
         anchor_height: 0,
         as_of_height: 0,
         as_of_slot: 0,
@@ -846,14 +949,13 @@ fn project_watch_verdict(v: WatchVerdict) -> SextantWatchVerdict {
             at_height,
             at_slot,
             spending_txid,
-            // The two-region distinction gets its own C-ABI field in a later slice; the
-            // ABI-3 struct does not yet carry it, so `region` is not projected here.
-            region: _,
+            region,
         } => {
             out.kind = SEXTANT_WATCH_SPEND_OBSERVED;
             out.spend_at_height = at_height;
             out.spend_at_slot = at_slot;
             out.spending_txid = spending_txid;
+            out.spend_region = region_code(region);
         }
         WatchVerdict::Stalled {
             verified_through,
@@ -959,6 +1061,280 @@ pub unsafe extern "C" fn sextant_verify_watched_window(
             freshness,
         );
         // SAFETY: `out` is non-null (checked); the whole struct is written once.
+        unsafe { *out = project_watch_verdict(verdict) };
+        SextantStatus::Ok as i32
+    })
+}
+
+// ---- The live window follower (F5) ----
+//
+// [`crate::follow::WindowFollower`] as an opaque C handle: create it, feed it one block
+// at a time (a chain-sync `RollForward`), roll it back (a `RollBackward`), advance its
+// certified anchor, and read the three-valued [`SextantWatchVerdict`] at any point. The
+// handle owns a heap [`WindowFollower`]; the caller MUST pair every
+// [`sextant_follower_new`] with exactly one [`sextant_follower_destroy`]. No lib-owned
+// buffer crosses back out (the verdict projects into a caller struct), so the
+// create/destroy pair is the only allocation the boundary owns — wasm-legal.
+//
+// Return convention (all mutation/read exports): a NEGATIVE `i32` is a boundary/caller
+// error ([`SextantStatus`], incl. `ErrPanic`); `>= 0` is the domain outcome for that call
+// (documented per export). `sextant_follower_new` returns the handle (or null on a null
+// txid); `sextant_follower_destroy` returns nothing.
+
+/// Opaque handle to a live [`WindowFollower`]. Its fields never cross the boundary
+/// (cbindgen emits it as an opaque forward declaration); a caller holds only the pointer.
+pub struct SextantFollower {
+    inner: WindowFollower,
+}
+
+/// Start following for a spend of the outpoint `(watched_txid, watched_index)`, answered
+/// as of a verified tip at or above `require_through`, inside the Mithril-certified region
+/// bounded by `anchor_height`, with epochs laid out by the `schedule_*` triple
+/// (`epoch`, its first slot, and the constant epoch length in slots). Stage each epoch's
+/// nonce with [`sextant_follower_supply_next_eta0`] before appending its blocks.
+///
+/// Returns the heap-allocated handle, or null if `watched_txid` is null. Pair with exactly
+/// one [`sextant_follower_destroy`].
+///
+/// # Safety
+/// `watched_txid` must be null or point to 32 readable bytes. The returned pointer is owned
+/// by the caller and valid until passed to [`sextant_follower_destroy`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_new(
+    watched_txid: *const u8,
+    watched_index: u16,
+    anchor_height: u64,
+    require_through: u64,
+    schedule_epoch: u64,
+    schedule_epoch_first_slot: u64,
+    schedule_epoch_length_slots: u64,
+) -> *mut SextantFollower {
+    if watched_txid.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: `watched_txid` is non-null and points to 32 readable bytes (caller contract).
+    let tx_id = *unsafe { &*(watched_txid as *const [u8; 32]) };
+    let watch = OutPoint {
+        tx_id,
+        index: watched_index,
+    };
+    // `new` reads only the anchor's block_number (a completeness bound); its root/epoch are
+    // not consumed here, so an empty root is honest — the certified root only matters at a
+    // re-anchor that certifies a spend (see [`sextant_follower_re_anchor`]).
+    let anchor = CertifiedTransactions {
+        merkle_root: String::new(),
+        epoch: 0,
+        block_number: anchor_height,
+    };
+    let schedule = SlotSchedule {
+        epoch: schedule_epoch,
+        epoch_first_slot: schedule_epoch_first_slot,
+        epoch_length_slots: schedule_epoch_length_slots,
+    };
+    let follower = WindowFollower::new(watch, &anchor, require_through, schedule);
+    Box::into_raw(Box::new(SextantFollower { inner: follower }))
+}
+
+/// Free a follower handle produced by [`sextant_follower_new`]. A null handle is a no-op.
+///
+/// # Safety
+/// `handle` must be null or a pointer returned by [`sextant_follower_new`] that has not
+/// already been destroyed. After this call the pointer is dangling and must not be reused.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_destroy(handle: *mut SextantFollower) {
+    if !handle.is_null() {
+        // SAFETY: `handle` came from `Box::into_raw` in `sextant_follower_new` and is not
+        // used after this call (caller contract); reclaim the box and drop it.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// Stage the epoch nonce η0 for `epoch`. The follower selects it for any appended block
+/// whose slot the schedule places in `epoch`. Overwritable: a mis-fetched nonce can be
+/// corrected before a block is accepted under it (a wrong nonce only makes a block fail to
+/// verify — liveness — never verify falsely).
+///
+/// Returns `0` on success, or [`SextantStatus::ErrNullPointer`] for a null handle/`eta0`.
+///
+/// # Safety
+/// `handle` must be a live follower handle; `eta0` must point to 32 readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_supply_next_eta0(
+    handle: *mut SextantFollower,
+    epoch: u64,
+    eta0: *const u8,
+) -> i32 {
+    guard(|| {
+        if handle.is_null() || eta0.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        // SAFETY: `handle` is live; `eta0` points to 32 readable bytes (caller contract).
+        let follower = unsafe { &mut (*handle).inner };
+        let eta0 = *unsafe { &*(eta0 as *const [u8; 32]) };
+        follower.supply_next_eta0(epoch, eta0);
+        SextantStatus::Ok as i32
+    })
+}
+
+/// Verify and fold one block (ledger `[era, block]` CBOR) into the follower. The block
+/// must decode, link to the verified tip by hash with block-number `tip + 1`, have its
+/// operational certificate / leader-VRF (against its epoch nonce) / KES verify, and have
+/// its bodies bind to its header commitment; only then is it accepted.
+///
+/// Returns `0` on acceptance (`*out_block_number` = the new verified tip height), a
+/// POSITIVE refusal code (`SEXTANT_WATCH_STALL_*`, incl.
+/// [`SEXTANT_WATCH_STALL_EPOCH_NONCE_UNAVAILABLE`]) if the block did not extend the tip —
+/// a refusal leaves the follower UNTOUCHED, so a later correct block still appends — or a
+/// negative [`SextantStatus`] for a boundary error. `out_block_number` is untouched on a
+/// non-zero return.
+///
+/// # Safety
+/// `handle` must be a live follower handle; `block` must point to `block_len` readable
+/// bytes; `out_block_number` must be null or point to a writable `u64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_append(
+    handle: *mut SextantFollower,
+    block: *const u8,
+    block_len: usize,
+    out_block_number: *mut u64,
+) -> i32 {
+    guard(|| {
+        if handle.is_null() || block.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        if block_len == 0 {
+            return SextantStatus::ErrEmptyInput as i32;
+        }
+        // SAFETY: `handle` is live; `block` points to `block_len` readable bytes.
+        let follower = unsafe { &mut (*handle).inner };
+        let bytes = unsafe { slice::from_raw_parts(block, block_len) };
+        match follower.append(bytes) {
+            Ok(appended) => {
+                if !out_block_number.is_null() {
+                    // SAFETY: non-null, writable `u64` (caller contract).
+                    unsafe { *out_block_number = appended.block_number };
+                }
+                SextantStatus::Ok as i32
+            }
+            Err(refusal) => refusal_code(refusal) as i32,
+        }
+    })
+}
+
+/// Roll the follower back to the point `(slot, hash)` — a chain-sync `RollBackward`. The
+/// 32-byte `hash` is the authoritative block identifier; `slot` accompanies it for `Point`
+/// fidelity.
+///
+/// Returns one of [`SEXTANT_FOLLOWER_ROLLBACK_TRUNCATED`] (in-ring; `*out_tip_height` = the
+/// new verified tip), [`SEXTANT_FOLLOWER_ROLLBACK_TO_BASE`] (rolled back to the follow base;
+/// `*out_tip_height` = 0), or [`SEXTANT_FOLLOWER_ROLLBACK_BEYOND_WINDOW`] (deeper than the
+/// retained horizon — the follower is poisoned, discard it); or a negative [`SextantStatus`]
+/// for a boundary error. `out_tip_height` is written on any non-negative return.
+///
+/// # Safety
+/// `handle` must be a live follower handle; `hash` must point to 32 readable bytes;
+/// `out_tip_height` must be null or point to a writable `u64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_rollback(
+    handle: *mut SextantFollower,
+    slot: u64,
+    hash: *const u8,
+    out_tip_height: *mut u64,
+) -> i32 {
+    guard(|| {
+        if handle.is_null() || hash.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        // SAFETY: `handle` is live; `hash` points to 32 readable bytes (caller contract).
+        let follower = unsafe { &mut (*handle).inner };
+        let hash = unsafe { &*(hash as *const [u8; 32]) };
+        let (code, tip_height) = rollback_outcome(follower.rollback(slot, hash));
+        if !out_tip_height.is_null() {
+            // SAFETY: non-null, writable `u64` (caller contract).
+            unsafe { *out_tip_height = tip_height };
+        }
+        code
+    })
+}
+
+/// Advance the certified anchor to `(anchor_height, anchor_root)` — monotone in block
+/// number, so a lower anchor is [`SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE`] and the certified
+/// region only grows. If `proof` is non-null AND the follower has observed a spend, the
+/// spend's inclusion in the new anchor's certified transaction set is verified against
+/// `anchor_root`; on success the spend's region upgrades to
+/// [`SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED`]. Height NEVER upgrades a spend — only a proof
+/// that recomputes to the certified root does.
+///
+/// `anchor_root` MUST be the `out_ct_root` of a prior
+/// [`sextant_mithril_verify_chain_anchored`]: the boundary cannot verify a caller-fabricated
+/// root's provenance, so — exactly as the batch window verify does with `anchor_height` — it
+/// surfaces the `mithril_quorum` assumption rather than checking it.
+///
+/// Returns one of [`SEXTANT_FOLLOWER_REANCHOR_NOT_MONOTONE`] /
+/// [`SEXTANT_FOLLOWER_REANCHOR_ADVANCED`] / [`SEXTANT_FOLLOWER_REANCHOR_ADVANCED_SPEND_CERTIFIED`],
+/// or a negative [`SextantStatus`] for a boundary error.
+///
+/// # Safety
+/// `handle` must be a live follower handle; `anchor_root` must point to 32 readable bytes;
+/// `proof` must be null (iff `proof_len` is 0) or point to `proof_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_re_anchor(
+    handle: *mut SextantFollower,
+    anchor_height: u64,
+    anchor_root: *const u8,
+    proof: *const u8,
+    proof_len: usize,
+) -> i32 {
+    guard(|| {
+        if handle.is_null() || anchor_root.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        // SAFETY: `handle` is live; `anchor_root` points to 32 readable bytes.
+        let follower = unsafe { &mut (*handle).inner };
+        let root = unsafe { &*(anchor_root as *const [u8; 32]) };
+        let anchor = CertifiedTransactions {
+            merkle_root: hex_encode32(root),
+            epoch: 0,
+            block_number: anchor_height,
+        };
+        // A null (or empty) proof advances the anchor only; a non-null proof is the
+        // spending-tx inclusion proof that can upgrade the observed spend.
+        let spend_proof = if proof.is_null() || proof_len == 0 {
+            None
+        } else {
+            // SAFETY: non-null, points to `proof_len` readable bytes (caller contract).
+            Some(unsafe { slice::from_raw_parts(proof, proof_len) })
+        };
+        reanchor_outcome(follower.re_anchor(&anchor, spend_proof))
+    })
+}
+
+/// Read the follower's current three-valued windowed verdict, answered as of the verified
+/// tip under the caller's freshness bound (`freshness_slot_now` / `freshness_max_lag`), and
+/// marshal it into `*out`. Branch on `out.kind` — a spend or a stall is STILL a `0` return
+/// (the verdict is in the struct); only a null pointer is a negative [`SextantStatus`].
+///
+/// # Safety
+/// `handle` must be a live follower handle; `out` must point to a writable
+/// [`SextantWatchVerdict`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sextant_follower_verdict(
+    handle: *mut SextantFollower,
+    freshness_slot_now: u64,
+    freshness_max_lag: u64,
+    out: *mut SextantWatchVerdict,
+) -> i32 {
+    guard(|| {
+        if handle.is_null() || out.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        // SAFETY: `handle` is live; `out` is writable (caller contract).
+        let follower = unsafe { &(*handle).inner };
+        let freshness = Freshness {
+            slot_now: freshness_slot_now,
+            max_lag: freshness_max_lag,
+        };
+        let verdict = follower.verdict(freshness);
         unsafe { *out = project_watch_verdict(verdict) };
         SextantStatus::Ok as i32
     })
@@ -1193,6 +1569,34 @@ mod tests {
         assert_eq!(p.block_number, 1);
         assert_eq!(p.opcert_hot_vkey, [8u8; 32]);
         assert_eq!(p._reserved, [0u8; 6]);
+    }
+
+    /// The two spend regions project to their distinct ABI-4 codes (the `HeaderVouched`
+    /// case is also covered end-to-end at the C boundary; `MithrilCertified` cannot be
+    /// reached through the committed fixtures' window spend, so it is pinned here).
+    #[test]
+    fn project_watch_verdict_maps_the_spend_region() {
+        let base = WatchVerdict::SpentObserved {
+            at_height: 42,
+            at_slot: 7,
+            spending_txid: [9u8; 32],
+            region: SpendRegion::MithrilCertified,
+        };
+        let certified = project_watch_verdict(base);
+        assert_eq!(certified.kind, SEXTANT_WATCH_SPEND_OBSERVED);
+        assert_eq!(
+            certified.spend_region,
+            SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED
+        );
+        assert_eq!(certified._reserved, [0u8; 3]);
+
+        let vouched = project_watch_verdict(WatchVerdict::SpentObserved {
+            at_height: 42,
+            at_slot: 7,
+            spending_txid: [9u8; 32],
+            region: SpendRegion::HeaderVouched,
+        });
+        assert_eq!(vouched.spend_region, SEXTANT_WATCH_REGION_HEADER_VOUCHED);
     }
 
     #[test]

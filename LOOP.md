@@ -859,7 +859,7 @@ needs a row in Evidence.
         proved the mechanism with the one proof it holds, `242f2037…`). Gating tests: an in-region block
         with slot > anchor_slot → a named stall/refusal; the real-window spend + its harvested proof →
         `re_anchor(..., Some(proof))` → AdvancedSpendCertified → SpentObserved{MithrilCertified}.
-  - [ ] F5 — follower C-ABI, ABI v4 (ffi). SextantWatchVerdict._reserved[4] → spend_region:u8 +
+  - [x] F5 — follower C-ABI, ABI v4 (ffi). SextantWatchVerdict._reserved[4] → spend_region:u8 +
         _reserved[3]; consts SEXTANT_WATCH_REGION_MITHRIL_CERTIFIED=1/_HEADER_VOUCHED=2 (0=n/a);
         SEXTANT_WATCH_STALL_ROLLBACK_BEYOND_WINDOW=10/_EPOCH_NONCE_UNAVAILABLE=11. Opaque-handle
         exports sextant_follower_{new,append,supply_next_eta0,rollback,re_anchor,verdict,destroy}
@@ -867,6 +867,31 @@ needs a row in Evidence.
         buffers, none cross here). SEXTANT_ABI_VERSION 3→4 + header regen; grep stays clean (all
         naming operational: spend/region/no-spend — never the banned substrings). Gating: FFI
         replay+rollback test vs the Rust verdicts + harness --full.
+        SHIPPED (branch f5-follower-c-abi). `src/ffi.rs`: opaque `SextantFollower{inner: WindowFollower}`
+        (cbindgen emits `typedef struct SextantFollower SextantFollower;` — no BTreeMap/VecDeque leak) +
+        the 7 exports, all CORE (default+wasm, 0 blst; follow/window/utxo are the wasm-safe graph). The
+        `SextantWatchVerdict` reserved byte became `spend_region` (byte-identical layout — the ABI bump
+        signals the reinterpretation), projected in `project_watch_verdict` via a new exhaustive
+        `region_code` tripwire; `sextant_verify_watched_window` now surfaces it too (batch → HeaderVouched).
+        AS-BUILT (loop honesty): (i) RETURN CONVENTION — every mutation/read export returns i32 where
+        NEGATIVE is a boundary error (SextantStatus, incl. ErrPanic via `guard`) and >=0 is the domain
+        outcome; `append` = 0 accepted (out_block_number) / positive refusal code (`refusal_code` reuses
+        the batch-equivalence map `AppendRefusal::as_stall_reason`+`stall_code`, None→`_EPOCH_NONCE_
+        UNAVAILABLE`=11), `rollback`/`re_anchor` return their own outcome-const families
+        (`SEXTANT_FOLLOWER_ROLLBACK_{TRUNCATED=1,TO_BASE=2,BEYOND_WINDOW=3}`,
+        `SEXTANT_FOLLOWER_REANCHOR_{NOT_MONOTONE=1,ADVANCED=2,ADVANCED_SPEND_CERTIFIED=3}`), `verdict`/
+        `new` per the brief. (ii) `re_anchor` takes the 32-byte `anchor_root` (the `out_ct_root` of an
+        anchored verify) alongside `anchor_height` — needed because `certify_spend_region` hashes the
+        proof against that root; a local `hex_encode32` builds the `CertifiedTransactions.merkle_root`
+        so `src` keeps no hex dep. (iii) `new` is the one non-`guard` export (returns the handle or null
+        on a null txid; construction cannot panic). GATE: `tests/follower_ffi.rs` (9) replays the real
+        22-block preprod window through the C follower and asserts the verdict equals the in-process
+        Rust `WindowFollower` (SPEND_OBSERVED + HeaderVouched region), plus rollback-truncate→WINDOW_TOO_
+        SHORT, rollback-beyond→ROLLBACK_BEYOND_WINDOW, unstaged-nonce→EPOCH_NONCE_UNAVAILABLE, out-of-
+        order→BROKEN_SEGMENT, re_anchor monotone + wrong-tx-proof-no-certify, null guards; a
+        `project_watch_verdict` unit test pins the MithrilCertified region code (unreachable via the
+        committed window's spend). smoke.c link-references all 7 exports (symbol-retention on the Linux
+        artifact). `scripts/harness.sh --full` exit 0 (header drift/leak/honest-scope gates green).
   - [ ] F6 — tools/sentry transport + live preprod evidence (member). GREENFIELD chain-sync loop
         (find_intersect, RollForward/RollBackward, agency/idle) — budget it as new code. BOOTSTRAP
         (critique fix — find_intersect serves only SUCCESSORS, and Koios tx_info yields the creating
@@ -980,6 +1005,7 @@ needs a row in Evidence.
 ## Evidence
 | When (UTC) | Claim | Proof |
 |---|---|---|
+| 2026-07-13 13:20 UTC | Epic F slice F5 BUILT (branch `f5-follower-c-abi`): the live `WindowFollower` is now a CORE C-ABI (default+wasm, 0 blst) opaque-handle surface, and the ABI-4 `SextantWatchVerdict` carries the two-region `spend_region`. Replaying the real 22-block preprod window through the C follower yields the SAME verdict as the in-process Rust follower | `scripts/harness.sh --full` exit 0 — fmt, `clippy --all-targets --all-features -D warnings`, release build, `cargo test --all-features` (incl. `tests/follower_ffi.rs`=9, `tests/ffi.rs`=16, `tests/window.rs`=20), wasm32 build, header drift-gate + blst/mithril_stm leak-grep + `(un)?spent` honest-scope grep. `SEXTANT_ABI_VERSION` 3→4; `include/sextant.h` regenerated (cbindgen 0.28) with `typedef struct SextantFollower SextantFollower;` (opaque — no BTreeMap/VecDeque leak) + 7 `sextant_follower_*` exports + `spend_region` + the region/rollback/reanchor const families. `tests/follower_ffi.rs`: `replaying_the_window_yields_spend_observed_header_vouched` (C verdict == Rust `WindowFollower` verdict: SPEND_OBSERVED at 4921917, txid `760076f2…`, region HeaderVouched), `never_spent_outpoint_yields_no_spend_observed`, `rollback_before_the_spend_truncates_to_window_too_short` (TRUNCATED→tip 4921916→WINDOW_TOO_SHORT), `rollback_beyond_window_poisons_the_follower` (BEYOND_WINDOW→ROLLBACK_BEYOND_WINDOW), `append_without_a_staged_nonce_refuses_epoch_nonce_unavailable` (code 11), `appending_out_of_order_refuses_broken_segment`, `re_anchor_is_monotone_and_a_wrong_tx_proof_does_not_certify` (NOT_MONOTONE + ADVANCED, region stays HeaderVouched), `null_guards`; `src/ffi.rs::project_watch_verdict_maps_the_spend_region` pins the MithrilCertified code. `tests/smoke/smoke.c` link-references all 7 exports. Default `cargo build --release` (no mithril) includes the exports. Independent red-team is the merge gate (parked per policy) |
 | 2026-07-13 09:10 UTC | F4 MERGED (`e95ca2c`, PR #32) under the NEW parked-PR policy — operator's INDEPENDENT red-team SHIP (1 LOW closed in-branch), all four Woodpecker contexts green | First slice gated by the operator's independent red-team instead of auto-merge (the F3 auto-merge prompted the policy change). Independent `fluxpoint-loop:red-team-reviewer` CONSTRUCTED same-crate probes for every feared mode: (1) FALSE MithrilCertified — cannot construct: `certify_spend_region` has NO height input, certifies the exact `blake2b256(spending-tx-body)` observed spending the outpoint, reorg to a different tx never inherits certification (txid equality, probe-confirmed), malformed/wrong-tx/wrong-root/None-root all fail closed to HeaderVouched → the design-CRITICAL (height-only upgrade) genuinely closed IN THE TYPE; (2) false no-spend closed (finalized spend never cleared, SpentObserved before Unspent, above-anchor gated by create_seen/require_through/freshness — removed TipAboveAnchor can't mask WindowTooShort); (3) unbacked mithril_quorum:true only via the LOW. LOW (informational, closed): `re_anchor` advances `anchor_height` from a caller-supplied `CertifiedTransactions.block_number` unverified → an inflated anchor could lift mithril_quorum false→true — the SAME surfaced assumption as `new()` (anchor MUST come from `verify_chain_anchored`, block_number signed); the reviewer's type-fix (VerifiedChain-anchor) would pull the follower into the mithril feature and BREAK the wasm-safe default graph, so a sans-io follower surfaces it — `re_anchor`'s height boundary now explicit in its doc. FFI region-drop safe (no follower FFI export; both regions → SPEND_OBSERVED refuse; ABI stays 3; header 100% comment-only). `scripts/harness.sh --full` exit 0 on merged main (17 follow + 20 window + all suites). Next: F4b (F2-HIGH closure via `certified_slot` threading + true-window-spend end-to-end, needs a harvest). |
 | 2026-07-10 20:17 UTC | Repo onboarded onto fluxpoint-loop; harness gates the DoD | `scripts/harness.sh --full` exits 0 — `cargo fmt --check`, `clippy -D warnings`, release build (lib+cdylib+staticlib), `cargo test` (1 passed), `wasm32-unknown-unknown` release build |
 | 2026-07-10 20:20 UTC | Woodpecker CI runs the harness on push | `ci/woodpecker/push/harness` success on `main` — https://ci.fluxpointstudios.com/repos/15/pipeline/1/1 |
@@ -1066,7 +1092,45 @@ needs a row in Evidence.
 | 2026-07-13 00:20 UTC | Tier1 slice 4+5 (FINAL — C-ABI windowed watch verdict + ladder reconciliation) — CLOSES Tier-1; independent red-team SHIP, all four Woodpecker contexts green | PR #28 (`42d3caf`), branch `tier1-slice5-cabi-windowed`; `ci/woodpecker/{pr,push}/{harness,artifacts}` all pass (the `artifacts` job COMPILED + RAN the new `smoke.c` window leg on Linux — external C linkage of `sextant_verify_watched_window` + the struct crossing the boundary + garbage→STALLED, the leg unbuildable locally on Windows-MSVC). Export `sextant_verify_watched_window` (CORE, default+wasm32, 0 blst) surfaces the 3-valued verdict as fixed-width `#[repr(C)] SextantWatchVerdict{kind,basis,assumptions,stall_reason,_reserved[4],anchor_height,as_of_height,as_of_slot,verified_through,spend_at_height,spend_at_slot,spending_txid[32]}` (88B, no implicit padding, no `-3` sizing); CARRIES `require_through` (truncation defense holds at the C ABI). ABI 2→3. Slice 4: reserved `CertifiedUnspent`/`Attested` tiers de-duplicated onto `SpendStatus` (one home); `WatchBasis` docs only `WatchedWindow`. Independent `fluxpoint-loop:red-team-reviewer` (3rd of the project, hunting the false-accept that bit slices UTxO-pt2 + Tier1-3) VERDICT SHIP — NO false-accept/UB: (1) `project_watch_verdict` disjoint arms, `kind` set explicitly per variant, no path maps Stalled/SpentObserved→`NO_SPEND_OBSERVED`; (2) `require_through` passed through, `<` boundary correct, C-ABI regression proven on real data; (3) EXHAUSTIVELY grepped `src/` to confirm `merkle_root`/`epoch` are read ONLY in mithril.rs + the anchored-verify (never on the window path) — the empty anchor root is genuinely inert, honest-by-construction; (4) honest-scope grep survives because `NO_SPEND` is `s-p-e-n-d` not `spent` (the rename off the brief's `_UNSPENT` is load-bearing); (5) wasm pass-through guard + native `catch_unwind` + the harness's reject-`panic=abort` gate together close the unwind hole; (6) struct written once, `_reserved` explicit, header cbindgen-diff clean. `scripts/harness.sh --full` exit 0 (19 window incl. 5 ffi_boundary + 5 windowed_consumer + all others). Tier-1 windowed-unspent COMPLETE end-to-end (Rust core + C-ABI/WASM + consumer example). |
 
 ## Notes for the next iteration
-State (2026-07-13, latest — **OPERATOR-DIRECTED PAUSE at the Epic F core milestone**): **STATUS: DONE holds; Epic F core F1✅ F2✅ F3✅ F4✅ all MERGED to main + each independently red-team-verified; F4b/F5/F6 PINNED, not started.**
+State (2026-07-13, latest — **Epic F slice F5 BUILT + PARKED for operator red-team**): **STATUS: DONE holds; Epic F is F1✅ F2✅ F3✅ F4✅ (merged) + F5 built (branch `f5-follower-c-abi`, parked PR); F4b/F6 remain, both harvest-blocked.**
+This iteration shipped F5: the live `WindowFollower` is now a CORE C-ABI opaque-handle surface (default+wasm,
+0 blst — `follow`/`window`/`utxo` are the wasm-safe graph). `src/ffi.rs` gains `pub struct SextantFollower{
+inner: WindowFollower}` (cbindgen emits it opaque — no BTreeMap/VecDeque leak) and the 7 exports
+`sextant_follower_{new,append,supply_next_eta0,rollback,re_anchor,verdict,destroy}` (Box::into_raw / from_raw;
+the create/destroy pair is the only allocation the boundary owns, wasm-legal). The `SextantWatchVerdict`
+reserved byte became `spend_region` (byte-identical layout; `SEXTANT_ABI_VERSION` 3→4 signals the
+reinterpretation), projected via a new exhaustive `region_code` tripwire; `sextant_verify_watched_window`
+now surfaces it too (batch → HeaderVouched). RETURN CONVENTION (documented per export): negative i32 = a
+boundary error (`SextantStatus`, incl. `ErrPanic` via `guard`); >=0 = the domain outcome — `append` 0=accepted
+(out_block_number) / positive refusal (`refusal_code` reuses `AppendRefusal::as_stall_reason`+`stall_code`,
+None→`_EPOCH_NONCE_UNAVAILABLE`=11), `rollback`/`re_anchor` return their own outcome-const families,
+`verdict` 0 with the struct. `re_anchor` also takes the 32-byte `anchor_root` (a local `hex_encode32` builds
+the `merkle_root` so `src` needs no hex dep). GATE: `tests/follower_ffi.rs` (9) replays the real 22-block
+preprod window through the C follower and asserts the verdict EQUALS the in-process Rust `WindowFollower`, plus
+rollback/re_anchor/refusal/null paths; smoke.c link-references all 7 exports. `scripts/harness.sh --full`
+exit 0. NO src lib logic change (composes the F1–F4 follower verbatim); no mithril-graph change.
+**Next slice — DECISION POINT for the operator (two buildable-now paths + one harvest-gated batch):**
+ * **PATH A (harvest-gated, Epic F completion): F4b + F6.** Both need an operator-run aggregator/N2N harvest
+   the non-interactive loop cannot fetch, so they are BLOCKED here. F4b = the F2-red-team `mithril_quorum`
+   HIGH closure (thread `certified_slot` into `CertifiedTransactions`, reject in-region blocks with slot >
+   anchor_slot) + the true-window-spend `760076f2…` MithrilCertified end-to-end (harvest its inclusion proof).
+   F6 = `tools/sentry` GREENFIELD N2N chain-sync consumer + live preprod transcript. Run these once the
+   operator arms the harvest.
+ * **PATH B (buildable now, zero network, zero new deps — Epic A Tier-3 Attested): A1 then A2.** A0 is an
+   operator/Materios sync; if it cannot happen, A1 ships under domain tag `sextant/attest/v1-draft` (rename at
+   freeze). A1 = the domain-tagged canonical-CBOR wire format + codec + committee identity in `src/attest.rs`
+   (default graph, strict Ed25519 M-of-N, NEVER BLS) with PIN-VALIDATION-FIRST (threshold=0 / empty roster /
+   threshold>N / dup vkey → hard `InvalidPin` before any check — the critique-CRITICAL) and per-field width
+   bounds. A2 = `verify_attestation` fail-closed with the consumer's `require_observed_through` floor (the
+   pre-spend-replay CRITICAL). This turns the read path into a third trust tier and needs no harvest.
+ * RECOMMENDATION: the operator red-teams + merges F5 first (the parked PR), then either arms the F4b/F6
+   harvest (Path A) OR the loop attacks A1 next (Path B). A1 is the only DoD-adjacent slice fully buildable in
+   the non-interactive loop, so absent an operator harvest, A1 is the default next iteration.
+Merge policy unchanged: PARK-for-operator-red-team (no auto-merge for Epic F/N/A). This iteration opened the
+PR, self-red-teamed the diff, and parked it with a handoff comment — the operator's independent
+`fluxpoint-loop:red-team-reviewer` SHIP is the merge gate.
+
+State (2026-07-13, prior — **OPERATOR-DIRECTED PAUSE at the Epic F core milestone**): **STATUS: DONE holds; Epic F core F1✅ F2✅ F3✅ F4✅ all MERGED to main + each independently red-team-verified; F4b/F5/F6 PINNED, not started.**
 The operator paused here (F1-F4 is the milestone). The lib-level `WindowFollower` is functionally complete
 and sound: incremental append (O(block-bytes), differential-parity with the frozen batch oracle),
 epoch-boundary crossing (slot→epoch nonce map), rollback + eviction-as-finalization (a k-deep spend is

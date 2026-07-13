@@ -594,9 +594,9 @@ mod ffi_boundary {
     use sextant::ffi::{
         SEXTANT_WATCH_ASSUMPTION_DATA_COMPLETE, SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM,
         SEXTANT_WATCH_BASIS_WATCHED_WINDOW, SEXTANT_WATCH_NO_SPEND_OBSERVED,
-        SEXTANT_WATCH_SPEND_OBSERVED, SEXTANT_WATCH_STALL_BROKEN_SEGMENT,
-        SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT, SEXTANT_WATCH_STALLED, SextantStatus,
-        SextantWatchVerdict, sextant_verify_watched_window,
+        SEXTANT_WATCH_REGION_HEADER_VOUCHED, SEXTANT_WATCH_SPEND_OBSERVED,
+        SEXTANT_WATCH_STALL_BROKEN_SEGMENT, SEXTANT_WATCH_STALL_WINDOW_TOO_SHORT,
+        SEXTANT_WATCH_STALLED, SextantStatus, SextantWatchVerdict, sextant_verify_watched_window,
     };
     use sextant::utxo::OutPoint;
     use std::ptr;
@@ -656,11 +656,12 @@ mod ffi_boundary {
         assert_eq!(v.as_of_slot, 128_046_016);
         // Fields belonging to the other kinds are zeroed.
         assert_eq!(v.stall_reason, 0);
+        assert_eq!(v.spend_region, 0, "no-spend carries no region");
         assert_eq!(v.verified_through, 0);
         assert_eq!(v.spend_at_height, 0);
         assert_eq!(v.spend_at_slot, 0);
         assert_eq!(v.spending_txid, [0u8; 32]);
-        assert_eq!(v._reserved, [0u8; 4]);
+        assert_eq!(v._reserved, [0u8; 3]);
     }
 
     /// NEGATIVE (definite refuse): the spent outpoint marshals to `SPEND_OBSERVED` naming
@@ -673,6 +674,9 @@ mod ffi_boundary {
         assert_eq!(v.kind, SEXTANT_WATCH_SPEND_OBSERVED);
         assert_eq!(v.spend_at_height, 4_921_917);
         assert_eq!(v.spending_txid, hash32(SPENDING_TX));
+        // The batch binds no block to the certified set, so a spend it observes is
+        // HeaderVouched — the region byte the ABI-4 struct now carries.
+        assert_eq!(v.spend_region, SEXTANT_WATCH_REGION_HEADER_VOUCHED);
         // The no-spend fields carry nothing.
         assert_eq!(v.basis, 0);
         assert_eq!(v.assumptions, 0);
