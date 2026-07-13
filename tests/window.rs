@@ -154,7 +154,10 @@ fn malformed_block_fails_closed_to_decode() {
 // before the spend is caught by the caller's require_through floor (→ WindowTooShort).
 
 use sextant::utxo::{CertifiedTransactions, OutPoint};
-use sextant::window::{Freshness, StallReason, WatchBasis, WatchVerdict, verify_watched_window};
+use sextant::window::{
+    Freshness, SpendRegion, StallReason, WatchBasis, WatchVerdict, certify_spend_region,
+    verify_watched_window,
+};
 
 /// Epoch-300 active nonce (Koios); the preprod window's shared epoch nonce.
 const EPOCH_300_ETA0: &str = "aa845533c5f8631a864010ae89c23ee1cee0ed7717e4ac00a25ad50f4eeb6c30";
@@ -162,6 +165,11 @@ const EPOCH_300_ETA0: &str = "aa845533c5f8631a864010ae89c23ee1cee0ed7717e4ac00a2
 const WATCHED_TX: &str = "beaa9166c061e56457b5d84de4b3d15c9386b202d2585ff247f47af0dcd32a5e";
 /// The transaction that spends beaa9166…#1 in block[1] (4921917).
 const SPENDING_TX: &str = "760076f24ea0a151d28a32fb627a17122c92cb7bfb02041995bc98a421687844";
+/// The one certified transaction Sextant holds a real committed Mithril inclusion
+/// proof for (`mithril-txproof.json`), attested against the anchor's Merkle root
+/// (`83c012fd…`). It is NOT the window's spend — it is the tx whose proof pins the
+/// certified-region classifier to real crypto.
+const CERTIFIED_TX: &str = "242f2037b427ff20ef97a076a7d845c74530be4e5a97b59bb18a519fcfa7a636";
 /// The caller's required coverage floor: the window's own tip height (4921937). A
 /// full window reaches it; a truncated one (ending early) does not.
 const REQUIRE_THROUGH: u64 = 4_921_937;
@@ -273,13 +281,72 @@ fn spending_block_in_window_yields_spent_observed_at_block() {
             at_height,
             at_slot,
             spending_txid,
+            region,
         } => {
             assert_eq!(at_height, 4_921_917, "spent in block[1]");
             assert_eq!(at_slot, 128_045_548);
             assert_eq!(spending_txid, hash32(SPENDING_TX));
+            // The batch binds no block to the certified set, so it never certifies a
+            // spend region: a spend it observes is HeaderVouched, not MithrilCertified.
+            assert_eq!(
+                region,
+                SpendRegion::HeaderVouched,
+                "the batch never upgrades a spend region (no inclusion proof)",
+            );
         }
         other => panic!("expected SpentObserved, got {other:?}"),
     }
+}
+
+/// The aggregator `proof` field (HEX of the JSON `MKMapProof`) for the one certified
+/// transaction Sextant holds a committed proof for.
+fn txproof_hex() -> Vec<u8> {
+    let bytes = fs::read(vectors_dir().join("mithril-txproof.json")).expect("read txproof");
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("parse txproof");
+    v["certified_transactions"][0]["proof"]
+        .as_str()
+        .expect("proof field")
+        .as_bytes()
+        .to_vec()
+}
+
+/// The region of an observed spend is `HeaderVouched` by default and upgrades to
+/// `MithrilCertified` ONLY when the spending transaction is proven a member of the
+/// genesis-anchored certified set — a real inclusion proof recomputing to the anchor's
+/// Merkle root. The critique-CRITICAL: height NEVER upgrades a spend (a valid orphaned
+/// sibling below the anchor height is not the certified chain), so the classifier takes
+/// no height at all — only the proof. Proven with the one real committed proof (tx
+/// `242f2037…`, root `83c012fd…`); the window's own spend `760076f2…` has no committed
+/// proof under this root, so it correctly stays `HeaderVouched`.
+#[test]
+fn certify_spend_region_upgrades_only_on_a_matching_inclusion_proof() {
+    let proof = txproof_hex();
+    // The certified tx the committed proof attests, against the real anchor root → upgrade.
+    assert_eq!(
+        certify_spend_region(&hash32(CERTIFIED_TX), &anchor(), &proof),
+        SpendRegion::MithrilCertified,
+        "a real inclusion proof of the spend against the certified root upgrades it",
+    );
+    // The window's real spend is not a leaf of this proof → no upgrade (NotIncluded).
+    assert_eq!(
+        certify_spend_region(&hash32(SPENDING_TX), &anchor(), &proof),
+        SpendRegion::HeaderVouched,
+        "a proof that does not attest the spend never upgrades it",
+    );
+    // A malformed proof never upgrades.
+    assert_eq!(
+        certify_spend_region(&hash32(CERTIFIED_TX), &anchor(), b"not a proof"),
+        SpendRegion::HeaderVouched,
+    );
+    // A wrong certified root never upgrades (real tx, real proof, tampered root): the
+    // proof recomputes to 83c012fd…, not the zeroed root, so the bind fails.
+    let mut bad_root = anchor();
+    bad_root.merkle_root = "00".repeat(32);
+    assert_eq!(
+        certify_spend_region(&hash32(CERTIFIED_TX), &bad_root, &proof),
+        SpendRegion::HeaderVouched,
+        "a proof that does not recompute to THIS anchor's root never upgrades",
+    );
 }
 
 /// THE CARDINAL EVASION: withholding the spending block cannot advance the verified

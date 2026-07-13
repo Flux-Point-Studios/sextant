@@ -196,9 +196,10 @@ pub fn evaluate(req: &Request) -> Outcome {
             at_height,
             at_slot,
             spending_txid,
+            region,
         } => {
             log.push(format!(
-                "WARN watch.scan {reff} spend observed at block={at_height} slot={at_slot} by tx={}",
+                "WARN watch.scan {reff} spend observed at block={at_height} slot={at_slot} by tx={} region={region:?}",
                 hex::encode(spending_txid),
             ));
             log.push(format!(

@@ -66,6 +66,20 @@
 //! the follower cannot reconstruct that history, so it is poisoned until the caller
 //! discards it and restarts. The nonce map is untouched by rollback (F2), so crossing an
 //! epoch boundary and rolling back below it needs no re-staging.
+//!
+//! ## Two regions + re-anchor (F4)
+//! An observed spend is not uniformly "authoritative regardless of freshness". A spend
+//! seen in a header-verified, body-committed block is [`crate::window::SpendRegion::HeaderVouched`]:
+//! authoritative against the verified window, but resting on the same `mithril_quorum`
+//! assumption a no-spend verdict does (the block is not bound to the certified set). It
+//! becomes [`crate::window::SpendRegion::MithrilCertified`] only when
+//! [`WindowFollower::re_anchor`] is handed an inclusion proof that attests THAT spending
+//! transaction against the (re-)anchor's certified root — height NEVER upgrades a spend
+//! (a valid orphaned sibling below the anchor height is not the certified chain).
+//! `re_anchor` is monotone in block number, so the certified region only grows; and a
+//! verified tip ABOVE the anchor answers [`WatchVerdict::Unspent`] with
+//! `mithril_quorum:false` (the batch stalls there) — the region is answerable but not
+//! quorum-backed, surfaced honestly, never faked.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -73,8 +87,8 @@ use crate::chain;
 use crate::header::HeaderView;
 use crate::utxo::{CertifiedTransactions, OutPoint};
 use crate::window::{
-    Freshness, ScanFailure, StallReason, WatchBasis, WatchVerdict, WatchedTip, WindowAssumptions,
-    scan_block_facts,
+    Freshness, ScanFailure, SpendRegion, StallReason, WatchBasis, WatchVerdict, WatchedTip,
+    WindowAssumptions, certify_spend_region, scan_block_facts,
 };
 
 /// A Shelley-era slot→epoch schedule. Epochs are fixed-length, so one known
@@ -168,6 +182,21 @@ pub enum Rollback {
     /// [`crate::window::StallReason::RollbackBeyondWindow`] and the caller must discard it
     /// and restart from a fresh anchor.
     BeyondWindow,
+}
+
+/// The outcome of a [`WindowFollower::re_anchor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReAnchor {
+    /// The new anchor's block number is below the current anchor height: refused, so the
+    /// certified region can only grow. The follower is untouched.
+    NotMonotone,
+    /// The certified anchor advanced (or held), but the observed spend (if any) was not
+    /// upgraded — no proof was supplied, or the proof did not attest the observed spend
+    /// against the new anchor's certified root.
+    Advanced,
+    /// The certified anchor advanced (or held) AND the supplied inclusion proof certified
+    /// the observed spend: its region is now [`SpendRegion::MithrilCertified`].
+    AdvancedSpendCertified,
 }
 
 /// The outcome of a successful [`WindowFollower::append`]: the block was verified and
@@ -295,6 +324,13 @@ pub struct WindowFollower {
     creation_final: Option<u64>,
     /// A spend finalized on eviction, retained forever (see `creation_final`).
     spend_final: Option<ObservedSpend>,
+    /// The transaction id of the observed spend whose Mithril-certified inclusion has
+    /// been proven ([`WindowFollower::re_anchor`] with a matching proof). The verdict
+    /// reports [`SpendRegion::MithrilCertified`] only when the current effective spend is
+    /// this exact transaction — bound to the txid so a rollback+reorg to a DIFFERENT
+    /// spending transaction can never inherit an earlier tx's certification. `None` until
+    /// a spend is certified, which requires a real inclusion proof (never height alone).
+    certified_spend: Option<[u8; 32]>,
     /// The verified tip: the linkage parent for the next append and the point the verdict
     /// is answered as of. `None` before the first accepted block and after a rollback to
     /// the follow base.
@@ -329,6 +365,7 @@ impl WindowFollower {
             has_evicted: false,
             creation_final: None,
             spend_final: None,
+            certified_spend: None,
             tip: None,
             beyond_window: false,
         }
@@ -496,6 +533,40 @@ impl WindowFollower {
         Rollback::BeyondWindow
     }
 
+    /// Advance the certified anchor to `anchor` (monotone in block number — a lower
+    /// anchor is refused, so the certified region only grows). If `spend_proof` is
+    /// supplied AND the follower has observed a spend, the spend's inclusion in `anchor`'s
+    /// certified transaction set is verified; on success the spend's region upgrades to
+    /// [`SpendRegion::MithrilCertified`]. Height NEVER upgrades a spend (the
+    /// critique-CRITICAL): only a proof that recomputes to the certified root does, so a
+    /// valid orphaned sibling below the anchor height can never be laundered into the
+    /// certified region.
+    ///
+    /// The certified root fed to the inclusion check comes ONLY from `anchor`, which a
+    /// caller obtains from a genesis-anchored `verify_chain_anchored` certificate — a
+    /// provider cannot inject a root the upgrade would trust.
+    pub fn re_anchor(
+        &mut self,
+        anchor: &CertifiedTransactions,
+        spend_proof: Option<&[u8]>,
+    ) -> ReAnchor {
+        if anchor.block_number < self.anchor_height {
+            return ReAnchor::NotMonotone;
+        }
+        self.anchor_height = anchor.block_number;
+        // Upgrade the observed spend only on a proof that attests THAT spend against the
+        // new anchor's root. `effective_spend` returns an owned copy, so no borrow of
+        // `self` is held across the mutation below.
+        if let (Some(proof), Some(spend)) = (spend_proof, self.effective_spend())
+            && certify_spend_region(&spend.spending_txid, anchor, proof)
+                == SpendRegion::MithrilCertified
+        {
+            self.certified_spend = Some(spend.spending_txid);
+            return ReAnchor::AdvancedSpendCertified;
+        }
+        ReAnchor::Advanced
+    }
+
     /// The first observed spend across the finalized aggregate and the ring, if any. The
     /// finalized spend (if present) is deeper than every ring fact, so it is the earliest;
     /// otherwise the earliest ring fact carrying a spend. An outpoint is spent at most once
@@ -520,11 +591,15 @@ impl WindowFollower {
     }
 
     /// The current three-valued windowed verdict, answered as of the verified tip under
-    /// the caller's `freshness` bound. Mirrors the batch's terminal decision exactly: a
-    /// recorded spend is a definite [`WatchVerdict::SpentObserved`]; otherwise the run
-    /// must have observed the outpoint's creation, reached `require_through`, stayed at
-    /// or below the certified anchor, and be fresh, or it is a distinct-reason
-    /// [`WatchVerdict::Stalled`] — never a false [`WatchVerdict::Unspent`].
+    /// the caller's `freshness` bound. Mirrors the batch's terminal decision, extended in
+    /// two ways past the batch domain: a recorded spend is a definite
+    /// [`WatchVerdict::SpentObserved`] carrying its [`SpendRegion`] (`MithrilCertified`
+    /// once [`WindowFollower::re_anchor`] proved its inclusion, else `HeaderVouched`); and
+    /// a tip ABOVE the certified anchor yields `Unspent` with `mithril_quorum:false`
+    /// rather than the batch's `Stalled{TipAboveAnchor}` — the header-verified region
+    /// beyond the anchor is answerable but not quorum-backed. Otherwise the run must have
+    /// observed the outpoint's creation, reached `require_through`, and be fresh, or it is
+    /// a distinct-reason [`WatchVerdict::Stalled`] — never a false [`WatchVerdict::Unspent`].
     pub fn verdict(&self, freshness: Freshness) -> WatchVerdict {
         // A beyond-window rollback poisons the follower: it can no longer reconstruct its
         // window, so it refuses fail-closed until the caller discards it. Checked first so
@@ -534,10 +609,18 @@ impl WindowFollower {
             return stalled(verified_through, StallReason::RollbackBeyondWindow);
         }
         if let Some(spend) = self.effective_spend() {
+            // MithrilCertified only when THIS exact spend's inclusion was proven at
+            // re-anchor; a rollback to a different spending tx never inherits it.
+            let region = if self.certified_spend == Some(spend.spending_txid) {
+                SpendRegion::MithrilCertified
+            } else {
+                SpendRegion::HeaderVouched
+            };
             return WatchVerdict::SpentObserved {
                 at_height: spend.at_height,
                 at_slot: spend.at_slot,
                 spending_txid: spend.spending_txid,
+                region,
             };
         }
         let Some(tip) = self.tip else {
@@ -560,12 +643,15 @@ impl WindowFollower {
         if tip.block_number < self.require_through {
             return stalled(tip.block_number, StallReason::WindowTooShort);
         }
-        if tip.block_number > self.anchor_height {
-            return stalled(tip.block_number, StallReason::TipAboveAnchor);
-        }
         if freshness.slot_now.saturating_sub(tip.slot) > freshness.max_lag {
             return stalled(tip.block_number, StallReason::TipTooOld);
         }
+        // A tip above the certified anchor extends past the batch's certified region: the
+        // follower still answers Unspent (the header-verified window is complete and
+        // observed creation), but surfaces mithril_quorum:false — that region is NOT
+        // quorum-backed. re_anchor forward lifts the bit to true once the anchor covers
+        // the tip. This is the deliberate divergence from the batch (which stalls here).
+        let mithril_quorum = tip.block_number <= self.anchor_height;
         WatchVerdict::Unspent {
             as_of: WatchedTip {
                 anchor_height: self.anchor_height,
@@ -573,7 +659,7 @@ impl WindowFollower {
                 as_of_slot: tip.slot,
             },
             basis: WatchBasis::WatchedWindow(WindowAssumptions {
-                mithril_quorum: true,
+                mithril_quorum,
                 data_complete: true,
             }),
         }
@@ -914,6 +1000,77 @@ mod tests {
                 fresh
             ),
             "eviction-as-finalization preserves the batch equivalence",
+        );
+    }
+
+    /// re_anchor's inclusion-proof upgrade WIRING, end to end with real crypto. A follower
+    /// that has observed a spend by the one certified tx Sextant holds a committed proof
+    /// for (`242f2037…`) reports `HeaderVouched` until `re_anchor` is handed that real
+    /// proof, then `MithrilCertified`. The window's own spend `760076f2…` has no committed
+    /// Mithril proof, so a faithful end-to-end upgrade of THAT spend needs a harvested
+    /// proof (a follow-on); the recorded spend is set here to the tx we can prove, which
+    /// exercises the real `re_anchor → certify_spend_region → verdict-region` path. The
+    /// integration side proves the negative (a wrong-tx proof never upgrades).
+    #[test]
+    fn re_anchor_with_a_matching_proof_certifies_the_spend_region() {
+        let certified_tx: [u8; 32] =
+            hex::decode("242f2037b427ff20ef97a076a7d845c74530be4e5a97b59bb18a519fcfa7a636")
+                .expect("hex")
+                .try_into()
+                .expect("32 bytes");
+        let certified_anchor = CertifiedTransactions {
+            merkle_root: "83c012fdc3e756fb5230d1a6554fbf743ccea171b37d536a64350c4f5d774129"
+                .to_string(),
+            epoch: 300,
+            block_number: 4_927_469,
+        };
+        let mut follower =
+            WindowFollower::new(dummy_watch(), &certified_anchor, 0, preprod_schedule());
+        // Record the spend directly — a same-crate injection standing in for a real block
+        // that spends via this tx, so the real crypto (below) is what the test turns on.
+        follower.spend_final = Some(ObservedSpend {
+            at_height: 4_927_400,
+            at_slot: 0,
+            spending_txid: certified_tx,
+        });
+        // SpentObserved is returned before any freshness check, so the bound is irrelevant.
+        let any = Freshness {
+            slot_now: 0,
+            max_lag: 0,
+        };
+        assert!(
+            matches!(
+                follower.verdict(any),
+                WatchVerdict::SpentObserved {
+                    region: SpendRegion::HeaderVouched,
+                    ..
+                }
+            ),
+            "an observed spend is HeaderVouched before any inclusion proof",
+        );
+
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
+        let bytes = fs::read(dir.join("mithril-txproof.json")).expect("read txproof");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("parse txproof");
+        let proof = v["certified_transactions"][0]["proof"]
+            .as_str()
+            .expect("proof field")
+            .as_bytes()
+            .to_vec();
+        assert_eq!(
+            follower.re_anchor(&certified_anchor, Some(&proof)),
+            ReAnchor::AdvancedSpendCertified,
+            "the real proof certifies the observed spend against the anchor root",
+        );
+        assert!(
+            matches!(
+                follower.verdict(any),
+                WatchVerdict::SpentObserved {
+                    region: SpendRegion::MithrilCertified,
+                    ..
+                }
+            ),
+            "the certified spend now reports MithrilCertified",
         );
     }
 }
