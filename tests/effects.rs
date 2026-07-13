@@ -1,16 +1,17 @@
 //! Tier-2 T2 differential proof: Sextant's own-path block→UTxO-effects extraction is
-//! byte-identical to pallas's independent `consumes`/`produces` for every phase-2-valid
-//! transaction across the committed preprod vectors — the same discipline the MMR, VRF, KES,
-//! and Ed25519 paths hold against their independent oracles. A block carrying a phase-2-invalid
-//! transaction (which pallas marks `!is_valid()`) must fail closed on our path until the
-//! collateral-spend delta is vectored.
+//! byte-identical to pallas's independent `consumes`/`produces` for EVERY transaction — valid
+//! and phase-2-invalid — across the committed vectors, the same discipline the MMR, VRF, KES,
+//! and Ed25519 paths hold against their independent oracles. The vectors include a real mainnet
+//! phase-2 failure (`invalid-mainnet-13591743.block`, tx 7: collateral consumed, collateral
+//! return produced) and a valid tx whose input and collateral sets overlap
+//! (`mainnet-collat-overlap-9668317.block`) — the two shapes a naive decoder mishandles.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
 use pallas_traverse::MultiEraBlock;
-use sextant::effects::{ExtractError, extract_block_effects};
+use sextant::effects::extract_block_effects;
 use sextant::utxo::OutPoint;
 
 fn vectors_dir() -> PathBuf {
@@ -74,7 +75,7 @@ fn pallas_effects(block: &[u8]) -> Vec<(BTreeSet<OutPoint>, BTreeSet<OutPoint>)>
         .collect()
 }
 
-fn any_invalid(block: &[u8]) -> bool {
+fn has_invalid(block: &[u8]) -> bool {
     MultiEraBlock::decode(block)
         .expect("pallas decode")
         .txs()
@@ -85,19 +86,9 @@ fn any_invalid(block: &[u8]) -> bool {
 #[test]
 fn extraction_matches_pallas_consumes_and_produces_on_every_committed_block() {
     let mut checked_txs = 0usize;
+    let mut checked_invalid = false;
     for (name, block) in block_vectors() {
-        if any_invalid(&block) {
-            // A phase-2 failure present: our path must fail closed, not compute a set delta.
-            assert!(
-                matches!(
-                    extract_block_effects(&block),
-                    Err(ExtractError::PhaseTwoFailureUnsupported { .. })
-                ),
-                "{name}: a block with an invalid tx must fail closed",
-            );
-            continue;
-        }
-
+        checked_invalid |= has_invalid(&block);
         let ours = extract_block_effects(&block)
             .unwrap_or_else(|e| panic!("{name}: extraction failed: {e:?}"));
         let theirs = pallas_effects(&block);
@@ -124,14 +115,16 @@ fn extraction_matches_pallas_consumes_and_produces_on_every_committed_block() {
         checked_txs > 0,
         "the committed vectors must contain at least one transaction to differential-test",
     );
+    assert!(
+        checked_invalid,
+        "the vectors must include a phase-2-invalid block so the collateral delta is proven, \
+         not just the valid path",
+    );
 }
 
 #[test]
 fn block_coordinates_match_pallas() {
     for (name, block) in block_vectors() {
-        if any_invalid(&block) {
-            continue;
-        }
         let ours = extract_block_effects(&block).expect("extract");
         let b = MultiEraBlock::decode(&block).expect("pallas decode");
         assert_eq!(ours.number, b.number(), "{name}: block number");
