@@ -167,13 +167,18 @@ impl UtxoSet {
     /// transaction order. Contiguity is enforced against the current tip. On ANY inconsistency
     /// the set is left exactly as it was and the error is returned (fail-closed).
     pub fn apply(&mut self, block: &BlockEffects) -> Result<(), ApplyError> {
-        if let Some(tip) = self.tip
-            && (block.prev_hash != tip.hash || block.number != tip.number + 1)
-        {
-            return Err(ApplyError::NotContiguous {
-                expected_prev: tip.hash,
-                got_prev: block.prev_hash,
-            });
+        if let Some(tip) = self.tip {
+            // `checked_add`: a tip at u64::MAX has no successor number, so `None` is refused as
+            // non-contiguous rather than overflow-panicking (debug) or wrapping `number+1` to 0
+            // and admitting a forged `number:0` block (release).
+            let contiguous =
+                block.prev_hash == tip.hash && tip.number.checked_add(1) == Some(block.number);
+            if !contiguous {
+                return Err(ApplyError::NotContiguous {
+                    expected_prev: tip.hash,
+                    got_prev: block.prev_hash,
+                });
+            }
         }
 
         let mut ops: Vec<Op> = Vec::new();
@@ -495,6 +500,30 @@ mod tests {
                 hash: h(3)
             })
         );
+        assert!(u.is_unspent(&op(1, 0)));
+    }
+
+    #[test]
+    fn apply_at_max_block_number_fails_closed_not_overflow() {
+        // A tip at u64::MAX has no valid successor number: extending it must be refused, never
+        // overflow-panic (debug) nor wrap `number+1` to 0 and admit a forged `number:0` block
+        // with the right parent hash (release). from_snapshot's base number is unchecked, so a
+        // hostile/buggy snapshot could seed MAX.
+        let base = SetTip {
+            number: u64::MAX,
+            hash: h(200),
+        };
+        let mut u = UtxoSet::from_snapshot(base, [op(1, 0)], 10);
+        let err = u
+            .apply(&BlockEffects {
+                number: 0,
+                hash: h(201),
+                prev_hash: h(200),
+                txs: vec![],
+            })
+            .unwrap_err();
+        assert!(matches!(err, ApplyError::NotContiguous { .. }));
+        assert_eq!(u.tip(), Some(base));
         assert!(u.is_unspent(&op(1, 0)));
     }
 
