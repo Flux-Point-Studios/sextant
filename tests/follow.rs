@@ -26,7 +26,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sextant::follow::{AppendRefusal, WindowFollower};
+use sextant::follow::{AppendRefusal, SlotSchedule, WindowFollower};
 use sextant::header::HeaderView;
 use sextant::utxo::{CertifiedTransactions, OutPoint};
 use sextant::window::{Freshness, WatchVerdict, verify_watched_window};
@@ -83,6 +83,25 @@ fn fresh() -> Freshness {
     }
 }
 
+/// Preprod Shelley slot schedule: epoch 300 begins at slot 127_958_400 and every epoch
+/// is 432_000 slots. Every window block's slot (≥ 128_046_016) is epoch 300, so one
+/// staged nonce covers the single-epoch window.
+fn preprod_schedule() -> SlotSchedule {
+    SlotSchedule {
+        epoch: 300,
+        epoch_first_slot: 127_958_400,
+        epoch_length_slots: 432_000,
+    }
+}
+
+/// A preprod-window follower (single epoch 300) with `nonce` staged for it — the shared
+/// constructor the single-epoch equivalence tests use under the F2 map API.
+fn preprod_follower(watch: OutPoint, nonce: [u8; 32]) -> WindowFollower {
+    let mut f = WindowFollower::new(watch, &anchor(), REQUIRE_THROUGH, preprod_schedule());
+    f.supply_next_eta0(300, nonce);
+    f
+}
+
 /// The stored contiguous preprod window: every `preprod-*.block` in on-chain order
 /// (by slot), block numbers 4921916..=4921937.
 fn preprod_window() -> Vec<Vec<u8>> {
@@ -122,7 +141,7 @@ fn follower_matches_batch_per_prefix_over_the_full_window() {
     for index in [0u16, 1] {
         let blocks = preprod_window();
         assert!(blocks.len() >= 20, "expected the 22-block window");
-        let mut follower = WindowFollower::new(watched(index), &anchor(), REQUIRE_THROUGH, eta0());
+        let mut follower = preprod_follower(watched(index), eta0());
         let mut accepted: Vec<Vec<u8>> = Vec::new();
         for block in &blocks {
             let appended = follower
@@ -187,12 +206,7 @@ fn refusal_matches_batch(
     follower_eta0: [u8; 32],
 ) -> AppendRefusal {
     let window = preprod_window();
-    let mut follower = WindowFollower::new(
-        watched(watch_index),
-        &anchor(),
-        REQUIRE_THROUGH,
-        follower_eta0,
-    );
+    let mut follower = preprod_follower(watched(watch_index), follower_eta0);
     let mut accepted: Vec<Vec<u8>> = Vec::new();
     for b in window.iter().take(clean_prefix_len) {
         follower.append(b).expect("clean prefix block is accepted");
@@ -214,7 +228,9 @@ fn refusal_matches_batch(
     match batch(watched(watch_index), &probe, &follower_eta0) {
         WatchVerdict::Stalled { reason, .. } => assert_eq!(
             reason,
-            refusal.as_stall_reason(),
+            refusal
+                .as_stall_reason()
+                .expect("a batch-comparable refusal maps to a stall reason"),
             "the refusal must map to the batch stall reason over the same prefix",
         ),
         other => panic!("the batch over the mutated prefix should stall, got {other:?}"),
@@ -288,7 +304,7 @@ fn wrong_epoch_nonce_refuses_the_first_block_crypto() {
 #[test]
 fn recorded_spend_survives_a_refused_append() {
     let window = preprod_window();
-    let mut follower = WindowFollower::new(watched(1), &anchor(), REQUIRE_THROUGH, eta0());
+    let mut follower = preprod_follower(watched(1), eta0());
     for b in window.iter().take(3) {
         follower.append(b).expect("clean prefix accepted");
     }
@@ -309,12 +325,188 @@ fn recorded_spend_survives_a_refused_append() {
     assert_eq!(follower.verdict(fresh()), spent);
 }
 
+/// One block of the harvested 299→300 boundary run: its bytes, decoded slot, and its
+/// epoch's η0 sidecar (from `boundary-<slot>.eta0`).
+struct BoundaryBlock {
+    bytes: Vec<u8>,
+    slot: u64,
+    eta0: [u8; 32],
+}
+
+/// Every `boundary-<slot>.block` with its `.eta0` sidecar, in on-chain (slot) order.
+/// The run is a contiguous chain that crosses the 299→300 turn: the earlier blocks
+/// carry η0(299), the later blocks η0(300).
+fn boundary_run() -> Vec<BoundaryBlock> {
+    let mut rows: Vec<BoundaryBlock> = Vec::new();
+    for entry in fs::read_dir(vectors_dir()).expect("read vectors dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if !name.starts_with("boundary-")
+            || path.extension().and_then(|e| e.to_str()) != Some("block")
+        {
+            continue;
+        }
+        let bytes = unhex(&fs::read_to_string(&path).expect("read boundary vector"));
+        let eta0: [u8; 32] = unhex(
+            &fs::read_to_string(path.with_extension("eta0")).expect("boundary vector has .eta0"),
+        )
+        .try_into()
+        .expect("eta0 is 32 bytes");
+        let slot = HeaderView::from_block_cbor(&bytes)
+            .expect("decode boundary block")
+            .slot;
+        rows.push(BoundaryBlock { bytes, slot, eta0 });
+    }
+    rows.sort_by_key(|b| b.slot);
+    rows
+}
+
+/// A watch outpoint the boundary run never creates or spends — the boundary tests
+/// exercise epoch-aware nonce selection, not the spend scan, so the follower's verdict
+/// is not asserted here (a dummy watch stays `CreationNotObserved`).
+fn dummy_watch() -> OutPoint {
+    OutPoint {
+        tx_id: [0u8; 32],
+        index: 0,
+    }
+}
+
+/// The headline F2 property: one follower crosses the 299→300 epoch boundary, selecting
+/// each side's nonce from the map by the block's slot. Both epoch nonces are staged up
+/// front; every block — on either side of the turn — is accepted. A single-nonce
+/// follower could verify only one side.
+#[test]
+fn follower_crosses_the_epoch_boundary_selecting_each_side_nonce() {
+    let run = boundary_run();
+    assert!(run.len() >= 4, "the run must straddle the turn");
+    let schedule = preprod_schedule();
+    // The run genuinely spans two epochs under the schedule.
+    let pre_epoch = schedule.epoch_of(run.first().unwrap().slot);
+    let post_epoch = schedule.epoch_of(run.last().unwrap().slot);
+    assert_eq!(
+        post_epoch,
+        pre_epoch + 1,
+        "the run crosses exactly one boundary"
+    );
+
+    let mut follower = WindowFollower::new(dummy_watch(), &anchor(), 0, schedule);
+    // Stage both epochs' nonces (the harvester wrote each block's epoch η0 as its
+    // sidecar; the schedule agrees with that assignment, cross-checked per block below).
+    for b in &run {
+        follower.supply_next_eta0(schedule.epoch_of(b.slot), b.eta0);
+    }
+
+    let mut saw_pre = false;
+    let mut saw_post = false;
+    for b in &run {
+        let epoch = schedule.epoch_of(b.slot);
+        // The schedule's epoch for this slot is the epoch whose η0 the harvester
+        // attached — so the nonce the follower selects is the block's real epoch nonce.
+        assert_eq!(
+            follower.append(&b.bytes),
+            Ok(sextant::follow::Appended {
+                block_number: HeaderView::from_block_cbor(&b.bytes).unwrap().block_number,
+            }),
+            "block at slot {} (epoch {epoch}) is accepted under its epoch nonce",
+            b.slot
+        );
+        saw_pre |= epoch == pre_epoch;
+        saw_post |= epoch == post_epoch;
+    }
+    assert!(
+        saw_pre && saw_post,
+        "the follower verified blocks on both sides of the turn"
+    );
+}
+
+/// Split the boundary run at its single turn: the pre-turn side (earlier epoch) and the
+/// first post-turn block (later epoch). Both epochs are computed from the schedule.
+fn first_post_turn_block(run: &[BoundaryBlock], schedule: &SlotSchedule) -> (u64, usize) {
+    let pre_epoch = schedule.epoch_of(run.first().unwrap().slot);
+    let post_epoch = pre_epoch + 1;
+    let idx = run
+        .iter()
+        .position(|b| schedule.epoch_of(b.slot) == post_epoch)
+        .expect("the run crosses the turn");
+    (post_epoch, idx)
+}
+
+/// A missing staged nonce at the turn is fail-closed and liveness-only: the first
+/// post-turn block whose η0 has not been supplied is refused `EpochNonceUnavailable`
+/// (the refusal has no single-epoch batch counterpart, so it maps to `None`), and once
+/// the nonce is staged the SAME block appends — the refusal left the state untouched.
+#[test]
+fn missing_staged_nonce_at_the_turn_refuses_then_supplied_nonce_is_accepted() {
+    let run = boundary_run();
+    let schedule = preprod_schedule();
+    let (post_epoch, first_post) = first_post_turn_block(&run, &schedule);
+    let pre_epoch = schedule.epoch_of(run.first().unwrap().slot);
+
+    let mut follower = WindowFollower::new(dummy_watch(), &anchor(), 0, schedule);
+    // Stage ONLY the earlier epoch's nonce.
+    follower.supply_next_eta0(pre_epoch, run[0].eta0);
+
+    for b in &run[..first_post] {
+        follower
+            .append(&b.bytes)
+            .expect("pre-turn block accepted under its staged nonce");
+    }
+    assert_eq!(
+        follower.append(&run[first_post].bytes),
+        Err(AppendRefusal::EpochNonceUnavailable),
+        "a post-turn block whose epoch nonce is not staged is refused, fail-closed",
+    );
+    assert_eq!(
+        AppendRefusal::EpochNonceUnavailable.as_stall_reason(),
+        None,
+        "the cross-epoch refusal has no single-epoch batch counterpart",
+    );
+    // Liveness: staging the epoch nonce accepts the same block the refusal left pending.
+    follower.supply_next_eta0(post_epoch, run[first_post].eta0);
+    follower
+        .append(&run[first_post].bytes)
+        .expect("the block appends once its epoch nonce is staged");
+}
+
+/// A staged-but-WRONG epoch nonce fails the leader-VRF (`Crypto`, not
+/// `EpochNonceUnavailable`), and correcting it — overwritable while unused — accepts the
+/// same block. The nonce is an input to verify, never a verdict, so a wrong one only
+/// costs liveness.
+#[test]
+fn wrong_staged_nonce_refuses_crypto_then_corrected_nonce_is_accepted() {
+    let run = boundary_run();
+    let schedule = preprod_schedule();
+    let (post_epoch, first_post) = first_post_turn_block(&run, &schedule);
+    let pre_epoch = schedule.epoch_of(run.first().unwrap().slot);
+
+    let mut follower = WindowFollower::new(dummy_watch(), &anchor(), 0, schedule);
+    follower.supply_next_eta0(pre_epoch, run[0].eta0);
+    follower.supply_next_eta0(post_epoch, [0x11u8; 32]); // wrong η0 for the later epoch
+
+    for b in &run[..first_post] {
+        follower.append(&b.bytes).expect("pre-turn block accepted");
+    }
+    assert_eq!(
+        follower.append(&run[first_post].bytes),
+        Err(AppendRefusal::Crypto),
+        "a staged-but-wrong epoch nonce fails the leader-VRF, not EpochNonceUnavailable",
+    );
+    // Overwrite the mis-staged nonce with the correct η0 and the same block is accepted.
+    follower.supply_next_eta0(post_epoch, run[first_post].eta0);
+    follower
+        .append(&run[first_post].bytes)
+        .expect("the corrected epoch nonce accepts the block");
+}
+
 /// A refused append does not brick the follower: after a refusal it still accepts the
 /// correct next block and advances the verified tip.
 #[test]
 fn refused_append_leaves_the_follower_able_to_resume() {
     let window = preprod_window();
-    let mut follower = WindowFollower::new(watched(0), &anchor(), REQUIRE_THROUGH, eta0());
+    let mut follower = preprod_follower(watched(0), eta0());
     for b in window.iter().take(2) {
         follower.append(b).expect("clean prefix accepted");
     }
