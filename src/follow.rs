@@ -178,7 +178,10 @@ impl WindowFollower {
             if view.prev_hash != Some(prev.block_hash) {
                 return Err(AppendRefusal::BrokenLink);
             }
-            if view.block_number != prev.block_number + 1 {
+            // Checked add: block_number is an attacker-chosen field inside the signed
+            // header body, so a u64::MAX tip must refuse its successor fail-closed —
+            // never an overflow panic (untrusted bytes never panic, crate-wide).
+            if prev.block_number.checked_add(1) != Some(view.block_number) {
                 return Err(AppendRefusal::NotContiguous);
             }
         }
@@ -228,8 +231,9 @@ impl WindowFollower {
         let Some(tip) = &self.tip else {
             return stalled(0, StallReason::EmptyWindow);
         };
-        // Contiguity is enforced per append (hash link + number+1), so the accepted run
-        // is gap-free and the batch's terminal MissingBlock check cannot diverge here.
+        // Contiguity is enforced per append (hash link + checked number+1), so every
+        // accepted run also satisfies the batch's terminal contiguity check — pairwise
+        // +1 is strictly stronger than the batch's end-to-end count.
         if !self.create_seen {
             return stalled(tip.block_number, StallReason::CreationNotObserved);
         }
@@ -340,6 +344,37 @@ mod tests {
             AppendRefusal::NotContiguous.as_stall_reason(),
             StallReason::MissingBlock,
             "the refusal maps to the batch oracle's contiguity stall",
+        );
+    }
+
+    /// The contiguity comparison at the numeric boundary: a colluding leader can sign a
+    /// header carrying `block_number == u64::MAX` (the number is an attacker-chosen
+    /// field inside the KES-signed header body), and the follower's next append must
+    /// refuse it fail-CLOSED — never panic on the `+1` (untrusted bytes never panic,
+    /// crate-wide) and never wrap to a comparison the batch oracle would not make.
+    #[test]
+    fn tip_at_u64_max_refuses_the_next_append_without_panicking() {
+        let (b0, b1, eta0) = first_two_blocks_and_eta0();
+        let anchor = CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 300,
+            block_number: 4_927_469,
+        };
+        let watch = OutPoint {
+            tx_id: [0u8; 32],
+            index: 0,
+        };
+        let mut follower = WindowFollower::new(watch, &anchor, 4_921_937, eta0);
+        follower.append(&b0).expect("the first block is accepted");
+        follower
+            .tip
+            .as_mut()
+            .expect("tip set after the first append")
+            .block_number = u64::MAX;
+        assert_eq!(
+            follower.append(&b1),
+            Err(AppendRefusal::NotContiguous),
+            "a u64::MAX tip must refuse the successor fail-closed, not overflow",
         );
     }
 }
