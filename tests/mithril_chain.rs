@@ -141,10 +141,10 @@ fn verified_chain_surfaces_the_certified_transaction_root() {
     );
 }
 
-/// The commitment is surfaced from the tip's own hashed content — the same
-/// `(epoch, block_number)` its `signed_entity_type` names and the same
-/// `cardano_transactions_merkle_root` protocol-message part the integrity check
-/// binds — so it cannot disagree with what the certificate signed.
+/// The commitment is surfaced from the tip's own STM-signed protocol message — the
+/// `current_epoch`, `latest_block_number`, and `cardano_transactions_merkle_root` parts
+/// `signed_message = H(protocol_message)` binds — never from the `signed_entity_type`
+/// copy (fed only into the content hash), so it is exactly what the stake quorum signed.
 #[test]
 fn surfaced_root_comes_from_the_tip_certificates_hashed_content() {
     let ordered = ordered_root_to_tip(harvested_certs());

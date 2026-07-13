@@ -23,6 +23,11 @@ pub const MITHRIL_AGG: &str = "https://aggregator.release-preprod.api.mithril.ne
 /// Cap the fresh-anchor walk: a genesis→tip CardanoTransactions chain is ~one cert/epoch
 /// (the committed base is 106); refuse a runaway walk rather than hammer the aggregator.
 pub const MAX_ANCHOR_HOPS: usize = 400;
+/// Cap each aggregator response body before it is buffered/parsed. A real certificate is a
+/// few KB (the AVK / multi-signature blobs dominate and are themselves field-capped in
+/// `verify_standard`); this bound turns a hostile multi-GB body — amplified `MAX_ANCHOR_HOPS`
+/// times in the walk — from a daemon OOM into a fail-closed error that keeps the anchor.
+pub const MAX_AGG_BODY_BYTES: usize = 8 * 1024 * 1024;
 /// preprod fixed-length 432000-slot epochs; the empirically-pinned anchor is epoch 300 /
 /// first slot 127958400 (the schedule the committed-fixture tests use). The formula
 /// extrapolates to any later epoch.
@@ -206,6 +211,31 @@ pub fn anchor_from_chain(
         .context("tip certifies no transaction set")
 }
 
+/// Read a response body, refusing anything over [`MAX_AGG_BODY_BYTES`]. The declared
+/// `Content-Length` is rejected up front, and the body is drained chunk-by-chunk so a
+/// missing or lying length still can't exceed the cap — an untrusted aggregator cannot
+/// force an unbounded allocation before the bytes are parsed.
+async fn read_capped(resp: reqwest::Response) -> Result<Vec<u8>> {
+    if let Some(len) = resp.content_length()
+        && len > MAX_AGG_BODY_BYTES as u64
+    {
+        return Err(anyhow!(
+            "aggregator body {len} B exceeds {MAX_AGG_BODY_BYTES} B cap"
+        ));
+    }
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.context("aggregator body chunk")? {
+        if buf.len() + chunk.len() > MAX_AGG_BODY_BYTES {
+            return Err(anyhow!(
+                "aggregator body exceeds {MAX_AGG_BODY_BYTES} B cap"
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 /// The certified transactions anchor from a genesis-anchored verify over the committed base
 /// alone — the deterministic pin the daemon starts from before any live re-anchor.
 pub fn certified_anchor(vectors_dir: &std::path::Path) -> Result<CertifiedTransactions> {
@@ -257,15 +287,17 @@ pub async fn fetch_fresh_anchor(
     struct CtxArtifact {
         certificate_hash: String,
     }
-    let arts: Vec<CtxArtifact> = http
+    let list = http
         .get(format!("{MITHRIL_AGG}/artifact/cardano-transactions"))
         .header("accept", "application/json")
         .send()
         .await?
-        .error_for_status()?
-        .json()
+        .error_for_status()?;
+    let list = read_capped(list)
         .await
         .context("aggregator cardano-transactions artifact list")?;
+    let arts: Vec<CtxArtifact> =
+        serde_json::from_slice(&list).context("parse cardano-transactions artifact list")?;
     let mut hash = arts
         .into_iter()
         .next()
@@ -279,18 +311,18 @@ pub async fn fetch_fresh_anchor(
         if base_hashes.contains(hash.as_str()) {
             return splice_anchor(base, &extension, genesis_vkey);
         }
-        let text = http
+        let resp = http
             .get(format!("{MITHRIL_AGG}/certificate/{hash}"))
             .header("accept", "application/json")
             .send()
             .await?
             .error_for_status()
-            .with_context(|| format!("aggregator cert {hash} unavailable (pruned?)"))?
-            .text()
+            .with_context(|| format!("aggregator cert {hash} unavailable (pruned?)"))?;
+        let body = read_capped(resp)
             .await
             .with_context(|| format!("aggregator cert {hash} body"))?;
-        let cert = Certificate::from_json(text.as_bytes())
-            .map_err(|e| anyhow!("parse fresh cert {hash}: {e}"))?;
+        let cert =
+            Certificate::from_json(&body).map_err(|e| anyhow!("parse fresh cert {hash}: {e}"))?;
         if cert.hash != hash {
             return Err(anyhow!("aggregator returned cert {} for {hash}", cert.hash));
         }
