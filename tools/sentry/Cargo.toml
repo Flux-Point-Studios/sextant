@@ -29,6 +29,12 @@ name = "sextant-watchd"
 path = "src/bin/watchd.rs"
 required-features = ["daemon"]
 
+# One-off harvest (T2b): sweep preprod for a phase-2-invalid-tx block. Not production.
+[[bin]]
+name = "scan-invalid"
+path = "src/bin/scan_invalid.rs"
+required-features = ["transport"]
+
 [features]
 # `transport` off by default so the sans-io lib + its mock gate build with zero network
 # deps; the binaries opt in. `daemon` adds the HTTP server on top of `transport`.

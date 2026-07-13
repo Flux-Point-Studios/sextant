@@ -285,6 +285,23 @@ fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
     Ok(out)
 }
 
+/// Whether the transaction body carries CBOR map key `key` — used to detect a collateral
+/// return (key 16), which a phase-2-invalid transaction produces at output index `|outputs|`.
+pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
+    let mut d = Decoder::new(tx_bytes);
+    let entries = d
+        .map()
+        .map_err(|_| UtxoError::MalformedTx)?
+        .ok_or(UtxoError::MalformedTx)?;
+    for _ in 0..entries {
+        if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
+            return Ok(true);
+        }
+        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+    }
+    Ok(false)
+}
+
 /// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
 /// the count of created outpoints `(tx_id, 0..n)`. A definite array is required (fail-closed on
 /// an indefinite one). A body with no outputs key is malformed.

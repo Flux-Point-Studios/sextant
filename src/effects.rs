@@ -9,11 +9,13 @@
 //! Phase-2 validity is load-bearing and the reason [`crate::utxo::decode_spends`] is not enough
 //! here: a phase-2-VALID transaction consumes its inputs (body key 0) and produces its outputs
 //! (key 1); a phase-2-INVALID one (a Plutus script failed) consumes its COLLATERAL (key 13) and
-//! produces only its collateral-return, its normal inputs staying unspent. Getting that wrong
-//! flips a real outpoint's spent status. This slice extracts the valid path exactly (and binds
-//! it byte-for-byte to pallas's independent `consumes`/`produces` across the committed vectors)
-//! and, until the collateral path is vectored, FAILS CLOSED on any block carrying an invalid
-//! transaction — an honest non-answer, never a wrong set delta.
+//! produces only its collateral-return (key 16, at output index `|outputs|` — after the normal
+//! outputs it did NOT produce), its normal inputs staying unspent. Getting that wrong flips a
+//! real outpoint's spent status. Both deltas are extracted here and bound byte-for-byte to
+//! pallas's independent `consumes`/`produces` across the committed vectors — including a real
+//! mainnet phase-2 failure (`invalid-mainnet-13591743.block`, tx 7). The collateral-return rule
+//! is Babbage-onward; a pre-Babbage (Alonzo) invalid transaction consumes all collateral with
+//! no return, a delta this Conway-scoped path does not model, so it fails closed there.
 
 use std::collections::BTreeSet;
 
@@ -22,7 +24,7 @@ use minicbor::data::Type;
 
 use crate::hash::blake2b256;
 use crate::header::HeaderView;
-use crate::utxo::{OutPoint, inputs_at, output_count};
+use crate::utxo::{OutPoint, has_body_key, inputs_at, output_count};
 use crate::utxoset::{BlockEffects, TxEffect};
 use crate::window::{hash_alonzo_seg_wits, tx_body_spans};
 
@@ -36,10 +38,10 @@ pub enum ExtractError {
     BodyCommitmentMismatch,
     /// A transaction body was not decodable (inputs/outputs), so its effect is unknown.
     MalformedBody,
-    /// The block carries a phase-2-invalid transaction (index into the tx-bodies array). Its
-    /// collateral-spend effect is not yet extracted on Sextant's own path, so the block is
-    /// refused rather than have its set delta computed wrong. (Handled in the next slice.)
-    PhaseTwoFailureUnsupported {
+    /// A phase-2-invalid transaction declares a collateral return (key 16) but no outputs array
+    /// (key 1) to place it after — a malformed shape whose collateral-return index is undefined.
+    /// Fail closed rather than guess the index.
+    CollateralReturnWithoutOutputs {
         /// The invalid transaction's index in the block's tx-bodies array.
         tx_index: usize,
     },
@@ -62,18 +64,13 @@ pub fn extract_block_effects(block: &[u8]) -> Result<BlockEffects, ExtractError>
     let mut txs = Vec::with_capacity(body_spans.len());
     for (i, span) in body_spans.iter().enumerate() {
         let tx = &block[span.clone()];
-        if invalid.contains(&i) {
-            return Err(ExtractError::PhaseTwoFailureUnsupported { tx_index: i });
-        }
         let tx_id = blake2b256(tx);
-        let spent = inputs_at(tx, 0).map_err(|_| ExtractError::MalformedBody)?;
-        let n = output_count(tx).map_err(|_| ExtractError::MalformedBody)?;
-        let mut created = Vec::with_capacity(n);
-        for idx in 0..n {
-            let index = u16::try_from(idx).map_err(|_| ExtractError::MalformedBody)?;
-            created.push(OutPoint { tx_id, index });
-        }
-        txs.push(TxEffect { spent, created });
+        let effect = if invalid.contains(&i) {
+            invalid_tx_effect(tx, tx_id, i)?
+        } else {
+            valid_tx_effect(tx, tx_id)?
+        };
+        txs.push(effect);
     }
 
     Ok(BlockEffects {
@@ -84,6 +81,51 @@ pub fn extract_block_effects(block: &[u8]) -> Result<BlockEffects, ExtractError>
         prev_hash: view.prev_hash.unwrap_or([0u8; 32]),
         txs,
     })
+}
+
+/// Collapse a consumed-input list to unique outpoints, in the order the UTxO set will remove
+/// them. Collateral inputs (key 13) may LEGALLY list the same UTxO more than once — Conway's
+/// `nonempty_set` and Babbage's array both preserve on-wire duplicates, and pallas `consumes()`
+/// de-dups for the same reason. Left un-collapsed, a duplicate makes [`crate::utxoset::UtxoSet`]
+/// remove the outpoint once, then fail `SpendOfUnknownOutput` on the repeat and reject the whole
+/// (valid, on-chain) block — a permanent wedge. Normal inputs (key 0) are a ledger-enforced set,
+/// but the same collapse is applied for defense in depth.
+fn unique_spent(mut v: Vec<OutPoint>) -> Vec<OutPoint> {
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// A phase-2-VALID transaction: it consumes its inputs (body key 0) and produces its outputs
+/// (key 1) as `(tx_id, 0..output_count)`.
+fn valid_tx_effect(tx: &[u8], tx_id: [u8; 32]) -> Result<TxEffect, ExtractError> {
+    let spent = unique_spent(inputs_at(tx, 0).map_err(|_| ExtractError::MalformedBody)?);
+    let n = output_count(tx).map_err(|_| ExtractError::MalformedBody)?;
+    let mut created = Vec::with_capacity(n);
+    for idx in 0..n {
+        let index = u16::try_from(idx).map_err(|_| ExtractError::MalformedBody)?;
+        created.push(OutPoint { tx_id, index });
+    }
+    Ok(TxEffect { spent, created })
+}
+
+/// A phase-2-INVALID transaction: it consumes its COLLATERAL inputs (body key 13) — its normal
+/// inputs stay unspent — and produces ONLY its collateral return (key 16), if present, at output
+/// index `|outputs|` (the slot after the normal outputs it did not produce). Babbage-onward
+/// semantics; a pre-Babbage invalid transaction has no collateral return and a different delta,
+/// so it is caught by the [`ExtractError::CollateralReturnWithoutOutputs`] guard only when
+/// key 16 is present without a key-1 outputs array (a shape the modelled eras never emit).
+fn invalid_tx_effect(tx: &[u8], tx_id: [u8; 32], i: usize) -> Result<TxEffect, ExtractError> {
+    let spent = unique_spent(inputs_at(tx, 13).map_err(|_| ExtractError::MalformedBody)?);
+    let created = if has_body_key(tx, 16).map_err(|_| ExtractError::MalformedBody)? {
+        let idx = output_count(tx)
+            .map_err(|_| ExtractError::CollateralReturnWithoutOutputs { tx_index: i })?;
+        let index = u16::try_from(idx).map_err(|_| ExtractError::MalformedBody)?;
+        vec![OutPoint { tx_id, index }]
+    } else {
+        Vec::new()
+    };
+    Ok(TxEffect { spent, created })
 }
 
 /// Decode the `invalid_transactions` block element — a `set` of `uint` transaction indices
@@ -144,6 +186,41 @@ mod tests {
         assert_eq!(
             decode_invalid_transactions(&[0x9f, 0x01, 0x03, 0xff]).unwrap(),
             BTreeSet::from([1usize, 3usize])
+        );
+    }
+
+    /// A minimal invalid-tx body `{13: [X, X], 1: []}` — collateral lists the same outpoint
+    /// twice (legal: the ledger consumes it once). The extracted `spent` must be de-duplicated,
+    /// else `UtxoSet::apply` removes X once then trips `SpendOfUnknownOutput` on the repeat and
+    /// rejects the whole on-chain block, permanently wedging the follower.
+    #[test]
+    fn invalid_tx_dedups_duplicate_collateral() {
+        let x_hash = [0xaa_u8; 32];
+        // input X = [ h'aa..aa' (bytes .size 32), 0 ]  ->  82 5820 <32> 00
+        let mut input_x = vec![0x82, 0x58, 0x20];
+        input_x.extend_from_slice(&x_hash);
+        input_x.push(0x00);
+        // tx body = { 13: [X, X], 1: [] }  ->  a2 0d 82 X X 01 80
+        let mut tx = vec![0xa2, 0x0d, 0x82];
+        tx.extend_from_slice(&input_x);
+        tx.extend_from_slice(&input_x);
+        tx.extend_from_slice(&[0x01, 0x80]);
+
+        // Raw decode preserves the on-wire duplicate (the bug source).
+        assert_eq!(inputs_at(&tx, 13).unwrap().len(), 2);
+
+        let effect = invalid_tx_effect(&tx, [0u8; 32], 0).unwrap();
+        assert_eq!(
+            effect.spent,
+            vec![OutPoint {
+                tx_id: x_hash,
+                index: 0
+            }],
+            "duplicate collateral collapses to a single consumed outpoint",
+        );
+        assert!(
+            effect.created.is_empty(),
+            "no collateral return (no key 16)"
         );
     }
 }
