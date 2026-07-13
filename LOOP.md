@@ -698,6 +698,21 @@ needs a row in Evidence.
         127958489→300 vector slots + u64-extreme/zero-length totality; `rollback_below_the_turn_re_
         appends_without_re_staging`), plus the 6 pre-existing F1 tests updated to the map API. All under
         `scripts/harness.sh --full` exit 0. Next: F3 (rollback truncation + eviction-as-finalization).
+        RED-TEAM: independent `fluxpoint-loop:red-team-reviewer` VERDICT SHIP — `epoch_of` matched an
+        i128 `div_euclid` oracle across every boundary + u64 extremes (no panic/off-by-one; zero-length
+        collapses to the anchor epoch; saturation never mis-selects a nonce); epoch misclassification
+        CANNOT false-accept (VRF binds (vkey,slot,η0), a wrong nonce only fails closed); nonce-map
+        hygiene sound (the follower is NOT FFI-exposed, so a block provider cannot stage nonces — no
+        DoS; overwriting a used nonce cannot retro-falsify frozen facts); the boundary `.eta0` sidecars
+        genuinely differ (299=`9adf4f5b…`, 300=`aa845533…`) so the crossing test is non-vacuous; wasm
+        clean. One HIGH (the mithril_quorum freshness/no-spend trust boundary) — NOT an F2 regression
+        (inherited from the batch, equivalence intact, cannot false-Unspent a truly-spent outpoint under
+        the assumption); the reviewer's slot-monotonicity fix was verified INCORRECT (the forged slot is
+        a forward jump any monotone check admits); handled honestly by SURFACING the assumption precisely
+        (WindowAssumptions::mithril_quorum + the follower Trust-boundary note) + folding the real
+        cryptographic closure into F4. One LOW (no cross-epoch terminal-verdict differential — the oracle
+        is single-epoch by construction; the verdict logic is epoch-blind so no divergence is
+        constructible) noted for a future vector.
   - [ ] F3 — rollback truncation + EVICTION-AS-FINALIZATION (lib). BlockFact ring
         {height,slot,block_hash,created_here,spending_txid} capped k=2160 (~180KB). CRITIQUE FIX
         (the flagship case hits the cap in ~12h — naive survivor-recompute makes finalized facts
@@ -715,6 +730,16 @@ needs a row in Evidence.
   - [ ] F4 — two-region honesty + re_anchor (lib). SpendRegion{MithrilCertified, HeaderVouched} added
         to WatchVerdict::SpentObserved (batch AND follower; correct the shipped src/window.rs:207 +
         ffi.rs "authoritative regardless of freshness" docs — true only in the certified region).
+        F2-RED-TEAM HIGH FOLDED IN (the mithril_quorum "surfaced-not-verified" boundary): the read
+        path binds NO served block to the certified tx root and checks NO leader-eligibility threshold
+        (no stake distribution), so a colluding registered producer can forge a no-spend OR a fresh
+        as_of_slot below the anchor — freshness is NOT independent of mithril_quorum. F2 documented this
+        (WindowAssumptions::mithril_quorum + the follower Trust-boundary note); F4/N is where it can be
+        CLOSED, not just surfaced: bind each in-region served block to the certified set (an inclusion
+        proof per block, OR thread the anchor's SLOT into CertifiedTransactions so an in-region block
+        with slot > anchor_slot is rejected as inconsistent — decide in F4's design). Slot monotonicity
+        is NOT the fix (a forged recent slot is a forward jump). The mithril_quorum bit's C-ABI doc
+        (ffi.rs) also gets this sharpened wording here (F5 owns the header regen).
         CRITIQUE FIX (CRITICAL — height comparison alone is UNSOUND for the upgrade: a valid orphaned
         sibling block below the anchor height is not the certified chain): HeaderVouched →
         MithrilCertified upgrades ONLY on a verified INCLUSION PROOF of the spending tx against the
