@@ -150,4 +150,6 @@ The one trusted input is the pinned genesis verification key. Everything else is
 
 ## License
 
-No license is declared yet. Copyright © Flux Point Studios. Please contact the maintainers before use in a derived work.
+Licensed under the [Apache License, Version 2.0](LICENSE). Copyright © 2026 Flux Point Studios.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work by you shall be licensed as above, without any additional terms or conditions.
