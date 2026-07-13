@@ -14,9 +14,9 @@
 //! block is visible to a later spend); batching many blocks per commit is a bootstrap-speed
 //! optimisation, not a correctness one, and is left to T3.
 
-use redb::{Database, ReadableTableMetadata, TableDefinition};
+use redb::{Database, ReadableTableMetadata, TableDefinition, WriteTransaction};
 use sextant::utxo::OutPoint;
-use sextant::utxoset::{StoreError, UtxoStore};
+use sextant::utxoset::{StoreError, UtxoStore, UtxoTxn};
 
 const UTXO: TableDefinition<&[u8], ()> = TableDefinition::new("utxo");
 
@@ -38,8 +38,11 @@ pub struct RedbUtxoStore {
 }
 
 impl RedbUtxoStore {
-    /// Create (or truncate to) a fresh store at `path`.
+    /// Create a FRESH, empty store at `path`, discarding any existing file (redb's own
+    /// `Database::create` opens an existing database rather than truncating, so a stale file is
+    /// removed first — a from-genesis bootstrap must not inherit old outpoints).
     pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self, StoreError> {
+        let _ = std::fs::remove_file(path.as_ref());
         let db = Database::create(path).map_err(store_err)?;
         // Materialise the table so later read transactions can open it.
         let txn = db.begin_write().map_err(store_err)?;
@@ -56,44 +59,53 @@ impl RedbUtxoStore {
 }
 
 impl UtxoStore for RedbUtxoStore {
+    type Txn<'s> = RedbTxn;
+
+    fn transaction(&mut self) -> Result<RedbTxn, StoreError> {
+        Ok(RedbTxn {
+            txn: self.db.begin_write().map_err(store_err)?,
+        })
+    }
+
     fn contains(&self, o: &OutPoint) -> Result<bool, StoreError> {
         let txn = self.db.begin_read().map_err(store_err)?;
         let table = txn.open_table(UTXO).map_err(store_err)?;
         Ok(table.get(key(o).as_slice()).map_err(store_err)?.is_some())
     }
 
-    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
-        let txn = self.db.begin_write().map_err(store_err)?;
-        let newly;
-        {
-            let mut table = txn.open_table(UTXO).map_err(store_err)?;
-            newly = table
-                .insert(key(o).as_slice(), ())
-                .map_err(store_err)?
-                .is_none();
-        }
-        txn.commit().map_err(store_err)?;
-        Ok(newly)
-    }
-
-    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
-        let txn = self.db.begin_write().map_err(store_err)?;
-        let was_present;
-        {
-            let mut table = txn.open_table(UTXO).map_err(store_err)?;
-            was_present = table
-                .remove(key(o).as_slice())
-                .map_err(store_err)?
-                .is_some();
-        }
-        txn.commit().map_err(store_err)?;
-        Ok(was_present)
-    }
-
     fn len(&self) -> Result<usize, StoreError> {
         let txn = self.db.begin_read().map_err(store_err)?;
         let table = txn.open_table(UTXO).map_err(store_err)?;
         Ok(table.len().map_err(store_err)? as usize)
+    }
+}
+
+/// A redb write transaction. `insert`/`remove` accumulate in the underlying `WriteTransaction`
+/// (read-your-writes within it, so an in-block chain resolves); `commit` persists them all
+/// atomically, and dropping without commit aborts — redb rolls the whole transaction back.
+pub struct RedbTxn {
+    txn: WriteTransaction,
+}
+
+impl UtxoTxn for RedbTxn {
+    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        let mut table = self.txn.open_table(UTXO).map_err(store_err)?;
+        Ok(table
+            .insert(key(o).as_slice(), ())
+            .map_err(store_err)?
+            .is_none())
+    }
+
+    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        let mut table = self.txn.open_table(UTXO).map_err(store_err)?;
+        Ok(table
+            .remove(key(o).as_slice())
+            .map_err(store_err)?
+            .is_some())
+    }
+
+    fn commit(self) -> Result<(), StoreError> {
+        self.txn.commit().map_err(store_err)
     }
 }
 
@@ -116,16 +128,36 @@ mod tests {
     }
 
     #[test]
-    fn set_semantics_match_the_trait_contract() {
+    fn txn_set_semantics_match_the_trait_contract() {
         let (mut s, _dir) = store();
-        assert!(s.insert(&op(1, 0)).unwrap(), "newly inserted");
-        assert!(!s.insert(&op(1, 0)).unwrap(), "second insert is not new");
-        assert!(s.contains(&op(1, 0)).unwrap());
-        assert!(!s.contains(&op(2, 0)).unwrap());
+        {
+            let mut txn = s.transaction().unwrap();
+            assert!(txn.insert(&op(1, 0)).unwrap(), "newly inserted");
+            assert!(!txn.insert(&op(1, 0)).unwrap(), "second insert is not new");
+            // read-your-writes within the transaction:
+            assert!(txn.remove(&op(1, 0)).unwrap(), "was present in-txn");
+            assert!(!txn.remove(&op(1, 0)).unwrap(), "already gone in-txn");
+            assert!(txn.insert(&op(2, 0)).unwrap());
+            txn.commit().unwrap();
+        }
+        assert!(s.contains(&op(2, 0)).unwrap());
+        assert!(!s.contains(&op(1, 0)).unwrap());
         assert_eq!(s.len().unwrap(), 1);
-        assert!(s.remove(&op(1, 0)).unwrap(), "was present");
-        assert!(!s.remove(&op(1, 0)).unwrap(), "already gone");
-        assert!(s.is_empty().unwrap());
+    }
+
+    #[test]
+    fn dropping_a_transaction_aborts_it() {
+        let (mut s, _dir) = store();
+        {
+            let mut txn = s.transaction().unwrap();
+            txn.insert(&op(9, 9)).unwrap();
+            // dropped without commit -> abort, nothing persists
+        }
+        assert!(
+            !s.contains(&op(9, 9)).unwrap(),
+            "aborted insert did not persist"
+        );
+        assert_eq!(s.len().unwrap(), 0);
     }
 
     /// The redb store drives the SAME sans-io engine as `MemStore`: apply a block, membership
@@ -228,7 +260,9 @@ mod tests {
         let path = dir.path().join("utxo.redb");
         {
             let mut s = RedbUtxoStore::create(&path).unwrap();
-            s.insert(&op(7, 3)).unwrap();
+            let mut txn = s.transaction().unwrap();
+            txn.insert(&op(7, 3)).unwrap();
+            txn.commit().unwrap();
         }
         let s = RedbUtxoStore::open(&path).unwrap();
         assert!(s.contains(&op(7, 3)).unwrap());
