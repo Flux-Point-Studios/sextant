@@ -11,10 +11,12 @@
 //!
 //! Each watch runs its own follow task (one relay connection): simple and correct for the
 //! handful of outpoints a consumer tracks at a time, with no live-stream join race. A
-//! genesis-anchored re-anchor to a fresh aggregator certificate (which would lift
-//! `mithril_quorum` to true for the not-yet-tip region) is a later refinement; v1 pins the
-//! committed genesis-anchored anchor, so a live-tip watch is honestly `mithril_quorum=false`
-//! (header-vouched) until then.
+//! background task (F6d) polls the Mithril aggregator, splices the short fresh extension
+//! onto the pinned committed genesis→tip base, verifies it to the genesis key, and swaps in
+//! the fresher certified anchor; each watch's next publish re-anchors to it, so an outpoint
+//! that has aged into the newly certified region reports `mithril_quorum=true`. A watch
+//! whose tip is still ABOVE the freshest certified block is honestly `mithril_quorum=false`
+//! (header-vouched) until the next poll certifies through it.
 //!
 //!   cargo run -p sentry --features daemon --bin sextant-watchd    # listens on :8477
 //!   curl -XPOST :8477/watch -d '{"tx_id":"<hex64>","index":0}'
@@ -33,14 +35,16 @@ use axum::{Json, Router};
 use pallas_network::miniprotocols::Point;
 use pallas_network::miniprotocols::chainsync::NextResponse;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use sentry::transport::{
-    self, PREPROD_EPOCH_LEN, blockfetch_range, certified_anchor, connect, epoch_nonce,
-    header_point, koios_tx_point, preprod_schedule, vectors_dir,
+    self, PREPROD_EPOCH_LEN, anchor_from_chain, blockfetch_range, connect, epoch_nonce,
+    fetch_fresh_anchor, header_point, koios_tx_point, load_committed_base, preprod_schedule,
+    vectors_dir,
 };
 use sentry::{DriveOutcome, SyncEvent, bootstrap, drive};
 use sextant::follow::SlotSchedule;
+use sextant::mithril::Certificate;
 use sextant::utxo::{CertifiedTransactions, OutPoint};
 use sextant::window::{Freshness, WatchBasis, WatchVerdict};
 
@@ -72,26 +76,42 @@ const MAX_WATCHES: usize = 512;
 
 struct App {
     watches: Mutex<HashMap<(String, u16), VerdictView>>,
-    anchor: CertifiedTransactions,
+    /// The current genesis-anchored certified anchor, swapped in by [`re_anchor_loop`] as
+    /// the chain advances. `RwLock<Arc<_>>` so a follow task reads a cheap snapshot without
+    /// blocking the periodic re-anchor writer.
+    anchor: RwLock<Arc<CertifiedTransactions>>,
+    /// The committed genesis→tip base and its pinned genesis vkey — the trust root the live
+    /// re-anchor splices its short aggregator extension onto (never re-walked to genesis).
+    base: Vec<Certificate>,
+    genesis_vkey: [u8; 32],
     schedule: SlotSchedule,
     http: reqwest::Client,
 }
 
+/// How often to poll the aggregator for a fresher certified anchor.
+const RE_ANCHOR_POLL: Duration = Duration::from_secs(120);
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let anchor = certified_anchor(&vectors_dir())?;
+    let (base, genesis_vkey) = load_committed_base(&vectors_dir())?;
+    let anchor0 = anchor_from_chain(&base, &genesis_vkey)?;
     eprintln!(
-        "sextant-watchd: genesis-anchored certified block {} (epoch {})",
-        anchor.block_number, anchor.epoch
+        "sextant-watchd: genesis-anchored certified block {} (epoch {}); polling for fresher every {}s",
+        anchor0.block_number,
+        anchor0.epoch,
+        RE_ANCHOR_POLL.as_secs(),
     );
     let app = Arc::new(App {
         watches: Mutex::new(HashMap::new()),
-        anchor,
+        anchor: RwLock::new(Arc::new(anchor0)),
+        base,
+        genesis_vkey,
         schedule: preprod_schedule(),
         http: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?,
     });
+    tokio::spawn(re_anchor_loop(app.clone()));
 
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
@@ -150,10 +170,22 @@ async fn watch(State(app): State<Arc<App>>, Json(req): Json<WatchReq>) -> impl I
     };
     tokio::spawn(async move {
         if let Err(e) = follow_watch(app2.clone(), key.clone(), outpoint).await {
+            // A dead follow task must serve a CLEAN stalled — a REFUSE — never a stale
+            // no-spend and never a Frankenstein view keeping spend fields from the last
+            // publish beside a `stalled` status. Keep only the last-known tip slot so a
+            // consumer can still see how fresh the abandoned answer was.
             let mut w = app2.watches.lock().await;
             if let Some(v) = w.get_mut(&key) {
-                v.status = "stalled".into();
-                v.stall_reason = format!("transport: {e}");
+                *v = VerdictView {
+                    status: "stalled".into(),
+                    as_of_height: 0,
+                    as_of_slot: 0,
+                    tip_slot: v.tip_slot,
+                    mithril_quorum: false,
+                    spend_at_height: 0,
+                    spend_region: String::new(),
+                    stall_reason: format!("transport: {e}"),
+                };
             }
         }
     });
@@ -194,12 +226,14 @@ async fn follow_watch(app: Arc<App>, key: (String, u16), watch: OutPoint) -> Res
     };
     let create_height = transport::block_number(&creating_block)?;
 
-    // 2. Stage the creating epoch's nonce and bootstrap the follower on the creating block.
+    // 2. Stage the creating epoch's nonce and bootstrap the follower on the creating block,
+    //    against a snapshot of the current certified anchor (publish re-anchors it forward).
     let create_epoch = app.schedule.epoch_of(header_slot(&creating_block)?);
     let mut staged = vec![(create_epoch, epoch_nonce(&app.http, create_epoch).await?)];
+    let anchor0 = app.anchor.read().await.clone();
     let mut follower = bootstrap(
         watch,
-        &app.anchor,
+        anchor0.as_ref(),
         create_height,
         app.schedule,
         &staged,
@@ -213,11 +247,16 @@ async fn follow_watch(app: Arc<App>, key: (String, u16), watch: OutPoint) -> Res
         .await
         .context("find_intersect")?;
     loop {
+        // `request_or_await_next` (not `request_next`): at the tip the server takes agency
+        // (MustReply) and the client must WAIT for the next block via `recv_while_must_reply`.
+        // Calling `request_next` there sends a request while the client has no agency — a
+        // chain-sync protocol violation the relay answers by dropping the connection. This
+        // dispatches on agency, so a caught-up follower blocks cleanly for the next block.
         match peer
             .chainsync()
-            .request_next()
+            .request_or_await_next()
             .await
-            .context("request_next")?
+            .context("request_or_await_next")?
         {
             NextResponse::RollForward(header, tip) => {
                 let point = header_point(
@@ -243,14 +282,14 @@ async fn follow_watch(app: Arc<App>, key: (String, u16), watch: OutPoint) -> Res
                     DriveOutcome::Refused(_) => { /* fail-closed: the verdict stays as-is */ }
                     DriveOutcome::RolledBack(_) => unreachable!(),
                 }
-                publish(&app, &key, &follower, tip_slot(&tip)).await;
+                publish(&app, &key, &mut follower, tip_slot(&tip)).await;
             }
             NextResponse::RollBackward(point, tip) => {
                 let mut hash = [0u8; 32];
-                if let Point::Specific(_, h) = &point {
-                    if h.len() == 32 {
-                        hash.copy_from_slice(h);
-                    }
+                if let Point::Specific(_, h) = &point
+                    && h.len() == 32
+                {
+                    hash.copy_from_slice(h);
                 }
                 drive(
                     &mut follower,
@@ -259,23 +298,32 @@ async fn follow_watch(app: Arc<App>, key: (String, u16), watch: OutPoint) -> Res
                         hash,
                     },
                 );
-                publish(&app, &key, &follower, tip_slot(&tip)).await;
+                publish(&app, &key, &mut follower, tip_slot(&tip)).await;
             }
             NextResponse::Await => {
-                // Caught up to the tip; request_next again blocks until the next block.
+                // Caught up to the tip: the server now holds agency. The next loop turn's
+                // `request_or_await_next` sees no client agency and blocks in
+                // `recv_while_must_reply` until the server sends the next block.
                 continue;
             }
         }
     }
 }
 
-/// Project the follower's current verdict into the shared view.
+/// Re-anchor the follower to the freshest certified anchor, then project its verdict into
+/// the shared view. Re-anchoring here (monotone: `re_anchor` never regresses the height)
+/// is what lets a watch that has aged into a freshly certified region read
+/// `mithril_quorum=true` — the anchor the periodic [`re_anchor_loop`] advanced now covers
+/// this watch's tip. No spend proof is supplied (`None`): a no-spend upgrades by height
+/// coverage, and a spend NEVER upgrades to certified without its inclusion proof.
 async fn publish(
     app: &Arc<App>,
     key: &(String, u16),
-    follower: &sextant::follow::WindowFollower,
+    follower: &mut sextant::follow::WindowFollower,
     tip_slot: u64,
 ) {
+    let anchor = app.anchor.read().await.clone();
+    follower.re_anchor(anchor.as_ref(), None);
     let freshness = Freshness {
         slot_now: tip_slot,
         max_lag: 3 * PREPROD_EPOCH_LEN,
@@ -283,6 +331,28 @@ async fn publish(
     let view = project(&follower.verdict(freshness), tip_slot);
     if let Some(v) = app.watches.lock().await.get_mut(key) {
         *v = view;
+    }
+}
+
+/// Poll the aggregator for a fresher genesis-anchored certified anchor and swap it in. Each
+/// watch's next [`publish`] re-anchors to it, so an outpoint that has aged into the newly
+/// certified region reports `mithril_quorum=true`. A fetch/verify failure keeps the current
+/// anchor: freshness degrades, safety never does — the daemon can only ever serve a verdict
+/// against an anchor it re-verified to the pinned genesis key.
+async fn re_anchor_loop(app: Arc<App>) {
+    loop {
+        tokio::time::sleep(RE_ANCHOR_POLL).await;
+        match fetch_fresh_anchor(&app.http, &app.base, &app.genesis_vkey).await {
+            Ok(fresh) => {
+                let cur = app.anchor.read().await.block_number;
+                if fresh.block_number > cur {
+                    let fb = fresh.block_number;
+                    *app.anchor.write().await = Arc::new(fresh);
+                    eprintln!("sextant-watchd: re-anchored to certified block {fb} (was {cur})");
+                }
+            }
+            Err(e) => eprintln!("sextant-watchd: re-anchor skipped, kept current anchor: {e}"),
+        }
     }
 }
 
