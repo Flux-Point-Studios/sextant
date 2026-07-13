@@ -65,6 +65,11 @@ struct VerdictView {
     stall_reason: String,
 }
 
+/// Cap on concurrently-watched outpoints: each spawns a follow task holding a relay
+/// connection, so an unbounded registry is an availability DoS. A consumer tracking a
+/// handful of live orders stays well under it; over it, `POST /watch` is rejected 429.
+const MAX_WATCHES: usize = 512;
+
 struct App {
     watches: Mutex<HashMap<(String, u16), VerdictView>>,
     anchor: CertifiedTransactions,
@@ -121,6 +126,9 @@ async fn watch(State(app): State<Arc<App>>, Json(req): Json<WatchReq>) -> impl I
     if watches.contains_key(&key) {
         let v = watches.get(&key).cloned().unwrap();
         return (StatusCode::OK, Json(v)).into_response();
+    }
+    if watches.len() >= MAX_WATCHES {
+        return (StatusCode::TOO_MANY_REQUESTS, "watch capacity reached").into_response();
     }
     let pending = VerdictView {
         status: "pending".into(),
@@ -332,4 +340,63 @@ fn header_slot(block: &[u8]) -> Result<u64> {
     Ok(pallas_traverse::MultiEraBlock::decode(block)
         .context("decode block")?
         .slot())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sextant::window::{SpendRegion, StallReason, WatchBasis, WatchedTip, WindowAssumptions};
+
+    /// The verdict→JSON projection is the consumer's safety boundary: a `Stalled` or
+    /// `SpentObserved` follower verdict must NEVER read as `no_spend_observed`, and
+    /// `mithril_quorum` must default false outside a genuine no-spend. Pins all three arms
+    /// + the no-carryover rebuild.
+    #[test]
+    fn project_never_leaks_a_false_no_spend() {
+        // Unspent → no_spend_observed, quorum bit read from the basis.
+        let v = project(
+            &WatchVerdict::Unspent {
+                as_of: WatchedTip {
+                    anchor_height: 10,
+                    as_of_height: 9,
+                    as_of_slot: 900,
+                },
+                basis: WatchBasis::WatchedWindow(WindowAssumptions {
+                    mithril_quorum: true,
+                    data_complete: true,
+                }),
+            },
+            950,
+        );
+        assert_eq!(v.status, "no_spend_observed");
+        assert!(v.mithril_quorum);
+        assert_eq!((v.as_of_height, v.as_of_slot, v.tip_slot), (9, 900, 950));
+
+        // SpentObserved → spend_observed (NEVER no_spend); quorum defaults false.
+        let v = project(
+            &WatchVerdict::SpentObserved {
+                at_height: 5,
+                at_slot: 500,
+                spending_txid: [1u8; 32],
+                region: SpendRegion::HeaderVouched,
+            },
+            950,
+        );
+        assert_eq!(v.status, "spend_observed");
+        assert_ne!(v.status, "no_spend_observed");
+        assert_eq!(v.spend_at_height, 5);
+        assert!(!v.mithril_quorum);
+
+        // Stalled → stalled (NEVER no_spend); quorum defaults false.
+        let v = project(
+            &WatchVerdict::Stalled {
+                verified_through: 3,
+                reason: StallReason::WindowTooShort,
+            },
+            950,
+        );
+        assert_eq!(v.status, "stalled");
+        assert_ne!(v.status, "no_spend_observed");
+        assert!(!v.mithril_quorum);
+    }
 }
