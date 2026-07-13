@@ -13,26 +13,34 @@ publish = false
 name = "sentry"
 path = "src/lib.rs"
 
-# The live transport (F6b): a node-to-node chain-sync consumer that sources the
-# `SyncEvent`s the sans-io lib drives. Network-side, so it carries the async/relay
-# deps and turns on the sextant `mithril` feature (verify_chain_anchored for the
-# certified re-anchor); the lib stays default-graph.
+# The live transport demo (F6b): a bounded node-to-node chain-sync run proving the
+# follower over a real relay. Network-side (the `transport` feature).
 [[bin]]
 name = "sextant-sentry"
 path = "src/main.rs"
 required-features = ["transport"]
 
+# The watch-daemon (F6c): a long-running HTTP service that follows the chain live,
+# tracks watched outpoints (one follower each over the shared block feed), and serves
+# the windowed verdict over JSON — the first-consumer surface (e.g. adam-oc's fill
+# pre-flight). Network + HTTP.
+[[bin]]
+name = "sextant-watchd"
+path = "src/bin/watchd.rs"
+required-features = ["daemon"]
+
 [features]
-# Off by default so the sans-io lib + its mock gate build with zero network deps;
-# the binary opts in.
+# `transport` off by default so the sans-io lib + its mock gate build with zero network
+# deps; the binaries opt in. `daemon` adds the HTTP server on top of `transport`.
 transport = ["dep:tokio", "dep:pallas-network", "dep:pallas-traverse", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:hex", "dep:anyhow", "sextant/mithril"]
+daemon = ["transport", "dep:axum", "tokio/rt-multi-thread"]
 
 [dependencies]
-# The verifier core. The lib composes only the default (wasm-safe) graph; the binary
-# enables sextant/mithril via the `transport` feature for the anchored cert verify.
+# The verifier core. The lib composes only the default (wasm-safe) graph; the binaries
+# enable sextant/mithril via the `transport` feature for the anchored cert verify.
 sextant = { path = "../.." }
 # Transport-only (the exact harvest dep set; behind the `transport` feature).
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"], optional = true }
 pallas-network = { version = "1.1.1", optional = true }
 pallas-traverse = { version = "1.1.1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
@@ -40,6 +48,8 @@ serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }
 anyhow = { version = "1", optional = true }
+# Daemon-only HTTP server (behind the `daemon` feature).
+axum = { version = "0.7", optional = true }
 
 [dev-dependencies]
 hex = "0.4"

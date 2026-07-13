@@ -24,6 +24,12 @@
 //! out of this sans-io core: the follower's `re_anchor` and `verdict(freshness)` are
 //! called directly with the values the transport computes.
 
+/// Reusable node-to-node + Koios + aggregator transport primitives, shared by the demo
+/// and the watch-daemon binaries. Behind the `transport` feature so the default sans-io
+/// lib (and its mock gate) build with zero network deps.
+#[cfg(feature = "transport")]
+pub mod transport;
+
 use sextant::follow::{AppendRefusal, Rollback, SlotSchedule, WindowFollower};
 use sextant::utxo::{CertifiedTransactions, OutPoint};
 
