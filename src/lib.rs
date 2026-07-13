@@ -16,5 +16,6 @@ pub mod kes;
 pub mod mithril;
 pub mod nonce;
 pub mod utxo;
+pub mod utxoset;
 pub mod vrf;
 pub mod window;
