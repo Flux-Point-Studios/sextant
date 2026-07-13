@@ -37,6 +37,7 @@ use minicbor::Decoder;
 use crate::chain::{self, ChainError};
 use crate::hash::blake2b256;
 use crate::header::{BlockBodySpans, DecodeError, HeaderView};
+use crate::inclusion::verify_tx_inclusion;
 use crate::utxo::{CertifiedTransactions, OutPoint, decode_spends, output_exists};
 
 /// Why a block's transaction bodies did not bind to its header commitment.
@@ -271,6 +272,37 @@ pub struct Freshness {
     pub max_lag: u64,
 }
 
+/// Which trust region a spend of the watched outpoint was observed in — the two-region
+/// honesty a definite [`WatchVerdict::SpentObserved`] carries.
+///
+/// A spend seen in a header-verified, hash-linked, body-committed window is
+/// [`SpendRegion::HeaderVouched`] by default: the block's authorship (opcert +
+/// leader-VRF + KES), its hash link, and its body commitment are all verified, but the
+/// block is NOT bound to the Mithril-certified transaction set — so, exactly like the
+/// [`WindowAssumptions::mithril_quorum`] a no-spend verdict rests on, a colluding
+/// registered block producer could in principle have forged it. It becomes
+/// [`SpendRegion::MithrilCertified`] ONLY when the spending transaction is proven a
+/// member of the genesis-anchored certified set by a verified inclusion proof against
+/// the certified Merkle root (see [`certify_spend_region`]).
+///
+/// Height NEVER upgrades a spend: a valid orphaned sibling block below the certified
+/// anchor height is not the certified chain, so a spend's certified-region status is a
+/// cryptographic fact about set membership, never a height comparison.
+/// `#[non_exhaustive]` so a future region refinement stays additive at the consumer
+/// boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SpendRegion {
+    /// The spending transaction is proven a member of the genesis-anchored
+    /// Mithril-certified transaction set (a verified inclusion proof recomputing to the
+    /// certified Merkle root). Quorum-backed: unforgeable without breaking Mithril.
+    MithrilCertified,
+    /// The spend was observed in a header-verified, hash-linked, body-committed block
+    /// that is NOT bound to the Mithril-certified set. Authoritative against the verified
+    /// window, but rests on the surfaced `mithril_quorum` assumption — not quorum-backed.
+    HeaderVouched,
+}
+
 /// The verdict of a windowed spend check. Three terminal shapes, and only one is
 /// `Unspent`: collapsing `SpentObserved` (a definite refuse) into `Stalled` (a
 /// non-answer), or either into `Unspent`, is the cardinal honesty failure this type
@@ -286,8 +318,12 @@ pub enum WatchVerdict {
         /// The trust basis, carrying the surfaced assumptions.
         basis: WatchBasis,
     },
-    /// A verified, body-committed block in the window spends the watched outpoint —
-    /// a definite refuse, authoritative regardless of freshness.
+    /// A verified, body-committed block in the window spends the watched outpoint — a
+    /// definite refuse. Authoritative against the verified window regardless of
+    /// freshness; whether that authority is Mithril-quorum-backed or merely
+    /// header-vouched is carried in `region` (see [`SpendRegion`]). A `HeaderVouched`
+    /// spend rests on the same `mithril_quorum` assumption a no-spend verdict does; only
+    /// a `MithrilCertified` spend is authoritative independent of that assumption.
     SpentObserved {
         /// The block number the spend was observed in.
         at_height: u64,
@@ -295,6 +331,8 @@ pub enum WatchVerdict {
         at_slot: u64,
         /// The id of the transaction that consumed the outpoint.
         spending_txid: [u8; 32],
+        /// Which trust region the spend was observed in.
+        region: SpendRegion,
     },
     /// The window could not answer: a gap, a failed body-commitment, an unverified
     /// segment, an unobserved creation, or a stale tip. A non-answer is a REFUSE.
@@ -385,10 +423,14 @@ pub fn verify_watched_window(
             create_seen = true;
         }
         if let Some(spending_txid) = facts.spent_by {
+            // The batch binds no served block to the certified transaction set, so it
+            // never upgrades a spend past HeaderVouched; the follower does, on an
+            // inclusion proof supplied at re-anchor (see [`certify_spend_region`]).
             return WatchVerdict::SpentObserved {
                 at_height: facts.view.block_number,
                 at_slot: facts.view.slot,
                 spending_txid,
+                region: SpendRegion::HeaderVouched,
             };
         }
         start_number.get_or_insert(facts.view.block_number);
@@ -438,6 +480,30 @@ fn stalled(verified_through: u64, reason: StallReason) -> WatchVerdict {
     WatchVerdict::Stalled {
         verified_through,
         reason,
+    }
+}
+
+/// Classify the trust region a spend belongs to. Returns [`SpendRegion::MithrilCertified`]
+/// iff `proof_hex` is a valid Mithril inclusion proof of `spending_txid` that recomputes
+/// to `anchor`'s certified transaction Merkle root — the ONLY thing that upgrades a spend
+/// out of [`SpendRegion::HeaderVouched`]. Height is deliberately not an input: a spend's
+/// certified-region status is set membership proven cryptographically, never a height
+/// comparison (a valid orphaned sibling below the anchor height is not the certified
+/// chain).
+///
+/// Fail-closed: a malformed proof, a proof for a different transaction, or one that does
+/// not recompute to this anchor's root all leave the spend [`SpendRegion::HeaderVouched`]
+/// — never a false certified claim.
+pub fn certify_spend_region(
+    spending_txid: &[u8; 32],
+    anchor: &CertifiedTransactions,
+    proof_hex: &[u8],
+) -> SpendRegion {
+    match anchor.merkle_root_bytes() {
+        Some(root) if verify_tx_inclusion(proof_hex, spending_txid, &root).is_ok() => {
+            SpendRegion::MithrilCertified
+        }
+        _ => SpendRegion::HeaderVouched,
     }
 }
 

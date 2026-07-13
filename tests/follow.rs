@@ -26,10 +26,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sextant::follow::{AppendRefusal, Rollback, SlotSchedule, WindowFollower};
+use sextant::follow::{AppendRefusal, ReAnchor, Rollback, SlotSchedule, WindowFollower};
 use sextant::header::HeaderView;
 use sextant::utxo::{CertifiedTransactions, OutPoint};
-use sextant::window::{Freshness, StallReason, WatchVerdict, verify_watched_window};
+use sextant::window::{
+    Freshness, SpendRegion, StallReason, WatchBasis, WatchVerdict, verify_watched_window,
+};
 
 /// Epoch-300 active nonce (Koios); the preprod window's shared epoch nonce.
 const EPOCH_300_ETA0: &str = "aa845533c5f8631a864010ae89c23ee1cee0ed7717e4ac00a25ad50f4eeb6c30";
@@ -704,5 +706,124 @@ fn rollback_beyond_the_window_poisons_the_follower() {
             }
         ),
         "a beyond-window rollback poisons the follower fail-closed",
+    );
+}
+
+// ---- F4: two-region honesty (above-anchor Unspent) + re_anchor ----
+
+/// A follower anchored mid-window: the verified tip sits ABOVE the certified anchor
+/// height, so the run extends past the batch domain. Rather than the batch's
+/// `Stalled{TipAboveAnchor}`, the follower answers `Unspent` with `mithril_quorum:false`
+/// — the header-verified region is not quorum-backed, surfaced honestly on the basis,
+/// never faked as a certified answer. `re_anchor` forward past the tip then lifts the
+/// quorum bit back to `true`: the certified region has grown to cover the tip.
+#[test]
+fn follower_above_anchor_is_unspent_with_mithril_quorum_false() {
+    let window = preprod_window();
+    // Anchor certifies only up to 4_921_930, below the window tip 4_921_937.
+    let mid = CertifiedTransactions {
+        merkle_root: anchor().merkle_root,
+        epoch: 300,
+        block_number: 4_921_930,
+    };
+    let mut follower = WindowFollower::new(watched(0), &mid, REQUIRE_THROUGH, preprod_schedule());
+    follower.supply_next_eta0(300, eta0());
+    for b in &window {
+        follower.append(b).expect("window block accepted");
+    }
+
+    match follower.verdict(fresh()) {
+        WatchVerdict::Unspent { as_of, basis } => {
+            assert_eq!(as_of.as_of_height, 4_921_937, "as-of the verified tip");
+            assert_eq!(as_of.anchor_height, 4_921_930, "the mid-window anchor");
+            let WatchBasis::WatchedWindow(a) = basis else {
+                panic!("unexpected basis {basis:?}");
+            };
+            assert!(
+                !a.mithril_quorum,
+                "a tip above the certified anchor is NOT quorum-backed",
+            );
+            assert!(a.data_complete, "the body stream is still complete");
+        }
+        other => panic!("expected above-anchor Unspent, got {other:?}"),
+    }
+
+    // Advance the certified anchor past the tip: the region is now quorum-backed.
+    assert_eq!(
+        follower.re_anchor(&anchor(), None),
+        ReAnchor::Advanced,
+        "re_anchor forward to 4_927_469 advances the certified anchor",
+    );
+    match follower.verdict(fresh()) {
+        WatchVerdict::Unspent { as_of, basis } => {
+            assert_eq!(as_of.anchor_height, 4_927_469, "the re-anchored height");
+            let WatchBasis::WatchedWindow(a) = basis else {
+                panic!("unexpected basis {basis:?}");
+            };
+            assert!(
+                a.mithril_quorum,
+                "the tip is now at or below the certified anchor",
+            );
+        }
+        other => panic!("expected quorum-backed Unspent after re_anchor, got {other:?}"),
+    }
+}
+
+/// `re_anchor` is monotone in block number (a lower anchor is refused, so the certified
+/// region never shrinks) and NEVER upgrades a spend by height alone: a supplied proof
+/// upgrades the observed spend's region ONLY if it attests THAT spend against the new
+/// anchor's certified root. The window's spend `760076f2…` is not a leaf of the one
+/// committed proof (which attests `242f2037…`), so it stays `HeaderVouched` — a wrong
+/// proof can never launder a spend into the certified region.
+#[test]
+fn re_anchor_is_monotone_and_never_upgrades_a_spend_on_a_wrong_proof() {
+    let window = preprod_window();
+    let mut follower = preprod_follower(watched(1), eta0());
+    for b in &window {
+        follower.append(b).expect("window block accepted");
+    }
+    // The spend is observed, HeaderVouched (no proof yet).
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::SpentObserved {
+                region: SpendRegion::HeaderVouched,
+                ..
+            }
+        ),
+        "an observed spend starts HeaderVouched",
+    );
+
+    // A lower anchor is refused: the certified region never shrinks.
+    let lower = CertifiedTransactions {
+        merkle_root: anchor().merkle_root,
+        epoch: 300,
+        block_number: 4_921_900,
+    };
+    assert_eq!(follower.re_anchor(&lower, None), ReAnchor::NotMonotone);
+
+    // Re-anchor with the one real committed proof — which attests 242f2037…, NOT the
+    // window's spend 760076f2… — leaves the region HeaderVouched (NotIncluded).
+    let bytes = fs::read(vectors_dir().join("mithril-txproof.json")).expect("read txproof");
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("parse txproof");
+    let proof = v["certified_transactions"][0]["proof"]
+        .as_str()
+        .expect("proof field")
+        .as_bytes()
+        .to_vec();
+    assert_eq!(
+        follower.re_anchor(&anchor(), Some(&proof)),
+        ReAnchor::Advanced,
+        "a proof that does not attest the observed spend advances without certifying it",
+    );
+    assert!(
+        matches!(
+            follower.verdict(fresh()),
+            WatchVerdict::SpentObserved {
+                region: SpendRegion::HeaderVouched,
+                ..
+            }
+        ),
+        "a wrong-tx proof never launders the spend into the certified region",
     );
 }

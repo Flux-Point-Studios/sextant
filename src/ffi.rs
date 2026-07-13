@@ -676,7 +676,11 @@ pub unsafe extern "C" fn sextant_verify_utxo_read(
 /// verified window (the honest windowed verdict — read [`SextantWatchVerdict`]'s scope).
 pub const SEXTANT_WATCH_NO_SPEND_OBSERVED: u8 = 1;
 /// `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
-/// spend of the watched outpoint — a definite refuse, authoritative regardless of freshness.
+/// spend of the watched outpoint — a definite refuse. Authoritative against the verified
+/// window regardless of freshness; whether that authority is Mithril-quorum-backed or
+/// merely header-vouched is the two-region distinction the Rust `SpendRegion` carries and
+/// a later ABI slice surfaces here. Until then treat it as resting on the same
+/// `mithril_quorum` assumption a no-spend answer does: a definite refuse either way.
 pub const SEXTANT_WATCH_SPEND_OBSERVED: u8 = 2;
 /// `SextantWatchVerdict.kind`: the window could not answer (a gap, a failed body
 /// commitment, an unverified segment, an unobserved creation, a short or stale tip). A
@@ -693,6 +697,10 @@ pub const SEXTANT_WATCH_BASIS_WATCHED_WINDOW: u8 = 1;
 
 /// `SextantWatchVerdict.assumptions` bit: the window sits inside a region a Mithril
 /// quorum certified (the tip is at or below the caller-supplied certified anchor height).
+/// SURFACED, not per-block verified: the read path binds no served block to the certified
+/// transaction root, so this bit means "trust the served chain is the certified one", not
+/// a proof of it — a consumer weighs it. When it is clear (an answer whose tip is above
+/// the certified anchor), the region is header-verified but NOT quorum-backed.
 pub const SEXTANT_WATCH_ASSUMPTION_MITHRIL_QUORUM: u8 = 1 << 0;
 /// `SextantWatchVerdict.assumptions` bit: the scanned segment is a header-verified,
 /// hash-linked, gap-free, body-committed run — a complete body stream over the window.
@@ -838,6 +846,9 @@ fn project_watch_verdict(v: WatchVerdict) -> SextantWatchVerdict {
             at_height,
             at_slot,
             spending_txid,
+            // The two-region distinction gets its own C-ABI field in a later slice; the
+            // ABI-3 struct does not yet carry it, so `region` is not projected here.
+            region: _,
         } => {
             out.kind = SEXTANT_WATCH_SPEND_OBSERVED;
             out.spend_at_height = at_height;
