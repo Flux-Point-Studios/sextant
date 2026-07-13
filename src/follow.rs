@@ -544,7 +544,15 @@ impl WindowFollower {
     ///
     /// The certified root fed to the inclusion check comes ONLY from `anchor`, which a
     /// caller obtains from a genesis-anchored `verify_chain_anchored` certificate — a
-    /// provider cannot inject a root the upgrade would trust.
+    /// provider cannot inject a root the upgrade would trust. The same discipline binds
+    /// `anchor.block_number`: it is a caller-asserted completeness bound (as in
+    /// [`WindowFollower::new`]), and it is what lifts a verdict's `mithril_quorum` bit from
+    /// false to true once the anchor covers the tip. A caller that hands `re_anchor` an
+    /// UNVERIFIED anchor with an inflated height would falsely lift that bit — so the
+    /// anchor's height, like its root, MUST come from a genesis-anchored verify (where the
+    /// block number is inside the signed certificate message), never from the block
+    /// provider. `re_anchor` cannot check this in the wasm-safe default graph; it surfaces
+    /// the assumption, exactly as [`crate::window::WindowAssumptions::mithril_quorum`] does.
     pub fn re_anchor(
         &mut self,
         anchor: &CertifiedTransactions,
