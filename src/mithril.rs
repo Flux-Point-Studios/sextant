@@ -121,22 +121,42 @@ impl Certificate {
     }
 
     /// The Cardano-transactions commitment this certificate certifies, if it is a
-    /// `CardanoTransactions` certificate: the `cardano_transactions_merkle_root`
-    /// protocol-message part bound to the `(epoch, block_number)` its
-    /// `signed_entity_type` names. `None` for any other signed entity — those
-    /// commit to no transaction set. Both fields are read from the certificate's
-    /// own hashed content, so on a verified certificate they cannot disagree with
-    /// what it signed.
+    /// `CardanoTransactions` certificate: the `cardano_transactions_merkle_root`,
+    /// `latest_block_number`, and `current_epoch` protocol-message parts. `None` for
+    /// any other signed entity — those commit to no transaction set.
+    ///
+    /// The frontier `(epoch, block_number)` is read from the protocol message, NOT from
+    /// `signed_entity_type`. The STM multi-signature signs `signed_message =
+    /// H(protocol_message)` ([`verify_standard`]), so only protocol-message parts are
+    /// stake-quorum authenticated. `signed_entity_type` is fed into the certificate's
+    /// content hash but not into `signed_message`, so its `(epoch, block_number)` copy is
+    /// authenticated only by the hash the aggregator itself computes — an untrusted
+    /// aggregator can inflate it, reseal the content hash, and leave the multi-signature
+    /// intact. Reading it would let that forged block number lift a verdict's
+    /// `mithril_quorum` bit for a tip the quorum never certified. On a genuine certificate
+    /// the two agree; here we trust only what was signed.
     pub fn certified_transactions(&self) -> Option<CertifiedTransactions> {
-        let (epoch, block_number) = match self.signed_entity_type {
-            SignedEntityType::CardanoTransactions(epoch, block_number) => (epoch, block_number),
-            _ => return None,
-        };
-        let merkle_root = self
-            .protocol_message
-            .message_parts
+        // Discriminant only: is this a CardanoTransactions certificate at all? The VALUES
+        // come from the signed parts below, so a forged discriminant fails closed (an MSD
+        // certificate carries none of these parts).
+        if !matches!(
+            self.signed_entity_type,
+            SignedEntityType::CardanoTransactions(..)
+        ) {
+            return None;
+        }
+        let parts = &self.protocol_message.message_parts;
+        let merkle_root = parts
             .get(&ProtocolMessagePartKey::CardanoTransactionsMerkleRoot)?
             .clone();
+        let epoch = parts
+            .get(&ProtocolMessagePartKey::CurrentEpoch)?
+            .parse()
+            .ok()?;
+        let block_number = parts
+            .get(&ProtocolMessagePartKey::LatestBlockNumber)?
+            .parse()
+            .ok()?;
         Some(CertifiedTransactions {
             merkle_root,
             epoch,
