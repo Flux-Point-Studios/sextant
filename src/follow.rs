@@ -28,9 +28,30 @@
 //! A withheld spending block STRUCTURALLY cannot advance the verified tip (its
 //! successor fails to link), so it collapses to a non-answer, never a false no-spend.
 //!
-//! F1 is single-epoch: every appended block is leader-verified against one `eta0`.
-//! Crossing an epoch boundary (a per-epoch nonce map) is a later follower slice; a
-//! block from another epoch is refused ([`AppendRefusal::Crypto`]) until then.
+//! ## Trust boundary (surfaced, not verified)
+//! Like the batch, the verdict rests on the surfaced `mithril_quorum` assumption (see
+//! [`crate::window::WindowAssumptions`]): the followed chain is TRUSTED to be the
+//! Mithril-certified one. The read path binds neither each block to the certified
+//! transaction root nor checks leader eligibility (it holds no stake distribution), so a
+//! provider colluding with a registered block producer could forge a valid-header chain
+//! that omits a spend, or advance `as_of_slot` with a recent slot on a stale run. Slot
+//! contiguity is not a defense here — a forged slot is a FORWARD jump, which any monotone
+//! check admits. The assumption is surfaced, never faked as a check; its closure is a
+//! Tier-2 certified-UTxO-set binding, not a follower change.
+//!
+//! ## Crossing epoch boundaries (F2)
+//! Each block's leader-VRF is checked against ITS epoch nonce, selected from a
+//! [`SlotSchedule`] (slot → epoch) and a small epoch → η0 map ([`WindowFollower::supply_next_eta0`]).
+//! Nonce selection is a per-block MAP LOOKUP, never a mutated "current nonce": a mutated
+//! current-nonce would leave a rollback below an epoch turn pointing at the wrong epoch's
+//! nonce, so re-appended pre-turn blocks would spuriously fail. [`WindowFollower::append`]
+//! only READS the nonce map — it never mutates it (nor does a refusal), so nonce state is
+//! independent of the block-tracking state a rollback truncates. A block whose epoch nonce
+//! has not been staged is refused [`AppendRefusal::EpochNonceUnavailable`] (fail-closed,
+//! liveness-only: it never advances the tip, and a later append after the nonce is staged
+//! still succeeds).
+
+use std::collections::BTreeMap;
 
 use crate::chain;
 use crate::header::HeaderView;
@@ -39,6 +60,44 @@ use crate::window::{
     Freshness, ScanFailure, StallReason, WatchBasis, WatchVerdict, WatchedTip, WindowAssumptions,
     scan_block_facts,
 };
+
+/// A Shelley-era slot→epoch schedule. Epochs are fixed-length, so one known
+/// `(epoch, epoch_first_slot)` anchor plus `epoch_length_slots` maps any slot to its
+/// epoch. The follower uses it to pick which epoch nonce a block's leader-VRF is checked
+/// against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotSchedule {
+    /// A known epoch number.
+    pub epoch: u64,
+    /// The first slot of `epoch`.
+    pub epoch_first_slot: u64,
+    /// The number of slots in every epoch (constant across the Shelley era).
+    pub epoch_length_slots: u64,
+}
+
+impl SlotSchedule {
+    /// The epoch a slot falls in. Total over all `u64` slots — a colluding elected leader
+    /// can sign any slot inside the KES-signed header body, so this must never panic; a
+    /// zero `epoch_length_slots` (a caller config error) collapses to the single anchor
+    /// epoch rather than dividing by zero.
+    pub fn epoch_of(&self, slot: u64) -> u64 {
+        let len = self.epoch_length_slots;
+        if len == 0 {
+            return self.epoch;
+        }
+        if slot >= self.epoch_first_slot {
+            self.epoch
+                .saturating_add((slot - self.epoch_first_slot) / len)
+        } else {
+            // Slots below the anchor: round the distance up so the anchor's own first
+            // slot is epoch, one slot earlier is epoch − 1, etc. Computed without
+            // `below + len` (which could overflow) via a remainder correction.
+            let below = self.epoch_first_slot - slot;
+            let epochs_below = below / len + u64::from(!below.is_multiple_of(len));
+            self.epoch.saturating_sub(epochs_below)
+        }
+    }
+}
 
 /// The outcome of a successful [`WindowFollower::append`]: the block was verified and
 /// became the follower's new verified tip.
@@ -80,23 +139,36 @@ pub enum AppendRefusal {
     BodyCommitmentMismatch,
     /// The block's body stream was not a decodable transaction sequence.
     MalformedBody,
+    /// The epoch nonce for this block's epoch had not been staged via
+    /// [`WindowFollower::supply_next_eta0`] when the block arrived — the follower crossed
+    /// an epoch boundary before its η0 was supplied. Fail-closed and liveness-only: the
+    /// block does not advance the tip, and a later append after the nonce is staged still
+    /// succeeds. It has no single-epoch batch counterpart (the batch verifies one epoch
+    /// under one supplied nonce), so [`AppendRefusal::as_stall_reason`] maps it to `None`.
+    EpochNonceUnavailable,
 }
 
 impl AppendRefusal {
-    /// The batch [`StallReason`] this refusal corresponds to. A decode, link, or crypto
-    /// refusal collapses to [`StallReason::BrokenSegment`] — exactly as
+    /// The batch [`StallReason`] this refusal corresponds to, when one exists. A decode,
+    /// link, or crypto refusal collapses to [`StallReason::BrokenSegment`] — exactly as
     /// [`crate::chain::verify_segment`] collapses a decode/link/opcert/VRF/KES failure —
     /// while a body-side refusal keeps its distinct reason. This is the pinned
     /// equivalence map: a refused append at block *i* corresponds to the batch stalling
-    /// over the accepted prefix plus block *i* for `as_stall_reason()`.
-    pub fn as_stall_reason(self) -> StallReason {
+    /// over the accepted prefix plus block *i*.
+    ///
+    /// Returns `None` for [`AppendRefusal::EpochNonceUnavailable`], which is follower-only:
+    /// the batch [`crate::window::verify_watched_window`] verifies a single epoch under
+    /// one caller-supplied nonce, so it cannot even be run across an epoch turn, and the
+    /// equivalence relation does not extend to that refusal.
+    pub fn as_stall_reason(self) -> Option<StallReason> {
         match self {
             AppendRefusal::Decode | AppendRefusal::BrokenLink | AppendRefusal::Crypto => {
-                StallReason::BrokenSegment
+                Some(StallReason::BrokenSegment)
             }
-            AppendRefusal::NotContiguous => StallReason::MissingBlock,
-            AppendRefusal::BodyCommitmentMismatch => StallReason::BodyCommitmentMismatch,
-            AppendRefusal::MalformedBody => StallReason::MalformedBody,
+            AppendRefusal::NotContiguous => Some(StallReason::MissingBlock),
+            AppendRefusal::BodyCommitmentMismatch => Some(StallReason::BodyCommitmentMismatch),
+            AppendRefusal::MalformedBody => Some(StallReason::MalformedBody),
+            AppendRefusal::EpochNonceUnavailable => None,
         }
     }
 }
@@ -123,8 +195,14 @@ pub struct WindowFollower {
     /// The caller's hard lower bound on the verified tip — a window that has not reached
     /// it is [`StallReason::WindowTooShort`], closing the truncation evasion.
     require_through: u64,
-    /// The single epoch nonce every appended block's leader-VRF is checked against (F1).
-    eta0: [u8; 32],
+    /// Maps each appended block's slot to its epoch, so the follower selects that epoch's
+    /// nonce from `nonces`.
+    schedule: SlotSchedule,
+    /// Epoch → η0. The verifying nonce for an appended block is looked up by the block's
+    /// slot→epoch, never a mutable "current nonce": crossing a boundary is a map read, so
+    /// a later rollback below the turn re-selects the earlier epoch's nonce with no
+    /// re-staging. `append` only READS this map.
+    nonces: BTreeMap<u64, [u8; 32]>,
     /// The last accepted header: the linkage parent for the next append and the tip the
     /// verdict is answered as of. `None` before the first accepted block.
     tip: Option<HeaderView>,
@@ -136,23 +214,36 @@ pub struct WindowFollower {
 
 impl WindowFollower {
     /// Start following for a spend of `watch`, answered as of a verified tip at or above
-    /// `require_through`, inside the Mithril-certified region `anchor`, under the single
-    /// epoch nonce `eta0` (F1 is single-epoch — see the module docs).
+    /// `require_through`, inside the Mithril-certified region `anchor`, with epochs laid
+    /// out by `schedule`. Stage each epoch's nonce with [`WindowFollower::supply_next_eta0`]
+    /// before appending its blocks; a block whose epoch nonce is not yet staged is refused
+    /// [`AppendRefusal::EpochNonceUnavailable`].
     pub fn new(
         watch: OutPoint,
         anchor: &CertifiedTransactions,
         require_through: u64,
-        eta0: [u8; 32],
+        schedule: SlotSchedule,
     ) -> Self {
         Self {
             watch,
             anchor_height: anchor.block_number,
             require_through,
-            eta0,
+            schedule,
+            nonces: BTreeMap::new(),
             tip: None,
             create_seen: false,
             spend: None,
         }
+    }
+
+    /// Stage the epoch nonce η0 for `epoch`. The follower selects it for any appended
+    /// block whose slot the schedule places in `epoch`. Overwritable (idempotent for the
+    /// same bytes): a mis-fetched nonce can be corrected before a block is accepted under
+    /// it. Overwriting cannot cause a false accept — the nonce is an INPUT to the
+    /// leader-VRF check, never a verdict, so a wrong nonce only makes a block fail to
+    /// verify (liveness), never verify falsely (safety).
+    pub fn supply_next_eta0(&mut self, epoch: u64, eta0: [u8; 32]) {
+        self.nonces.insert(epoch, eta0);
     }
 
     /// Verify and fold one block (ledger `[era, block]` CBOR) into the follower's state.
@@ -185,11 +276,21 @@ impl WindowFollower {
                 return Err(AppendRefusal::NotContiguous);
             }
         }
-        // 3. Crypto: opcert -> leader-VRF (vs eta0) -> KES, the shared per-header unit.
-        //    The batch collapses opcert/VRF/KES to BrokenSegment too, so the class, not
-        //    the inner cause, is what a windowed verdict turns on.
-        chain::verify_header(&view, &self.eta0).map_err(|_| AppendRefusal::Crypto)?;
-        // 4. Bind the bodies to the header commitment and scan them, the shared per-block
+        // 3. Select this block's epoch nonce by its slot — a map lookup, never a mutated
+        //    "current nonce" (which a rollback below an epoch turn would leave pointing at
+        //    the wrong epoch). A missing staged nonce fails closed to a liveness-only
+        //    refusal; it never advances the tip. Copy the nonce out so the immutable
+        //    borrow of the map ends before the commit mutates `self`.
+        let epoch = self.schedule.epoch_of(view.slot);
+        let eta0 = *self
+            .nonces
+            .get(&epoch)
+            .ok_or(AppendRefusal::EpochNonceUnavailable)?;
+        // 4. Crypto: opcert -> leader-VRF (vs the epoch nonce) -> KES, the shared
+        //    per-header unit. The batch collapses opcert/VRF/KES to BrokenSegment too, so
+        //    the class, not the inner cause, is what a windowed verdict turns on.
+        chain::verify_header(&view, &eta0).map_err(|_| AppendRefusal::Crypto)?;
+        // 5. Bind the bodies to the header commitment and scan them, the shared per-block
         //    unit. Its decode cannot fail (step 1 already decoded), but map it fail-closed.
         let facts = scan_block_facts(block, &self.watch).map_err(|e| match e {
             ScanFailure::Decode => AppendRefusal::Decode,
@@ -197,7 +298,7 @@ impl WindowFollower {
             ScanFailure::MalformedBody => AppendRefusal::MalformedBody,
         })?;
 
-        // 5. Every check passed: commit. Nothing above mutated `self`, so the follower is
+        // 6. Every check passed: commit. Nothing above mutated `self`, so the follower is
         //    untouched on any refusal.
         if facts.created_here {
             self.create_seen = true;
@@ -274,9 +375,36 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    /// The two lowest preprod window blocks (4921916, 4921917) and their shared epoch
-    /// nonce, from the committed vectors + `.eta0` sidecars.
-    fn first_two_blocks_and_eta0() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+    /// Preprod Shelley slot schedule: epoch 300 begins at slot 127_958_400 and every
+    /// epoch is 432_000 slots. Places every committed vector's slot in its real epoch.
+    fn preprod_schedule() -> SlotSchedule {
+        SlotSchedule {
+            epoch: 300,
+            epoch_first_slot: 127_958_400,
+            epoch_length_slots: 432_000,
+        }
+    }
+
+    /// The real epoch-300 Mithril-certified transactions anchor.
+    fn anchor() -> CertifiedTransactions {
+        CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 300,
+            block_number: 4_927_469,
+        }
+    }
+
+    /// A watch outpoint the committed vectors never create or spend — these tests
+    /// exercise contiguity and epoch-aware nonce selection, not the spend scan.
+    fn dummy_watch() -> OutPoint {
+        OutPoint {
+            tx_id: [0u8; 32],
+            index: 0,
+        }
+    }
+
+    /// Load every `<prefix>-<slot>.block` with its `.eta0` sidecar, ordered by slot.
+    fn load_run(prefix: &str) -> Vec<(u64, Vec<u8>, [u8; 32])> {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
         let mut rows: Vec<(u64, Vec<u8>, [u8; 32])> = Vec::new();
         for entry in fs::read_dir(&dir).expect("read vectors dir") {
@@ -285,7 +413,7 @@ mod tests {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
-            if !name.starts_with("preprod-")
+            if !name.starts_with(prefix)
                 || path.extension().and_then(|e| e.to_str()) != Some("block")
             {
                 continue;
@@ -304,9 +432,74 @@ mod tests {
             rows.push((view.slot, bytes, eta0));
         }
         rows.sort_by_key(|r| r.0);
+        rows
+    }
+
+    /// The two lowest preprod window blocks (4921916, 4921917) and their shared epoch-300
+    /// nonce.
+    fn first_two_blocks_and_eta0() -> (Vec<u8>, Vec<u8>, [u8; 32]) {
+        let rows = load_run("preprod-");
         let eta0 = rows[0].2;
         assert_eq!(rows[1].2, eta0, "one epoch, one nonce");
         (rows[0].1.clone(), rows[1].1.clone(), eta0)
+    }
+
+    /// A preprod-window follower (single epoch 300) with `eta0` staged for it.
+    fn preprod_follower(watch: OutPoint, eta0: [u8; 32]) -> WindowFollower {
+        let mut f = WindowFollower::new(watch, &anchor(), 4_921_937, preprod_schedule());
+        f.supply_next_eta0(300, eta0);
+        f
+    }
+
+    /// The schedule maps each slot to its epoch: the anchor's first slot is its epoch, one
+    /// slot earlier is the previous epoch, and it is total (never panics) over all `u64`
+    /// slots — a colluding leader can sign any slot inside the KES-signed header body.
+    #[test]
+    fn slot_schedule_maps_slots_to_epochs() {
+        let s = preprod_schedule();
+        assert_eq!(
+            s.epoch_of(127_958_400),
+            300,
+            "the anchor's first slot is its epoch"
+        );
+        assert_eq!(
+            s.epoch_of(127_958_399),
+            299,
+            "one slot before the anchor is the prior epoch"
+        );
+        assert_eq!(
+            s.epoch_of(127_958_400 + 432_000 - 1),
+            300,
+            "the anchor epoch's last slot"
+        );
+        assert_eq!(
+            s.epoch_of(127_958_400 + 432_000),
+            301,
+            "the next epoch's first slot"
+        );
+        assert_eq!(
+            s.epoch_of(127_958_400 - 432_000),
+            299,
+            "the prior epoch's first slot"
+        );
+        assert_eq!(
+            s.epoch_of(127_958_400 - 432_000 - 1),
+            298,
+            "two epochs back"
+        );
+        // Real vector slots: the boundary run's pre side is epoch 299, post side 300.
+        assert_eq!(s.epoch_of(127_958_384), 299);
+        assert_eq!(s.epoch_of(127_958_489), 300);
+        // Totality: no panic at the u64 extremes, and a zero-length schedule never divides
+        // by zero (it collapses to the anchor epoch).
+        let _ = s.epoch_of(0);
+        let _ = s.epoch_of(u64::MAX);
+        let degenerate = SlotSchedule {
+            epoch: 5,
+            epoch_first_slot: 10,
+            epoch_length_slots: 0,
+        };
+        assert_eq!(degenerate.epoch_of(u64::MAX), 5);
     }
 
     /// The colluding-elected-leader shape: a genuinely signed header that hash-links to
@@ -319,16 +512,7 @@ mod tests {
     #[test]
     fn number_skipping_block_is_refused_not_contiguous() {
         let (b0, b1, eta0) = first_two_blocks_and_eta0();
-        let anchor = CertifiedTransactions {
-            merkle_root: String::new(),
-            epoch: 300,
-            block_number: 4_927_469,
-        };
-        let watch = OutPoint {
-            tx_id: [0u8; 32],
-            index: 0,
-        };
-        let mut follower = WindowFollower::new(watch, &anchor, 4_921_937, eta0);
+        let mut follower = preprod_follower(dummy_watch(), eta0);
         follower.append(&b0).expect("the first block is accepted");
         follower
             .tip
@@ -342,7 +526,7 @@ mod tests {
         );
         assert_eq!(
             AppendRefusal::NotContiguous.as_stall_reason(),
-            StallReason::MissingBlock,
+            Some(StallReason::MissingBlock),
             "the refusal maps to the batch oracle's contiguity stall",
         );
     }
@@ -355,16 +539,7 @@ mod tests {
     #[test]
     fn tip_at_u64_max_refuses_the_next_append_without_panicking() {
         let (b0, b1, eta0) = first_two_blocks_and_eta0();
-        let anchor = CertifiedTransactions {
-            merkle_root: String::new(),
-            epoch: 300,
-            block_number: 4_927_469,
-        };
-        let watch = OutPoint {
-            tx_id: [0u8; 32],
-            index: 0,
-        };
-        let mut follower = WindowFollower::new(watch, &anchor, 4_921_937, eta0);
+        let mut follower = preprod_follower(dummy_watch(), eta0);
         follower.append(&b0).expect("the first block is accepted");
         follower
             .tip
@@ -375,6 +550,61 @@ mod tests {
             follower.append(&b1),
             Err(AppendRefusal::NotContiguous),
             "a u64::MAX tip must refuse the successor fail-closed, not overflow",
+        );
+    }
+
+    /// The F2 critique fix, end to end: the nonce map survives a rollback below an epoch
+    /// turn, so re-appending the post-turn side needs NO re-staging. A mutated
+    /// "current nonce" would be left pointing at the later epoch after the cross, so the
+    /// re-appended post-turn blocks would still verify — but the pre-turn blocks would
+    /// not; the map design keeps selection per-block (by slot), so a rollback cannot
+    /// desynchronise it. `append` also never mutates the map (asserted here), so nonce
+    /// state is independent of the block-tracking state a rollback truncates.
+    ///
+    /// The dummy watch is never created or spent in the run, so a rollback below the turn
+    /// reduces to resetting the tip to the last pre-turn header (F3 adds the general
+    /// fact-ring rollback); the property under test is the nonce map's durability.
+    #[test]
+    fn rollback_below_the_turn_re_appends_without_re_staging() {
+        let run = load_run("boundary-");
+        assert!(run.len() >= 4, "the run must straddle the turn");
+        let schedule = preprod_schedule();
+        let pre_epoch = schedule.epoch_of(run.first().unwrap().0);
+        let post_epoch = pre_epoch + 1;
+
+        let mut follower = WindowFollower::new(dummy_watch(), &anchor(), 0, schedule);
+        for (slot, _, eta0) in &run {
+            follower.supply_next_eta0(schedule.epoch_of(*slot), *eta0);
+        }
+        // Cross the boundary: every block accepted, each under its own epoch nonce.
+        for (slot, bytes, _) in &run {
+            follower
+                .append(bytes)
+                .unwrap_or_else(|e| panic!("block at slot {slot} accepted, got {e:?}"));
+        }
+        let nonces_after_cross = follower.nonces.clone();
+
+        // Roll back below the turn: reset the tip to the last pre-turn header.
+        let last_pre = run
+            .iter()
+            .rev()
+            .find(|(slot, _, _)| schedule.epoch_of(*slot) == pre_epoch)
+            .expect("a pre-turn block exists");
+        follower.tip = Some(HeaderView::from_block_cbor(&last_pre.1).expect("decode"));
+
+        // Re-append every post-turn block with NO re-staging — selection is by slot, so
+        // each still picks η0(post) and verifies.
+        for (slot, bytes, _) in run
+            .iter()
+            .filter(|(s, _, _)| schedule.epoch_of(*s) == post_epoch)
+        {
+            follower
+                .append(bytes)
+                .unwrap_or_else(|e| panic!("post-turn block at slot {slot} re-appends, got {e:?}"));
+        }
+        assert_eq!(
+            follower.nonces, nonces_after_cross,
+            "append never mutated the nonce map across the cross or the re-append",
         );
     }
 }
