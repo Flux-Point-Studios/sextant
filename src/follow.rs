@@ -28,6 +28,17 @@
 //! A withheld spending block STRUCTURALLY cannot advance the verified tip (its
 //! successor fails to link), so it collapses to a non-answer, never a false no-spend.
 //!
+//! ## Trust boundary (surfaced, not verified)
+//! Like the batch, the verdict rests on the surfaced `mithril_quorum` assumption (see
+//! [`crate::window::WindowAssumptions`]): the followed chain is TRUSTED to be the
+//! Mithril-certified one. The read path binds neither each block to the certified
+//! transaction root nor checks leader eligibility (it holds no stake distribution), so a
+//! provider colluding with a registered block producer could forge a valid-header chain
+//! that omits a spend, or advance `as_of_slot` with a recent slot on a stale run. Slot
+//! contiguity is not a defense here — a forged slot is a FORWARD jump, which any monotone
+//! check admits. The assumption is surfaced, never faked as a check; its closure is a
+//! Tier-2 certified-UTxO-set binding, not a follower change.
+//!
 //! ## Crossing epoch boundaries (F2)
 //! Each block's leader-VRF is checked against ITS epoch nonce, selected from a
 //! [`SlotSchedule`] (slot → epoch) and a small epoch → η0 map ([`WindowFollower::supply_next_eta0`]).

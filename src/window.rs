@@ -168,8 +168,17 @@ pub(crate) fn scan_block_facts(block: &[u8], watch: &OutPoint) -> Result<BlockFa
 /// the trust basis and a reviewer checks a field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowAssumptions {
-    /// The window sits inside a region a Mithril quorum certified (tip at or below
-    /// the certified anchor height).
+    /// The verified tip is at or below the certified anchor height, so the run lies in
+    /// the region a Mithril quorum certified. This is an assumption Sextant SURFACES,
+    /// not one it checks per block: it verifies each header's authorship (opcert +
+    /// leader-VRF + KES), the hash links, and the height bound, but it does NOT bind
+    /// each served block to the certified transaction root, and the read path holds no
+    /// stake distribution to check leader eligibility against. So a provider colluding
+    /// with a registered block producer could serve a valid-header chain that omits a
+    /// spend, or stamps a recent slot on a stale run — and `as_of_slot` freshness rests
+    /// on the same assumption. The cryptographic closure is per-block binding to the
+    /// certified set (a Tier-2 UTxO-set commitment); until then this bit means only
+    /// "trust the served chain is the certified one", surfaced so a consumer weighs it.
     pub mithril_quorum: bool,
     /// The scanned segment is a header-verified, hash-linked, gap-free, body-committed
     /// run — a complete body stream over the window with no admitted gap.
