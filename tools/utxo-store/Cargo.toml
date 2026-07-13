@@ -1,0 +1,22 @@
+[package]
+name = "utxo-store"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A native, on-disk implementation of the sextant `UtxoStore` trait, backed by redb (a
+# pure-Rust embedded KV). It lives OUTSIDE the trust core: the `sextant` lib and its wasm
+# artifact stay file-free, and a native host (the T3 bootstrap, the daemon) opts into the
+# full-set capability by backing a `UtxoSet` with `RedbUtxoStore`.
+
+[lib]
+name = "utxo_store"
+path = "src/lib.rs"
+
+[dependencies]
+# The trust core supplies the trait, the outpoint type, and the store-error type.
+sextant = { path = "../.." }
+redb = "2"
+
+[dev-dependencies]
+tempfile = "3"

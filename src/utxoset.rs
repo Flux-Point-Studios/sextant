@@ -83,6 +83,8 @@ pub enum ApplyError {
     /// A transaction creates an outpoint already in the set — impossible on a valid chain
     /// (a fresh transaction id is unique), so a red flag, not a silent overwrite.
     DuplicateOutput(OutPoint),
+    /// The backing store failed (persistent-store I/O). The block is not applied.
+    Store(StoreError),
 }
 
 /// Why a rollback failed. The set is left UNCHANGED.
@@ -91,6 +93,73 @@ pub enum RollbackError {
     /// The target point is not reachable within the retained (`depth`-deep) undo history — it
     /// is finalized (older than the rollback window) or was never on the applied chain.
     Unreachable,
+    /// The backing store failed (persistent-store I/O) while reversing a block.
+    Store(StoreError),
+}
+
+/// A storage-layer failure — disk I/O in a persistent store, and nothing else. The in-memory
+/// [`MemStore`] never produces one; a redb/sqlite adapter maps its I/O errors here so a read or
+/// write failure fails the verdict CLOSED rather than answering wrongly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreError(pub String);
+
+/// The membership backing of a [`UtxoSet`] — the ONE seam a persistent store plugs into, so the
+/// sans-io engine and the wasm-safe core stay file-free (redb/sqlite live in a native host
+/// adapter that implements this, never in the trust core). Semantics mirror a set: `insert`
+/// reports whether the outpoint was newly added, `remove` whether it was present — the signals
+/// the engine's completeness and duplicate checks rest on. A read-your-writes view WITHIN a
+/// block is required: an output created earlier in a block must be visible to a later spend.
+pub trait UtxoStore {
+    /// Whether `o` is in the set.
+    fn contains(&self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// Insert `o`; `Ok(true)` iff it was newly added (was absent).
+    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// Remove `o`; `Ok(true)` iff it was present.
+    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError>;
+    /// The number of outpoints held.
+    fn len(&self) -> Result<usize, StoreError>;
+    /// Whether the store holds no outpoints.
+    fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.len()? == 0)
+    }
+}
+
+/// The default in-memory store: a `BTreeSet` (wasm-safe, deterministic, like the follower's
+/// `BTreeMap`). Infallible — every method returns `Ok`. The wasm/mobile footprint uses this and
+/// never carries an on-disk full set.
+#[derive(Debug, Default, Clone)]
+pub struct MemStore {
+    set: BTreeSet<OutPoint>,
+}
+
+impl MemStore {
+    /// An empty in-memory store.
+    pub fn new() -> Self {
+        MemStore::default()
+    }
+}
+
+impl FromIterator<OutPoint> for MemStore {
+    fn from_iter<I: IntoIterator<Item = OutPoint>>(iter: I) -> Self {
+        MemStore {
+            set: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl UtxoStore for MemStore {
+    fn contains(&self, o: &OutPoint) -> Result<bool, StoreError> {
+        Ok(self.set.contains(o))
+    }
+    fn insert(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        Ok(self.set.insert(*o))
+    }
+    fn remove(&mut self, o: &OutPoint) -> Result<bool, StoreError> {
+        Ok(self.set.remove(o))
+    }
+    fn len(&self) -> Result<usize, StoreError> {
+        Ok(self.set.len())
+    }
 }
 
 /// One applied block's exact forward operations, for an exact reverse.
@@ -107,37 +176,42 @@ struct Undo {
 
 /// A self-verified UTxO set: the outpoints currently unspent, maintained by applying verified
 /// blocks with a bounded rollback history. Sans-io — it is handed a block's effects, never a
-/// socket or a clock.
-pub struct UtxoSet {
-    set: BTreeSet<OutPoint>,
+/// socket or a clock. Generic over its [`UtxoStore`] backing; defaults to the in-memory
+/// [`MemStore`], so `UtxoSet::new(depth)` and the wasm build carry no persistent-store deps,
+/// while a native host swaps in a redb/sqlite store via [`UtxoSet::with_store`].
+pub struct UtxoSet<S: UtxoStore = MemStore> {
+    store: S,
     tip: Option<SetTip>,
     undo: VecDeque<Undo>,
     depth: usize,
 }
 
-impl UtxoSet {
-    /// An empty set at no tip — the start of a from-genesis replay. `depth` is the retained
-    /// rollback window in blocks; a live follower uses the Praos stability window (k = 2160).
+impl UtxoSet<MemStore> {
+    /// An empty in-memory set at no tip. `depth` is the retained rollback window in blocks; a
+    /// live follower uses the Praos stability window (k = 2160).
     pub fn new(depth: usize) -> Self {
-        UtxoSet {
-            set: BTreeSet::new(),
-            tip: None,
-            undo: VecDeque::new(),
-            depth,
-        }
+        UtxoSet::with_store(MemStore::new(), None, depth)
     }
 
-    /// Seed the set from a bootstrapped snapshot: the outpoints unspent as of `tip` (a later
-    /// slice hands over the replay result). The snapshot is the finalized base, so it carries
-    /// no rollback history; the first `apply` must name `tip.hash` as its parent.
+    /// An in-memory set seeded from a bootstrapped snapshot: the outpoints unspent as of `tip`.
+    /// The snapshot is the finalized base (no rollback history); the first `apply` must name
+    /// `tip.hash` as its parent.
     pub fn from_snapshot(
         tip: SetTip,
         unspent: impl IntoIterator<Item = OutPoint>,
         depth: usize,
     ) -> Self {
+        UtxoSet::with_store(unspent.into_iter().collect(), Some(tip), depth)
+    }
+}
+
+impl<S: UtxoStore> UtxoSet<S> {
+    /// Build a set over an arbitrary store — the seam a native host uses to back the set with a
+    /// persistent store already seeded to `tip` (or `None` for an empty from-genesis start).
+    pub fn with_store(store: S, tip: Option<SetTip>, depth: usize) -> Self {
         UtxoSet {
-            set: unspent.into_iter().collect(),
-            tip: Some(tip),
+            store,
+            tip,
             undo: VecDeque::new(),
             depth,
         }
@@ -149,23 +223,24 @@ impl UtxoSet {
     }
 
     /// The number of unspent outpoints held.
-    pub fn len(&self) -> usize {
-        self.set.len()
+    pub fn len(&self) -> Result<usize, StoreError> {
+        self.store.len()
     }
 
     /// Whether the set holds no unspent outpoints.
-    pub fn is_empty(&self) -> bool {
-        self.set.is_empty()
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.store.len()? == 0)
     }
 
     /// Whether `o` is unspent at the applied tip — the Tier-2 membership answer.
-    pub fn is_unspent(&self, o: &OutPoint) -> bool {
-        self.set.contains(o)
+    pub fn is_unspent(&self, o: &OutPoint) -> Result<bool, StoreError> {
+        self.store.contains(o)
     }
 
     /// Apply a verified block: remove every consumed outpoint, add every created one, in
-    /// transaction order. Contiguity is enforced against the current tip. On ANY inconsistency
-    /// the set is left exactly as it was and the error is returned (fail-closed).
+    /// transaction order. Contiguity is enforced against the current tip. On ANY inconsistency —
+    /// a logic error or a store failure — the partial ops are reverted and the set is left as it
+    /// was (fail-closed); the tip and undo history are advanced only on full success.
     pub fn apply(&mut self, block: &BlockEffects) -> Result<(), ApplyError> {
         if let Some(tip) = self.tip {
             // `checked_add`: a tip at u64::MAX has no successor number, so `None` is refused as
@@ -182,23 +257,10 @@ impl UtxoSet {
         }
 
         let mut ops: Vec<Op> = Vec::new();
-        for tx in &block.txs {
-            for inp in &tx.spent {
-                if self.set.remove(inp) {
-                    ops.push(Op::Removed(*inp));
-                } else {
-                    self.revert(&ops);
-                    return Err(ApplyError::SpendOfUnknownOutput(*inp));
-                }
-            }
-            for out in &tx.created {
-                if self.set.insert(*out) {
-                    ops.push(Op::Inserted(*out));
-                } else {
-                    self.revert(&ops);
-                    return Err(ApplyError::DuplicateOutput(*out));
-                }
-            }
+        if let Err(e) = self.apply_ops(block, &mut ops) {
+            // Reverse whatever landed; a store failure during the reverse supersedes.
+            self.revert(&ops).map_err(ApplyError::Store)?;
+            return Err(e);
         }
 
         let tip = SetTip {
@@ -213,6 +275,28 @@ impl UtxoSet {
         });
         while self.undo.len() > self.depth {
             self.undo.pop_front();
+        }
+        Ok(())
+    }
+
+    /// The forward pass: consume then create, recording each op for an exact reverse. Returns the
+    /// first logic or store error, having recorded the ops that landed (the caller reverts them).
+    fn apply_ops(&mut self, block: &BlockEffects, ops: &mut Vec<Op>) -> Result<(), ApplyError> {
+        for tx in &block.txs {
+            for inp in &tx.spent {
+                if self.store.remove(inp).map_err(ApplyError::Store)? {
+                    ops.push(Op::Removed(*inp));
+                } else {
+                    return Err(ApplyError::SpendOfUnknownOutput(*inp));
+                }
+            }
+            for out in &tx.created {
+                if self.store.insert(out).map_err(ApplyError::Store)? {
+                    ops.push(Op::Inserted(*out));
+                } else {
+                    return Err(ApplyError::DuplicateOutput(*out));
+                }
+            }
         }
         Ok(())
     }
@@ -235,7 +319,7 @@ impl UtxoSet {
                 .undo
                 .pop_back()
                 .expect("reachability guarantees a block to undo before reaching `to`");
-            self.revert(&u.ops);
+            self.revert(&u.ops).map_err(RollbackError::Store)?;
             self.tip = Some(SetTip {
                 number: u.tip.number.saturating_sub(1),
                 hash: u.prev_hash,
@@ -246,17 +330,18 @@ impl UtxoSet {
 
     /// Reverse a block's operations in exact reverse order: a removal re-inserts, an insertion
     /// removes. Applied to the partial ops of a failed block, or a full block on rollback.
-    fn revert(&mut self, ops: &[Op]) {
+    fn revert(&mut self, ops: &[Op]) -> Result<(), StoreError> {
         for op in ops.iter().rev() {
             match op {
                 Op::Inserted(x) => {
-                    self.set.remove(x);
+                    self.store.remove(x)?;
                 }
                 Op::Removed(x) => {
-                    self.set.insert(*x);
+                    self.store.insert(x)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -292,9 +377,9 @@ mod tests {
     fn apply_creates_and_spends_membership() {
         let mut u = UtxoSet::new(10);
         u.apply(&block(1, &[], &[op(1, 0), op(1, 1)])).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(u.is_unspent(&op(1, 1)));
-        assert_eq!(u.len(), 2);
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(u.is_unspent(&op(1, 1)).unwrap());
+        assert_eq!(u.len().unwrap(), 2);
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -304,9 +389,9 @@ mod tests {
         );
 
         u.apply(&block(2, &[op(1, 0)], &[op(2, 0)])).unwrap();
-        assert!(!u.is_unspent(&op(1, 0)), "spent output is gone");
-        assert!(u.is_unspent(&op(1, 1)), "unspent sibling remains");
-        assert!(u.is_unspent(&op(2, 0)));
+        assert!(!u.is_unspent(&op(1, 0)).unwrap(), "spent output is gone");
+        assert!(u.is_unspent(&op(1, 1)).unwrap(), "unspent sibling remains");
+        assert!(u.is_unspent(&op(2, 0)).unwrap());
     }
 
     #[test]
@@ -330,11 +415,11 @@ mod tests {
         };
         u.apply(&blk).unwrap();
         assert!(
-            !u.is_unspent(&op(1, 0)),
+            !u.is_unspent(&op(1, 0)).unwrap(),
             "created-then-spent in one block is absent"
         );
-        assert!(u.is_unspent(&op(2, 0)));
-        assert_eq!(u.len(), 1);
+        assert!(u.is_unspent(&op(2, 0)).unwrap());
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -355,8 +440,8 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, ApplyError::SpendOfUnknownOutput(op(9, 9)));
         // Fail-closed: op(1,0) is back, op(2,0) never landed, tip unmoved.
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -364,7 +449,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 1);
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -380,7 +465,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 1);
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -419,9 +504,9 @@ mod tests {
         u.apply(&block(2, &[op(1, 0)], &[op(2, 0)])).unwrap();
         // Roll back block 2: op(1,0) returns, op(2,0) gone, tip back to block 1.
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(u.is_unspent(&op(1, 1)));
-        assert!(!u.is_unspent(&op(2, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(u.is_unspent(&op(1, 1)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -429,7 +514,7 @@ mod tests {
                 hash: h(1)
             })
         );
-        assert_eq!(u.len(), 2);
+        assert_eq!(u.len().unwrap(), 2);
     }
 
     #[test]
@@ -453,15 +538,15 @@ mod tests {
             ],
         })
         .unwrap();
-        assert!(!u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(u.is_unspent(&op(3, 0)));
+        assert!(!u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(u.is_unspent(&op(3, 0)).unwrap());
         // Rolling back restores exactly the block-1 state.
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(!u.is_unspent(&op(3, 0)));
-        assert_eq!(u.len(), 1);
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(!u.is_unspent(&op(3, 0)).unwrap());
+        assert_eq!(u.len().unwrap(), 1);
     }
 
     #[test]
@@ -471,9 +556,9 @@ mod tests {
         u.apply(&block(2, &[], &[op(2, 0)])).unwrap();
         u.apply(&block(3, &[op(1, 0)], &[op(3, 0)])).unwrap();
         u.rollback_to(&h(1)).unwrap();
-        assert!(u.is_unspent(&op(1, 0)));
-        assert!(!u.is_unspent(&op(2, 0)));
-        assert!(!u.is_unspent(&op(3, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
+        assert!(!u.is_unspent(&op(2, 0)).unwrap());
+        assert!(!u.is_unspent(&op(3, 0)).unwrap());
         assert_eq!(
             u.tip(),
             Some(SetTip {
@@ -500,7 +585,7 @@ mod tests {
                 hash: h(3)
             })
         );
-        assert!(u.is_unspent(&op(1, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
     }
 
     #[test]
@@ -524,7 +609,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, ApplyError::NotContiguous { .. }));
         assert_eq!(u.tip(), Some(base));
-        assert!(u.is_unspent(&op(1, 0)));
+        assert!(u.is_unspent(&op(1, 0)).unwrap());
     }
 
     #[test]
@@ -534,7 +619,7 @@ mod tests {
             hash: h(100),
         };
         let mut u = UtxoSet::from_snapshot(base, [op(50, 0), op(60, 1)], 10);
-        assert!(u.is_unspent(&op(50, 0)));
+        assert!(u.is_unspent(&op(50, 0)).unwrap());
         assert_eq!(u.tip(), Some(base));
         // The next block must name the snapshot as its parent and spend from the snapshot set.
         u.apply(&BlockEffects {
@@ -547,8 +632,8 @@ mod tests {
             }],
         })
         .unwrap();
-        assert!(!u.is_unspent(&op(50, 0)));
-        assert!(u.is_unspent(&op(101, 0)));
+        assert!(!u.is_unspent(&op(50, 0)).unwrap());
+        assert!(u.is_unspent(&op(101, 0)).unwrap());
         // Cannot roll back past the finalized snapshot base.
         assert_eq!(u.rollback_to(&h(99)), Err(RollbackError::Unreachable));
     }

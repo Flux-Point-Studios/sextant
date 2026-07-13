@@ -10,7 +10,7 @@ license = "Apache-2.0"
 # (tokio, reqwest, pallas-network) never enter the trust-substrate lib's
 # build. Harness commands operate on the `sextant` package only.
 [workspace]
-members = ["tools/harvest", "tools/sentry"]
+members = ["tools/harvest", "tools/sentry", "tools/utxo-store"]
 resolver = "3"
 
 [lib]
