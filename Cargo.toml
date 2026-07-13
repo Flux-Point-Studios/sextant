@@ -9,7 +9,7 @@ repository = "https://github.com/Flux-Point-Studios/sextant"
 # (tokio, reqwest, pallas-network) never enter the trust-substrate lib's
 # build. Harness commands operate on the `sextant` package only.
 [workspace]
-members = ["tools/harvest"]
+members = ["tools/harvest", "tools/sentry"]
 resolver = "3"
 
 [lib]

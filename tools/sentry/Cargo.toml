@@ -1,0 +1,45 @@
+[package]
+name = "sentry"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The live windowed-unspent follower transport (BEYOND-DoD Epic F, F6). The
+# sans-io orchestration core (this lib) drives a `sextant::follow::WindowFollower`
+# from resolved chain-sync events; the binary (F6b) sources those events from a
+# node-to-node relay. Not part of the sextant lib or its harness.
+
+[lib]
+name = "sentry"
+path = "src/lib.rs"
+
+# The live transport (F6b): a node-to-node chain-sync consumer that sources the
+# `SyncEvent`s the sans-io lib drives. Network-side, so it carries the async/relay
+# deps and turns on the sextant `mithril` feature (verify_chain_anchored for the
+# certified re-anchor); the lib stays default-graph.
+[[bin]]
+name = "sextant-sentry"
+path = "src/main.rs"
+required-features = ["transport"]
+
+[features]
+# Off by default so the sans-io lib + its mock gate build with zero network deps;
+# the binary opts in.
+transport = ["dep:tokio", "dep:pallas-network", "dep:pallas-traverse", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:hex", "dep:anyhow", "sextant/mithril"]
+
+[dependencies]
+# The verifier core. The lib composes only the default (wasm-safe) graph; the binary
+# enables sextant/mithril via the `transport` feature for the anchored cert verify.
+sextant = { path = "../.." }
+# Transport-only (the exact harvest dep set; behind the `transport` feature).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"], optional = true }
+pallas-network = { version = "1.1.1", optional = true }
+pallas-traverse = { version = "1.1.1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+hex = "0.4"
