@@ -61,6 +61,19 @@ impl core::fmt::Display for ChainError {
 
 impl std::error::Error for ChainError {}
 
+/// Why a single header's authorship did not verify — the index-free core of the
+/// crypto failures in [`ChainError`]. [`verify_segment`] adds the block index; the
+/// incremental [`crate::follow::WindowFollower`] collapses it to one refusal (a
+/// header crypto failure is a non-answer either way).
+pub(crate) enum HeaderError {
+    /// The operational certificate did not verify against the cold key.
+    OpCert(KesError),
+    /// The leader-election VRF proof did not verify against the epoch nonce.
+    Vrf(VrfError),
+    /// The KES body signature did not verify.
+    Kes(KesError),
+}
+
 /// Verify that `blocks` (ledger `[era, block]` CBOR, in on-chain order) form a
 /// valid single-epoch chain segment: each header links to its predecessor by
 /// hash, and every header's operational certificate, leader-VRF (against
@@ -76,7 +89,11 @@ pub fn verify_segment<B: AsRef<[u8]>>(blocks: &[B], eta0: &[u8; 32]) -> Result<(
         {
             return Err(ChainError::BrokenLink { index });
         }
-        verify_header(&view, eta0, index)?;
+        verify_header(&view, eta0).map_err(|err| match err {
+            HeaderError::OpCert(err) => ChainError::OpCert { index, err },
+            HeaderError::Vrf(err) => ChainError::Vrf { index, err },
+            HeaderError::Kes(err) => ChainError::Kes { index, err },
+        })?;
         prev = Some(view);
     }
     Ok(())
@@ -85,12 +102,12 @@ pub fn verify_segment<B: AsRef<[u8]>>(blocks: &[B], eta0: &[u8; 32]) -> Result<(
 /// Authenticate one header: cold → hot (opcert), then hot → block (leader-VRF
 /// and KES). VRF is checked before KES so a tampered VRF field, which also
 /// invalidates the KES signature over the same header body, surfaces as the VRF
-/// failure it is.
-fn verify_header(view: &HeaderView, eta0: &[u8; 32], index: usize) -> Result<(), ChainError> {
-    kes::verify_opcert(&view.issuer_vkey, &view.opcert)
-        .map_err(|err| ChainError::OpCert { index, err })?;
+/// failure it is. The shared per-header crypto unit: [`verify_segment`] (batch)
+/// and [`crate::follow::WindowFollower::append`] (incremental) both run it.
+pub(crate) fn verify_header(view: &HeaderView, eta0: &[u8; 32]) -> Result<(), HeaderError> {
+    kes::verify_opcert(&view.issuer_vkey, &view.opcert).map_err(HeaderError::OpCert)?;
     vrf::verify_praos_leader(&view.vrf_vkey, view.slot, eta0, &view.vrf_proof)
-        .map_err(|err| ChainError::Vrf { index, err })?;
-    kes::verify_header_kes(view).map_err(|err| ChainError::Kes { index, err })?;
+        .map_err(HeaderError::Vrf)?;
+    kes::verify_header_kes(view).map_err(HeaderError::Kes)?;
     Ok(())
 }
