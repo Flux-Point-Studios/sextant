@@ -18,8 +18,9 @@
 //! ## The forward follow IS a subset-consistency audit (discharge-in-miniature)
 //! The anchor-basis ruling's discharge — demoting the single IOG ancillary key by RECOMPUTING the
 //! set from independently-verified blocks — has a cheap forward half that falls out of the follow
-//! itself: applying `(S, tip]` block-by-block cross-checks the certified set@S against the chain.
-//! An ancillary that OMITS a real pre-S outpoint fails closed when a window block spends it
+//! itself: applying `(S, tip]` block-by-block — each block HEADER-vouched (opcert / leader-VRF / KES,
+//! honest-majority), NOT yet STM-stake-quorum-certified — cross-checks the certified set@S against
+//! the chain. An ancillary that OMITS a real pre-S outpoint fails closed when a window block spends it
 //! ([`crate::utxoset::ApplyError::SpendOfUnknownOutput`]); one that PADS a phantom fails closed when
 //! a window block re-creates it ([`crate::utxoset::ApplyError::DuplicateOutput`]). So a longer follow
 //! is a stronger audit — my live catch-up applied 5,383 real blocks with zero such failures. The
