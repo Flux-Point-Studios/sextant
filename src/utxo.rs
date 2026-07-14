@@ -174,9 +174,19 @@ pub enum SpendStatus {
         /// never assume the stronger one). Bound from the set's [`crate::utxoset::SnapshotAnchor`]
         /// at construction, never chosen at query time.
         basis: AnchorBasis,
-        /// The tip block number through which the header-verified no-spend window was maintained —
-        /// the recency the consumer must carry (the verdict ages as the chain advances past it).
+        /// The tip block number through which the no-spend window was maintained — the recency the
+        /// consumer must carry (the verdict ages as the chain advances past it).
         through_block: u64,
+        /// Whether the WHOLE no-spend window `(S, through_block]` lies within the Mithril
+        /// `CardanoTransactions`-certified region (`through_block <= the latest verified cert's
+        /// block_number`). `true`: no-spend is backed by the STM stake quorum's transaction
+        /// certification — a spend of the outpoint would be in the certified tx set. `false`:
+        /// `through_block` is above the certified frontier, so the tail of the window is only
+        /// HEADER-VOUCHED (honest-majority block authorship), not quorum-backed. This mirrors
+        /// [`crate::window::WindowAssumptions::mithril_quorum`] / [`crate::window::SpendRegion`]
+        /// exactly, so the window's trust is machine-readable here, never merely prose — a consumer
+        /// can never read a header-vouched tail as quorum-certified.
+        mithril_quorum: bool,
     },
 }
 
@@ -612,6 +622,7 @@ mod tests {
             SpendStatus::CertifiedUnspent {
                 basis: AnchorBasis::AncillarySigned,
                 through_block: 1,
+                mithril_quorum: false,
             },
         ];
         for tier in tiers {
@@ -620,14 +631,17 @@ mod tests {
                 SpendStatus::CertifiedUnspent {
                     basis,
                     through_block,
+                    mithril_quorum,
                 } => {
                     // The basis rides INSIDE the variant — a consumer cannot read the verdict
-                    // without seeing whether it is a single-key or stake-quorum snapshot.
+                    // without seeing whether it is a single-key or stake-quorum snapshot — and the
+                    // window's quorum trust is a machine-readable bit, not prose.
                     assert!(matches!(
                         basis,
                         AnchorBasis::AncillarySigned | AnchorBasis::StmCertified
                     ));
                     assert!(through_block > 0);
+                    let _machine_readable_window_trust: bool = mithril_quorum;
                 }
             }
         }
