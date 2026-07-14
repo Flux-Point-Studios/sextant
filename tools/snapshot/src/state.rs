@@ -7,14 +7,20 @@
 //! ruling declined to parse), the tip is a tiny fixed-shape structure located by a slot-anchored
 //! marker, so this is a bounded, robust read rather than an ExtLedgerState walk.
 //!
-//! The parse is defended two ways: the marker `83 <slot> 5820` must match EXACTLY once (zero or
-//! several ⇒ fail closed, never a guessed tip), and the extracted `(hash, blockno)` must ALSO
-//! appear as the ledger-state tip pointer `<slot> <blockno> 5820 <hash>` (a second, independently
-//! encoded copy in the same file) — two encodings that must agree. The bytes are already
-//! trust-established: the caller gates the `state` file's SHA-256 against the signed manifest
-//! digest before parsing, so the tip rides the same `AncillarySigned` basis as the UTxO set. The
-//! live follow then confirms it for free (chain-sync intersect at (S, hash) + first-block
-//! `prev_hash` contiguity).
+//! The TRUST anchor is upstream: the caller gates the `state` file's SHA-256 against the
+//! Ed25519-signed manifest before parsing (`verified_anchor`), so the bytes are IOG-signed and the
+//! tip rides the same `AncillarySigned` basis as the UTxO set — the parser defends against a wrong
+//! byte-SHAPE, not an adversary.
+//!
+//! Two shape defenses: the marker `83 <slot> 5820` must match EXACTLY once (zero or several ⇒ fail
+//! closed, never a guessed tip), and the extracted `(hash, blockno)` must ALSO appear re-encoded as
+//! the ledger-state tip pointer `<slot> <blockno> 5820 <hash>` (a second copy the LedgerState keeps,
+//! reached via a different code path in cardano-node). This makes a coincidental `array(3)+bytes(32)`
+//! false match astronomically unlikely to survive (the 44-byte re-encoded needle would have to
+//! appear too). The byte shape itself is pinned by a REAL-`state` fixture test below, and both
+//! encodings use canonical minimal CBOR ints (which cardano-node's `cborg` emits) — the fixture is
+//! what validates that assumption against genuine bytes. The live follow then confirms the tip for
+//! free (chain-sync intersect at (S, hash) + first-block `prev_hash` contiguity).
 
 use anyhow::{Result, ensure};
 use sextant::utxoset::SetTip;
@@ -43,9 +49,10 @@ pub fn parse_tip(state: &[u8], slot_s: u64) -> Result<SetTip> {
     let (number, _consumed) = decode_uint(state, base + 32).context_tip("AnnTip block number")?;
     ensure!(number > 0, "state tip: block number is zero");
 
-    // Cross-check: the ledger-state tip pointer encodes the SAME tip as `slot ‖ blockno ‖ hash`.
-    // Requiring this second, independently-encoded copy to be present rejects a corrupted/truncated
-    // state whose AnnTip alone might decode to garbage — two encodings that must agree.
+    // Shape cross-check: the LedgerState keeps a second copy of the tip as `slot ‖ blockno ‖ hash`.
+    // Requiring the derived triple to re-appear in that form rejects a wrong-shape false match whose
+    // decoded (hash, blockno) is garbage — a spurious 44-byte re-encoded needle is ~10^-99. The
+    // trust anchor is the upstream signed-digest gate, not this check.
     let mut ledger_tip = Vec::new();
     enc_uint(slot_s, &mut ledger_tip);
     enc_uint(number, &mut ledger_tip);
@@ -164,6 +171,22 @@ mod tests {
         let tip = parse_tip(&buf, 128237957).unwrap();
         assert_eq!(tip.number, 4930365);
         assert_eq!(tip.hash, hash);
+    }
+
+    /// The load-bearing test: parse the tip out of REAL cardano-node 11.0.1 `state` bytes. The
+    /// fixture is two verbatim windows of the preprod snapshot's `ledger/128237957/state` (the
+    /// LedgerState tip pointer near the front + the HeaderState AnnTip near EOF), with the 31 MB
+    /// middle elided — genuine IOG-signed bytes, so this pins the assumed AnnTip byte shape against
+    /// the real encoding, not our own synthetic buffer.
+    #[test]
+    fn parses_the_tip_from_real_state_bytes() {
+        let real = include_bytes!("../../../tests/vectors/utxohd-state-tip.bin");
+        let tip = parse_tip(real, 128237957).unwrap();
+        assert_eq!(tip.number, 4930365);
+        assert_eq!(
+            hex::encode(tip.hash),
+            "5eaf46daaec4a868ef4c969ed71dd73f29d0941cd75df652ae5f963df681dfd5"
+        );
     }
 
     #[test]
