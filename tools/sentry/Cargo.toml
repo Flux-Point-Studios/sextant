@@ -50,6 +50,13 @@ name = "sextant-utxod"
 path = "src/bin/utxod.rs"
 required-features = ["utxod"]
 
+# Tier-2 discharge provenance spot-check: prove a sample of set@S transactions are STM-certified real
+# (catch a padded phantom the forward follow cannot).
+[[bin]]
+name = "sextant-audit"
+path = "src/bin/audit.rs"
+required-features = ["setfollow"]
+
 [features]
 # `transport` off by default so the sans-io lib + its mock gate build with zero network
 # deps; the binaries opt in. `daemon` adds the HTTP server on top of `transport`.

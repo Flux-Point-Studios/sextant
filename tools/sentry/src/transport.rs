@@ -340,6 +340,44 @@ pub async fn fetch_fresh_anchor(
     ))
 }
 
+/// Fetch the Mithril `CardanoTransactions` inclusion proof for `tx_hash` (lowercase hex) from the
+/// aggregator. Returns the hex-encoded `MkMapProof` bytes (ready for
+/// [`sextant::inclusion::verify_tx_inclusion`]) when the aggregator certifies the transaction, or
+/// `None` when it lists the transaction as NON-certified — the phantom signal. The proof is only a
+/// claim until Sextant recomputes it against a `verify_chain_anchored`-authenticated root; the
+/// aggregator never supplies a verdict.
+pub async fn fetch_tx_proof(http: &reqwest::Client, tx_hash: &str) -> Result<Option<Vec<u8>>> {
+    #[derive(Deserialize)]
+    struct ProofResp {
+        certified_transactions: Vec<CertifiedEntry>,
+        non_certified_transactions: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct CertifiedEntry {
+        transactions_hashes: Vec<String>,
+        proof: String,
+    }
+    let resp = http
+        .get(format!(
+            "{MITHRIL_AGG}/proof/cardano-transaction?transaction_hashes={tx_hash}"
+        ))
+        .header("accept", "application/json")
+        .send()
+        .await?
+        .error_for_status()?;
+    let body = read_capped(resp).await.context("aggregator tx proof")?;
+    let r: ProofResp = serde_json::from_slice(&body).context("parse tx proof")?;
+    if r.non_certified_transactions.iter().any(|h| h == tx_hash) {
+        return Ok(None);
+    }
+    for e in r.certified_transactions {
+        if e.transactions_hashes.iter().any(|h| h == tx_hash) {
+            return Ok(Some(e.proof.into_bytes()));
+        }
+    }
+    Ok(None)
+}
+
 /// The committed `tests/vectors` directory, relative to this crate.
 pub fn vectors_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/vectors")
