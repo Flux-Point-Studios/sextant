@@ -20,10 +20,16 @@ path = "src/bin/extract.rs"
 name = "snapshot-parse"
 path = "src/bin/parse.rs"
 
+[[bin]]
+name = "snapshot-load"
+path = "src/bin/load.rs"
+
 [dependencies]
 # The trust core supplies the outpoint type; the tables decode is on Sextant's own minicbor
 # path, not a provider's.
 sextant = { path = "../.." }
+# The on-disk store the certified set is loaded into (T3-load). Native only — never the core.
+utxo-store = { path = "../utxo-store" }
 zstd = "0.13"
 tar = "0.4"
 anyhow = "1"

@@ -38,11 +38,17 @@ pub struct RedbUtxoStore {
 }
 
 impl RedbUtxoStore {
-    /// Create a FRESH, empty store at `path`, discarding any existing file (redb's own
-    /// `Database::create` opens an existing database rather than truncating, so a stale file is
-    /// removed first — a from-genesis bootstrap must not inherit old outpoints).
+    /// Create a FRESH, empty store at `path`, discarding any existing file. redb's own
+    /// `Database::create` OPENS an existing database rather than truncating it, so a stale file is
+    /// removed first — a bootstrap must not inherit old outpoints. If the file exists but cannot be
+    /// removed (a lock, an ACL, a live handle), this fails CLOSED rather than opening and appending
+    /// onto the stale set: a `create` that could not guarantee an empty start is an error.
     pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self, StoreError> {
-        let _ = std::fs::remove_file(path.as_ref());
+        match std::fs::remove_file(path.as_ref()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(store_err(e)),
+        }
         let db = Database::create(path).map_err(store_err)?;
         // Materialise the table so later read transactions can open it.
         let txn = db.begin_write().map_err(store_err)?;
@@ -55,6 +61,34 @@ impl RedbUtxoStore {
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, StoreError> {
         let db = Database::open(path).map_err(store_err)?;
         Ok(RedbUtxoStore { db })
+    }
+
+    /// Bulk-seed the store from a bootstrap snapshot: one write transaction, one table handle, all
+    /// outpoints inserted, committed atomically. This is the T3-load path for the ~millions-entry
+    /// certified set — the per-op `open_table` of the [`UtxoTxn`] seam (built for block-sized
+    /// batches) would be needless overhead at that scale. Returns the number of NEW outpoints
+    /// (duplicates in the source do not inflate it). On any error the whole load aborts — the store
+    /// is left exactly as it was.
+    pub fn bulk_insert(
+        &mut self,
+        outpoints: impl IntoIterator<Item = OutPoint>,
+    ) -> Result<usize, StoreError> {
+        let txn = self.db.begin_write().map_err(store_err)?;
+        let mut inserted = 0;
+        {
+            let mut table = txn.open_table(UTXO).map_err(store_err)?;
+            for o in outpoints {
+                if table
+                    .insert(key(&o).as_slice(), ())
+                    .map_err(store_err)?
+                    .is_none()
+                {
+                    inserted += 1;
+                }
+            }
+        }
+        txn.commit().map_err(store_err)?;
+        Ok(inserted)
     }
 }
 
@@ -143,6 +177,46 @@ mod tests {
         assert!(s.contains(&op(2, 0)).unwrap());
         assert!(!s.contains(&op(1, 0)).unwrap());
         assert_eq!(s.len().unwrap(), 1);
+    }
+
+    /// `create` must yield an EMPTY store even when a populated file already exists at the path —
+    /// a fresh bootstrap must never inherit a prior snapshot's outpoints.
+    #[test]
+    fn create_truncates_a_stale_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utxo.redb");
+        {
+            let mut s = RedbUtxoStore::create(&path).unwrap();
+            s.bulk_insert([op(1, 0), op(2, 0)]).unwrap();
+            assert_eq!(s.len().unwrap(), 2);
+        }
+        // Re-create at the same path: the old outpoints must be gone.
+        let fresh = RedbUtxoStore::create(&path).unwrap();
+        assert_eq!(fresh.len().unwrap(), 0);
+        assert!(!fresh.contains(&op(1, 0)).unwrap());
+    }
+
+    #[test]
+    fn bulk_insert_seeds_a_set_and_backs_a_utxoset() {
+        let (mut s, _dir) = store();
+        // A duplicate in the source must not inflate the NEW count.
+        let inserted = s
+            .bulk_insert([op(1, 0), op(1, 1), op(2, 0), op(1, 0)])
+            .unwrap();
+        assert_eq!(inserted, 3);
+        assert_eq!(s.len().unwrap(), 3);
+        assert!(s.contains(&op(1, 1)).unwrap());
+        assert!(!s.contains(&op(3, 0)).unwrap());
+
+        // The seeded store backs a UtxoSet at the snapshot tip; membership answers hold.
+        let tip = SetTip {
+            hash: [7u8; 32],
+            number: 100,
+        };
+        let set = UtxoSet::with_store(s, Some(tip), 2160);
+        assert!(set.is_unspent(&op(2, 0)).unwrap());
+        assert!(!set.is_unspent(&op(9, 0)).unwrap());
+        assert_eq!(set.len().unwrap(), 3);
     }
 
     #[test]

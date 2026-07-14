@@ -70,37 +70,53 @@ impl VerifiedTables {
     }
 }
 
-/// Establish trust in the newest `tables` file under an unpacked ancillary directory, on the full
-/// chain: verify the `ancillary_manifest.json` Ed25519 signature under the pinned network key
-/// (core [`verify_ancillary_manifest`]), then confirm the on-disk `tables` and `meta` files hash
-/// to the digests that signature commits, then gate `meta`'s codec version. Returns a
-/// [`VerifiedTables`] — carrying the verified mapping itself — only when every link holds; a
-/// tampered or unsigned blob fails closed here, before a single outpoint is decoded.
-pub fn verify_newest_tables(
+/// Read and verify the `ancillary_manifest.json` under an unpacked ancillary directory: its Ed25519
+/// signature must hold under the pinned per-network key (core [`verify_ancillary_manifest`]). The
+/// returned handle carries the trusted per-file digests every other T3 step checks against — the
+/// single trust root of the certified-state bootstrap.
+pub fn verify_manifest(
     ancillary_dir: &Path,
     ancillary_vkey: &[u8; 32],
-) -> Result<VerifiedTables> {
+) -> Result<VerifiedAncillaryManifest> {
     let manifest_bytes = std::fs::read(ancillary_dir.join("ancillary_manifest.json"))
         .context("read ancillary_manifest.json")?;
-    let verified = verify_ancillary_manifest(&manifest_bytes, ancillary_vkey)
-        .map_err(|e| anyhow::anyhow!("ancillary manifest: {e}"))?;
+    verify_ancillary_manifest(&manifest_bytes, ancillary_vkey)
+        .map_err(|e| anyhow::anyhow!("ancillary manifest: {e}"))
+}
 
+/// Trust the newest `tables` file: confirm the on-disk `tables` and `meta` files hash to the
+/// digests the verified manifest commits, then gate `meta`'s codec version. Returns a
+/// [`VerifiedTables`] carrying the verified mapping itself — the only handle the parser accepts,
+/// with no re-open between the digest check and the decode.
+pub fn verified_tables(
+    ancillary_dir: &Path,
+    verified: &VerifiedAncillaryManifest,
+) -> Result<VerifiedTables> {
     let (slot, tables_key) =
-        newest_tables_key(&verified).context("manifest commits no ledger/<slot>/tables entry")?;
+        newest_tables_key(verified).context("manifest commits no ledger/<slot>/tables entry")?;
     let meta_key = format!("ledger/{slot}/meta");
 
     // meta is tiny: read it, match its digest, gate the codec version.
     let meta_bytes = std::fs::read(ancillary_dir.join(&meta_key)).context("read meta")?;
-    match_digest(sha256_bytes(&meta_bytes), &verified, &meta_key)?;
+    match_digest(sha256_bytes(&meta_bytes), verified, &meta_key)?;
     tables::parse_meta(&meta_bytes)?;
 
     // tables: map ONCE, hash THIS mapping, and hand the very same mapping back to the parser.
     let file = File::open(ancillary_dir.join(&tables_key)).context("open tables")?;
     // SAFETY: read-only mapping of a local file, owned by the returned VerifiedTables.
     let tables = unsafe { Mmap::map(&file) }.context("mmap tables")?;
-    match_digest(sha256_bytes(&tables), &verified, &tables_key)?;
+    match_digest(sha256_bytes(&tables), verified, &tables_key)?;
 
     Ok(VerifiedTables { tables, slot })
+}
+
+/// Convenience for the parse path: verify the manifest and return the newest verified `tables`.
+pub fn verify_newest_tables(
+    ancillary_dir: &Path,
+    ancillary_vkey: &[u8; 32],
+) -> Result<VerifiedTables> {
+    let verified = verify_manifest(ancillary_dir, ancillary_vkey)?;
+    verified_tables(ancillary_dir, &verified)
 }
 
 /// The `ledger/<slot>/tables` key with the greatest slot (two consecutive snapshots ship; the
@@ -174,6 +190,24 @@ mod tests {
         assert_eq!(extracted[0].size, 12);
         assert!(extracted[0].path.ends_with("ledger/snapshot"));
         assert_eq!(std::fs::read(&extracted[0].path).unwrap(), b"UTXO-HD-BODY");
+    }
+
+    /// `verify_manifest` reads and verifies the real committed manifest from a directory and
+    /// exposes the trusted digests every T3 step checks against.
+    #[test]
+    fn verify_manifest_accepts_the_real_committed_manifest() {
+        use sextant::ancillary::ANCILLARY_VKEY_PREPROD;
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = include_bytes!("../../../tests/vectors/utxohd-ancillary-manifest.json");
+        File::create(dir.path().join("ancillary_manifest.json"))
+            .unwrap()
+            .write_all(manifest)
+            .unwrap();
+        let verified = verify_manifest(dir.path(), &ANCILLARY_VKEY_PREPROD).unwrap();
+        assert_eq!(
+            hex::encode(verified.digest_for("ledger/128237957/tables").unwrap()),
+            "d1d2288fdb89e125cefb82dc9274cb8b24b24c56777351637d2dacc85c37b23c"
+        );
     }
 
     #[test]
