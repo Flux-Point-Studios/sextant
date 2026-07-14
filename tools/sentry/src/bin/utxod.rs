@@ -141,7 +141,9 @@ async fn main() -> Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/status", get(status))
         .with_state(app);
-    let addr = std::env::var("UTXOD_ADDR").unwrap_or_else(|_| "0.0.0.0:8478".to_string());
+    // Default to loopback — `/status` is unauthenticated, so external exposure is opt-in via
+    // UTXOD_ADDR (behind the operator's own auth/rate-limit).
+    let addr = std::env::var("UTXOD_ADDR").unwrap_or_else(|_| "127.0.0.1:8478".to_string());
     let listener = tokio::net::TcpListener::bind(&addr).await.context("bind")?;
     eprintln!("sextant-utxod: serving on {addr}");
     axum::serve(listener, router).await.context("serve")?;
@@ -277,6 +279,9 @@ async fn follow_once(app: &Arc<App>) -> Result<()> {
                     .await
                     .rollback_to(&hash)
                     .map_err(|e| anyhow::anyhow!("rollback: {e:?}"))?;
+                // Regress the freshness handle with the set's tip — otherwise `/status` would
+                // briefly report a `tip_slot` AHEAD of the rolled-back set (the unsafe direction).
+                *app.tip_slot.lock().await = point_slot(&point);
             }
             NextResponse::Await => {
                 // Caught up to the tip; wait for the next block.
