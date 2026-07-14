@@ -54,6 +54,8 @@
 //! against is only as trustworthy as its walk back to the genesis key.
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use chrono::{DateTime, Utc};
 use mithril_stm::{

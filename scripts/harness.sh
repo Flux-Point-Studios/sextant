@@ -26,7 +26,7 @@ full() {
   cargo clippy --all-targets --all-features -- -D warnings
   cargo build --release
   cargo test --all-features
-  cargo build --release --target wasm32-unknown-unknown
+  cargo rustc --release --target wasm32-unknown-unknown --crate-type cdylib
   guest_gate
   header_gate
 }
@@ -38,7 +38,12 @@ full() {
 guest_gate() {
   rustup target add riscv32im-unknown-none-elf >/dev/null 2>&1 || true
   cargo build -p guest-canary --target riscv32im-unknown-none-elf
+  cargo clippy -p sextant --no-default-features --target riscv32im-unknown-none-elf -- -D warnings
   cargo clippy -p guest-canary --target riscv32im-unknown-none-elf -- -D warnings
+  # Feature additivity: `mithril` must stay source-clean without `std` (the
+  # in-guest chain-verification combination heliograph M0 consumes). Host
+  # check suffices — no_std kicks in via the cfg_attr once `std` is off.
+  cargo check --no-default-features --features mithril
 }
 
 # The C-ABI header (include/sextant.h) is the consumable boundary; guard it:
