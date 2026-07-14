@@ -119,11 +119,13 @@ impl UtxoStore for RedbUtxoStore {
         // redb iterates in key order; each key is the 34-byte `tx_id ‖ BE-u16 index`.
         for entry in table.iter().map_err(store_err)? {
             let (k, _v) = entry.map_err(store_err)?;
-            let key = k.value();
-            let tx_id: [u8; 32] = key
-                .get(..32)
-                .and_then(|s| s.try_into().ok())
-                .ok_or_else(|| StoreError("utxo key is not 34 bytes".to_string()))?;
+            // Validate the FULL 34-byte width before indexing, so a foreign-written short key fails
+            // closed (StoreError) rather than panicking on key[32]/key[33].
+            let key: [u8; 34] = k
+                .value()
+                .try_into()
+                .map_err(|_| StoreError("utxo key is not 34 bytes".to_string()))?;
+            let tx_id: [u8; 32] = key[..32].try_into().expect("34 >= 32");
             let index = u16::from_be_bytes([key[32], key[33]]);
             f(OutPoint { tx_id, index });
         }
