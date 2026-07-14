@@ -12,7 +12,7 @@
  * the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
  * follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
  * [`SextantWatchVerdict`] reserved byte as `spend_region`; 4→5 for the Tier-2 certified-state
- * spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED_UNSPENT`]).
+ * spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]).
  */
 #define SEXTANT_ABI_VERSION 5
 
@@ -22,7 +22,7 @@
  * [`SextantVerifiedOutput`]); no wire value means it is, and none is ever written.
  *
  * `spend_status` is a BANDED code space: `0` = not established. The CRYPTOGRAPHIC band
- * (a Mithril certified-state proof) is `2` ([`SEXTANT_SPEND_CERTIFIED_UNSPENT`]); a future
+ * (a Mithril certified-state proof) is `2` ([`SEXTANT_SPEND_CERTIFIED`]); a future
  * ECONOMIC/attested band (a committee attestation) is RESERVED at `3+` and kept distinct, so a
  * consumer switching on the byte always sees the trust basis and can never read an attestation as a
  * proof. New tiers are additive (a new constant + an ABI-version bump), never a layout break.
@@ -31,15 +31,17 @@
 #define SEXTANT_SPEND_NOT_ESTABLISHED 0
 
 /**
- * The CRYPTOGRAPHIC band (Tier 2): the outpoint is unspent across a verified window from a
- * certified snapshot — [`SextantSpendStatus.tier`]. See [`crate::utxo::SpendStatus::CertifiedUnspent`].
- * The single-tx read path NEVER returns this (it cannot; only the certified-state path does), so a
- * consumer reading it on a [`SextantVerifiedOutput`] is a contract violation.
+ * The CRYPTOGRAPHIC band (Tier 2): the certified-state read observed NO consuming input for the
+ * outpoint across a header-verified window from a certified snapshot — [`SextantSpendStatus`]'s
+ * `tier`. The single-tx read path NEVER returns this (it cannot; only the certified-state path
+ * does), so a consumer reading it on a [`SextantVerifiedOutput`] is a contract violation. It is an
+ * OBSERVATION over a bounded window, scoped to `through_block` — never a claim the output is
+ * available now.
  */
-#define SEXTANT_SPEND_CERTIFIED_UNSPENT 2
+#define SEXTANT_SPEND_CERTIFIED 2
 
 /**
- * [`SextantSpendStatus.basis`] (meaningful only when `tier == SEXTANT_SPEND_CERTIFIED_UNSPENT`):
+ * [`SextantSpendStatus.basis`] (meaningful only when `tier == SEXTANT_SPEND_CERTIFIED`):
  * `UTxOSet(S)` recomputed from the STM-stake-quorum-certified blocks — the decentralized quorum.
  */
 #define SEXTANT_SPEND_BASIS_STM_CERTIFIED 1
@@ -476,31 +478,31 @@ typedef struct {
 /**
  * The Tier-2 certified-state spend verdict for one outpoint, projected into a fixed-width
  * `#[repr(C)]` struct — the C-ABI band of [`crate::utxo::SpendStatus`]. The consumer switches on
- * `tier`; when `tier == SEXTANT_SPEND_CERTIFIED_UNSPENT` the other fields carry the payload, else
+ * `tier`; when `tier == SEXTANT_SPEND_CERTIFIED` the other fields carry the payload, else
  * they are zeroed. `basis` and `mithril_quorum` are distinct fields precisely so the trust class of
  * the anchor and of the no-spend window are each machine-readable and uncoercible — never folded
  * into a single boolean a consumer could misread as absolute liveness.
  *
  * ## Honest scope
- * `tier == SEXTANT_SPEND_CERTIFIED_UNSPENT` means: the outpoint is unspent as of `through_block` in
- * a set that descends from a certified snapshot S (of `basis`) advanced only by header-verified,
- * body-committed, contiguous blocks. It is scoped to `through_block` (the verdict ages) and, when
- * `mithril_quorum == 0`, the window's tail is HEADER-VOUCHED, not quorum-backed. Never an
- * unconditional-liveness claim — the ledger decides at submission.
+ * `tier == SEXTANT_SPEND_CERTIFIED` means: no consuming input for the outpoint was observed as of
+ * `through_block` in a set that descends from a certified snapshot S (of `basis`) advanced only by
+ * header-verified, body-committed, contiguous blocks. It is scoped to `through_block` (the verdict
+ * ages) and, when `mithril_quorum == 0`, the window's tail is HEADER-VOUCHED, not quorum-backed.
+ * Never an unconditional-liveness claim — the ledger decides at submission.
  */
 typedef struct {
   /**
-   * The trust tier: `SEXTANT_SPEND_NOT_ESTABLISHED` (0) or `SEXTANT_SPEND_CERTIFIED_UNSPENT` (2).
+   * The trust tier: `SEXTANT_SPEND_NOT_ESTABLISHED` (0) or `SEXTANT_SPEND_CERTIFIED` (2).
    */
   uint8_t tier;
   /**
-   * The anchor's trust class when `tier == CERTIFIED_UNSPENT` (`SEXTANT_SPEND_BASIS_*`); `0`
+   * The anchor's trust class when `tier == SEXTANT_SPEND_CERTIFIED` (`SEXTANT_SPEND_BASIS_*`); `0`
    * otherwise.
    */
   uint8_t basis;
   /**
    * `1` if the whole no-spend window is within the Mithril tx-certified region (quorum-backed);
-   * `0` if its tail is header-vouched. Meaningful only when `tier == CERTIFIED_UNSPENT`.
+   * `0` if its tail is header-vouched. Meaningful only when `tier == SEXTANT_SPEND_CERTIFIED`.
    */
   uint8_t mithril_quorum;
   /**
@@ -509,7 +511,7 @@ typedef struct {
   uint8_t _reserved[5];
   /**
    * The tip block number the no-spend window was maintained through (the recency a consumer must
-   * carry). `0` when `tier != CERTIFIED_UNSPENT`.
+   * carry). `0` when `tier != SEXTANT_SPEND_CERTIFIED`.
    */
   uint64_t through_block;
 } SextantSpendStatus;
