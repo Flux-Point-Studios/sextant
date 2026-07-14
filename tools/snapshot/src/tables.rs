@@ -73,7 +73,7 @@ pub fn for_each_outpoint(bytes: &[u8], mut f: impl FnMut(OutPoint) -> Result<()>
     let definite = d.map().map_err(cbor)?;
 
     let mut count = 0usize;
-    let mut read_entry =
+    let read_entry =
         |d: &mut Decoder<'_>, f: &mut dyn FnMut(OutPoint) -> Result<()>| -> Result<()> {
             let key = d.bytes().map_err(cbor)?;
             ensure!(
@@ -147,7 +147,7 @@ mod tests {
         }
         // 81 bf (bytes34 key)(bytes value) ... ff
         let mut buf = vec![0x81, 0xbf];
-        let mut enc = |k: &[u8], v: &[u8], b: &mut Vec<u8>| {
+        let enc = |k: &[u8], v: &[u8], b: &mut Vec<u8>| {
             b.push(0x58);
             b.push(k.len() as u8);
             b.extend_from_slice(k);
