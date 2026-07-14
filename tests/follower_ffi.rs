@@ -178,11 +178,11 @@ fn c_verdict(f: *mut SextantFollower) -> SextantWatchVerdict {
     out
 }
 
-/// F5 bumps the ABI contract 3 -> 4 (the reserved byte becomes `spend_region`).
+/// The ABI contract is at version 5 (the Tier-2 certified-state spend-status band).
 #[test]
-fn abi_version_is_four() {
-    assert_eq!(SEXTANT_ABI_VERSION, 4);
-    assert_eq!(sextant_abi_version(), 4);
+fn abi_version_is_five() {
+    assert_eq!(SEXTANT_ABI_VERSION, 5);
+    assert_eq!(sextant_abi_version(), 5);
 }
 
 /// Replaying the whole window through the C follower yields `SPEND_OBSERVED` naming the

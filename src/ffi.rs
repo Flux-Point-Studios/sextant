@@ -25,7 +25,9 @@ use crate::follow::{AppendRefusal, ReAnchor, Rollback, SlotSchedule, WindowFollo
 use crate::header::{DecodeError, HeaderView};
 use crate::inclusion::InclusionError;
 use crate::kes::KesError;
-use crate::utxo::{self, CertifiedTransactions, Datum, OutPoint, UtxoError};
+use crate::utxo::{
+    self, AnchorBasis, CertifiedTransactions, Datum, OutPoint, SpendStatus, UtxoError,
+};
 use crate::vrf::VrfError;
 use crate::window::{self, Freshness, SpendRegion, StallReason, WatchBasis, WatchVerdict};
 
@@ -39,20 +41,38 @@ use crate::mithril::{
 /// read export and the certified-transactions out-params on the anchored verify; 2→3 for
 /// the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
 /// follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
-/// [`SextantWatchVerdict`] reserved byte as `spend_region`.
-pub const SEXTANT_ABI_VERSION: u32 = 4;
+/// [`SextantWatchVerdict`] reserved byte as `spend_region`; 4→5 for the Tier-2 certified-state
+/// spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]).
+pub const SEXTANT_ABI_VERSION: u32 = 5;
 
 /// The only defined `spend_status` value a verified read returns. The read path can
 /// NEVER establish that an output is currently available to spend (see
 /// [`SextantVerifiedOutput`]); no wire value means it is, and none is ever written.
 ///
-/// `spend_status` is a BANDED code space: `0` = not established. A future
-/// CRYPTOGRAPHIC band (a Mithril ledger-state proof) and a future ECONOMIC/attested
-/// band (a committee attestation) are RESERVED and kept distinct, so a consumer
-/// switching on the byte always sees the trust basis and can never read an
-/// attestation as a proof. New tiers are additive (a new constant + an ABI-version
-/// bump), never a layout break. cbindgen emits this as a `#define`.
+/// `spend_status` is a BANDED code space: `0` = not established. The CRYPTOGRAPHIC band
+/// (a Mithril certified-state proof) is `2` ([`SEXTANT_SPEND_CERTIFIED`]); a future
+/// ECONOMIC/attested band (a committee attestation) is RESERVED at `3+` and kept distinct, so a
+/// consumer switching on the byte always sees the trust basis and can never read an attestation as a
+/// proof. New tiers are additive (a new constant + an ABI-version bump), never a layout break.
+/// cbindgen emits this as a `#define`.
 pub const SEXTANT_SPEND_NOT_ESTABLISHED: u8 = 0;
+
+/// The CRYPTOGRAPHIC band (Tier 2): the certified-state read observed NO consuming input for the
+/// outpoint across a header-verified window from a certified snapshot — [`SextantSpendStatus`]'s
+/// `tier`. The single-tx read path NEVER returns this (it cannot; only the certified-state path
+/// does), so a consumer reading it on a [`SextantVerifiedOutput`] is a contract violation. It is an
+/// OBSERVATION over a bounded window, scoped to `through_block` — never a claim the output is
+/// available now.
+pub const SEXTANT_SPEND_CERTIFIED: u8 = 2;
+
+/// [`SextantSpendStatus.basis`] (meaningful only when `tier == SEXTANT_SPEND_CERTIFIED`):
+/// `UTxOSet(S)` recomputed from the STM-stake-quorum-certified blocks — the decentralized quorum.
+pub const SEXTANT_SPEND_BASIS_STM_CERTIFIED: u8 = 1;
+/// [`SextantSpendStatus.basis`]: `UTxOSet(S)` taken from the Mithril ancillary, signed by a SINGLE
+/// IOG Ed25519 key — a bootstrap convenience, NOT the stake quorum. A distinct code from
+/// [`SEXTANT_SPEND_BASIS_STM_CERTIFIED`] so a consumer can never read a single-key snapshot as
+/// quorum-certified.
+pub const SEXTANT_SPEND_BASIS_ANCILLARY_SIGNED: u8 = 2;
 
 /// Every verdict the boundary can return, as one flat `#[repr(i32)]` enum. All bands
 /// are defined unconditionally (only the mithril *function* is feature-gated) so the
@@ -188,6 +208,68 @@ pub struct SextantVerifiedOutput {
     pub spend_status: u8,
     /// Explicit tail padding; zeroed on write so the struct is fully deterministic.
     pub _reserved: [u8; 6],
+}
+
+/// The Tier-2 certified-state spend verdict for one outpoint, projected into a fixed-width
+/// `#[repr(C)]` struct — the C-ABI band of [`crate::utxo::SpendStatus`]. The consumer switches on
+/// `tier`; when `tier == SEXTANT_SPEND_CERTIFIED` the other fields carry the payload, else
+/// they are zeroed. `basis` and `mithril_quorum` are distinct fields precisely so the trust class of
+/// the anchor and of the no-spend window are each machine-readable and uncoercible — never folded
+/// into a single boolean a consumer could misread as absolute liveness.
+///
+/// ## Honest scope
+/// `tier == SEXTANT_SPEND_CERTIFIED` means: no consuming input for the outpoint was observed as of
+/// `through_block` in a set that descends from a certified snapshot S (of `basis`) advanced only by
+/// header-verified, body-committed, contiguous blocks. It is scoped to `through_block` (the verdict
+/// ages) and, when `mithril_quorum == 0`, the window's tail is HEADER-VOUCHED, not quorum-backed.
+/// Never an unconditional-liveness claim — the ledger decides at submission.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SextantSpendStatus {
+    /// The trust tier: `SEXTANT_SPEND_NOT_ESTABLISHED` (0) or `SEXTANT_SPEND_CERTIFIED` (2).
+    pub tier: u8,
+    /// The anchor's trust class when `tier == SEXTANT_SPEND_CERTIFIED` (`SEXTANT_SPEND_BASIS_*`); `0`
+    /// otherwise.
+    pub basis: u8,
+    /// `1` if the whole no-spend window is within the Mithril tx-certified region (quorum-backed);
+    /// `0` if its tail is header-vouched. Meaningful only when `tier == SEXTANT_SPEND_CERTIFIED`.
+    pub mithril_quorum: u8,
+    /// Explicit tail padding; zeroed so the struct is fully deterministic.
+    pub _reserved: [u8; 5],
+    /// The tip block number the no-spend window was maintained through (the recency a consumer must
+    /// carry). `0` when `tier != SEXTANT_SPEND_CERTIFIED`.
+    pub through_block: u64,
+}
+
+impl From<SpendStatus> for SextantSpendStatus {
+    /// Project the internal ladder verdict into its C-ABI band. A same-crate exhaustive match (no
+    /// wildcard): a new [`SpendStatus`] tier fails to compile here, forcing its ABI band to be wired
+    /// consciously — the C surface can never silently drop a tier.
+    fn from(s: SpendStatus) -> Self {
+        match s {
+            SpendStatus::NotEstablished => SextantSpendStatus {
+                tier: SEXTANT_SPEND_NOT_ESTABLISHED,
+                basis: 0,
+                mithril_quorum: 0,
+                _reserved: [0; 5],
+                through_block: 0,
+            },
+            SpendStatus::CertifiedUnspent {
+                basis,
+                through_block,
+                mithril_quorum,
+            } => SextantSpendStatus {
+                tier: SEXTANT_SPEND_CERTIFIED,
+                basis: match basis {
+                    AnchorBasis::StmCertified => SEXTANT_SPEND_BASIS_STM_CERTIFIED,
+                    AnchorBasis::AncillarySigned => SEXTANT_SPEND_BASIS_ANCILLARY_SIGNED,
+                },
+                mithril_quorum: mithril_quorum as u8,
+                _reserved: [0; 5],
+                through_block,
+            },
+        }
+    }
 }
 
 /// Run a fallible boundary body so a panic becomes [`SextantStatus::ErrPanic`] instead
@@ -1530,6 +1612,52 @@ fn anchored_status(e: &AnchoredError) -> (i32, i64, u64) {
 mod tests {
     use super::*;
     use crate::header::OpCert;
+
+    /// The Tier-2 spend-status projects into distinct, uncoercible C-ABI bands: NotEstablished is
+    /// tier 0 with a zeroed payload; CertifiedUnspent is the cryptographic band (2) carrying the
+    /// anchor basis, the window's quorum bit, and the recency — each a distinct field, so an
+    /// AncillarySigned single-key snapshot can never be read as StmCertified, nor a header-vouched
+    /// window as quorum-backed.
+    #[test]
+    fn spend_status_projects_into_distinct_abi_bands() {
+        assert_eq!(
+            SextantSpendStatus::from(SpendStatus::NotEstablished),
+            SextantSpendStatus {
+                tier: SEXTANT_SPEND_NOT_ESTABLISHED,
+                basis: 0,
+                mithril_quorum: 0,
+                _reserved: [0; 5],
+                through_block: 0,
+            }
+        );
+        assert_eq!(
+            SextantSpendStatus::from(SpendStatus::CertifiedUnspent {
+                basis: AnchorBasis::AncillarySigned,
+                through_block: 4_930_365,
+                mithril_quorum: false,
+            }),
+            SextantSpendStatus {
+                tier: SEXTANT_SPEND_CERTIFIED,
+                basis: SEXTANT_SPEND_BASIS_ANCILLARY_SIGNED,
+                mithril_quorum: 0,
+                _reserved: [0; 5],
+                through_block: 4_930_365,
+            }
+        );
+        // The stronger basis + a quorum-backed window map to their distinct codes.
+        let stm = SextantSpendStatus::from(SpendStatus::CertifiedUnspent {
+            basis: AnchorBasis::StmCertified,
+            through_block: 42,
+            mithril_quorum: true,
+        });
+        assert_eq!(stm.basis, SEXTANT_SPEND_BASIS_STM_CERTIFIED);
+        assert_eq!(stm.mithril_quorum, 1);
+        // The two bases are distinct codes — a consumer can never coerce one into the other.
+        assert_ne!(
+            SEXTANT_SPEND_BASIS_ANCILLARY_SIGNED,
+            SEXTANT_SPEND_BASIS_STM_CERTIFIED
+        );
+    }
 
     /// The guard converts a panic in the boundary body into `ErrPanic`, never a native
     /// abort or an unwind across `extern "C"`.
