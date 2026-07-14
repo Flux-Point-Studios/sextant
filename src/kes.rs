@@ -63,7 +63,7 @@ impl core::fmt::Display for KesError {
     }
 }
 
-impl std::error::Error for KesError {}
+impl core::error::Error for KesError {}
 
 /// The 48-byte message the cold key signs for an operational certificate:
 /// `hot_vkey(32) ‖ BE64(sequence_number) ‖ BE64(kes_period)`, a raw

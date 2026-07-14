@@ -81,7 +81,7 @@
 //! `mithril_quorum:false` (the batch stalls there) — the region is answerable but not
 //! quorum-backed, surfaced honestly, never faked.
 
-use std::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque};
 
 use crate::chain;
 use crate::header::HeaderView;

@@ -27,7 +27,18 @@ full() {
   cargo build --release
   cargo test --all-features
   cargo build --release --target wasm32-unknown-unknown
+  guest_gate
   header_gate
+}
+
+# The zkVM-guest consumption gate: the default graph must stay no_std+alloc for
+# the rv32im ISA class (tools/guest-canary consumes sextant exactly as a guest
+# binary would — an rlib dependency, no default features). Clippy runs the same
+# graph so no_std-only warnings can't rot behind the std builds.
+guest_gate() {
+  rustup target add riscv32im-unknown-none-elf >/dev/null 2>&1 || true
+  cargo build -p guest-canary --target riscv32im-unknown-none-elf
+  cargo clippy -p guest-canary --target riscv32im-unknown-none-elf -- -D warnings
 }
 
 # The C-ABI header (include/sextant.h) is the consumable boundary; guard it:

@@ -24,7 +24,10 @@
 //! supplied `certified_root`. A mutated path node, a substituted sub-tree, or the
 //! wrong root recomputes to a value that is not `certified_root` and is rejected.
 
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use serde::Deserialize;
 
@@ -70,7 +73,7 @@ impl core::fmt::Display for InclusionError {
     }
 }
 
-impl std::error::Error for InclusionError {}
+impl core::error::Error for InclusionError {}
 
 // ---- Wire structs. Untrusted input; `inner_root` is deliberately absent so it is
 // never deserialized and never trusted — the root is always recomputed. serde

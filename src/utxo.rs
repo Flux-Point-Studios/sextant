@@ -33,7 +33,9 @@
 //! bytes hash to a value that is not a leaf of the proof and are rejected as
 //! not-included before any output is decoded.
 
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use minicbor::Decoder;
 use minicbor::data::Type;
@@ -234,7 +236,7 @@ impl core::fmt::Display for UtxoError {
     }
 }
 
-impl std::error::Error for UtxoError {}
+impl core::error::Error for UtxoError {}
 
 /// Verify that output `out_index` of the transaction whose body is `tx_bytes` is a
 /// genesis-anchored, Mithril-certified on-chain output, and return its

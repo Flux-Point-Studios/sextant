@@ -6,6 +6,7 @@
 //! returning any field. Malformed or reshaped input fails closed. Later
 //! slices verify VRF/KES over the same header body.
 
+use alloc::vec::Vec;
 use minicbor::Decoder;
 use minicbor::data::Type;
 
@@ -130,7 +131,7 @@ impl core::fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}
 
 impl HeaderView {
     /// Decode the read-path fields from ledger `[era, block]` CBOR for the

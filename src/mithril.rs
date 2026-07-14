@@ -53,7 +53,7 @@
 //! terminus — the certificate whose signed Cardano state a UTxO read is checked
 //! against is only as trustworthy as its walk back to the genesis key.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use mithril_stm::{
@@ -256,7 +256,7 @@ impl core::fmt::Display for ChainError {
     }
 }
 
-impl std::error::Error for ChainError {}
+impl core::error::Error for ChainError {}
 
 /// Verify that `certs` — oldest first (`certs[0]` the segment root, the last its
 /// tip) — form a hash-linked, AVK-bound Mithril certificate chain on Sextant's
@@ -353,7 +353,7 @@ impl core::fmt::Display for GenesisError {
     }
 }
 
-impl std::error::Error for GenesisError {}
+impl core::error::Error for GenesisError {}
 
 /// Verify a Mithril *genesis* certificate against the pinned per-network genesis
 /// verification key — the trust root the certificate chain terminates in.
@@ -442,7 +442,7 @@ impl core::fmt::Display for StandardError {
     }
 }
 
-impl std::error::Error for StandardError {}
+impl core::error::Error for StandardError {}
 
 /// Verify a Mithril *standard* certificate's STM multi-signature — the authority
 /// every non-genesis certificate rides on — on Sextant's own path.
@@ -642,7 +642,7 @@ impl core::fmt::Display for AnchoredError {
     }
 }
 
-impl std::error::Error for AnchoredError {}
+impl core::error::Error for AnchoredError {}
 
 /// Verify a genesis-anchored Mithril certificate chain end-to-end on Sextant's own
 /// path — the full chain of trust the read path depends on. `certs` is the segment

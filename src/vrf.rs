@@ -66,7 +66,7 @@ impl core::fmt::Display for VrfError {
     }
 }
 
-impl std::error::Error for VrfError {}
+impl core::error::Error for VrfError {}
 
 /// Recompute the 64-byte VRF output (beta) from an 80-byte draft-03 proof:
 ///

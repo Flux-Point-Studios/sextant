@@ -55,7 +55,7 @@ impl core::fmt::Display for FollowError {
     }
 }
 
-impl std::error::Error for FollowError {}
+impl core::error::Error for FollowError {}
 
 /// Apply one block to `set`, advancing its tip, and return the new tip. Verifies the header crypto
 /// against `eta0` (the block's epoch nonce), binds the body to the header and extracts the

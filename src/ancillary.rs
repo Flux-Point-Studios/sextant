@@ -20,7 +20,8 @@
 //! SHA-256 digest, against which the fetched `tables` blob is checked before it is parsed — so no
 //! unverified bytes ever reach the UTxO set.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -102,7 +103,7 @@ impl core::fmt::Display for AncillaryError {
     }
 }
 
-impl std::error::Error for AncillaryError {}
+impl core::error::Error for AncillaryError {}
 
 /// Verify a Mithril cardano-database ancillary manifest against a pinned ancillary verification
 /// key. On success the returned [`VerifiedAncillaryManifest`] carries the trusted per-file SHA-256

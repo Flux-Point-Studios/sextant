@@ -1,0 +1,13 @@
+# The zkVM-guest consumption canary: proves the default graph compiles as a
+# no_std+alloc rlib for the rv32im ISA class every zkVM guest targets. Built by
+# the harness with `--target riscv32im-unknown-none-elf`; as a dependency,
+# sextant is built as an rlib only (exactly how a guest binary consumes it), so
+# this is the acceptance test for the guest feature-surface.
+[package]
+name = "guest-canary"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sextant = { path = "../..", default-features = false }
