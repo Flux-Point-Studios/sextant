@@ -97,14 +97,20 @@ a persisted membership set tagged with slot S and the `AncillarySigned` basis. O
 snapshot it loads all **4,176,148** outpoints (~540 MB redb) and answers "is this outpoint in the
 certified set at S?" — a real snapshot outpoint reads present, a fabricated one absent.
 
-**The tip is the T3→T4 seam, not derivable from the ancillary.** Binding the set to a concrete tip
-block (hash + number at S) needs S's block, and it is *not* in the ancillary: the bundled
-`immutable/<n>.chunk` is Mithril's "last immutable file" — a LATER, unrelated chunk (observed: its
-blocks are at slots 128239242–128239523, all *after* the ledger snapshot at 128237957, with a gap),
-and S's own block lives in an earlier immutable chunk that ships only with the full cardano-database.
-The ledger `state` file does carry the tip, but buried inside the ExtLedgerState the amended plan
-declines to parse. So T4 resolves S→block against the certified chain it must reach anyway, then
-seeds a `UtxoSet` at that tip from this store (`UtxoSet::with_store`).
+**The tip S — derived from the `state` file's AnnTip (T4-tip).** Binding the set to a concrete tip
+block (hash + number at S) needs S's block header identity. The bundled `immutable/<n>.chunk` is
+NOT it — that is Mithril's "last immutable file", a LATER, unrelated chunk (observed: its blocks are
+at slots 128239242–128239523, all *after* the ledger snapshot at 128237957, with a ~64-block gap).
+S's tip instead comes from the `state` file's `HeaderState`: an `AnnTip = array(3) [slot, hash,
+blockno]`. This is a tiny fixed-shape tail structure — NOT the version-fragile ExtLedgerState walk
+the T3 ruling declined for the UTxO set (that is the giant `tables` blob). `state::parse_tip` locates
+it by a slot-anchored marker (`83 <slot> 5820`), requires EXACTLY one match, and cross-checks the
+`(hash, blockno)` against a second, independently-encoded copy (the ledger-state tip pointer `<slot>
+<blockno> 5820 <hash>`) — two encodings that must agree, else fail closed. The `state` file's SHA-256
+is gated against the signed manifest first, so the tip rides the same `AncillarySigned` basis as the
+set. On the real preprod snapshot: tip = **#4930365 `5eaf46…dfd5`** at slot 128237957. `snapshot-load`
+now seeds `UtxoSet::with_store` at this tip. T4's live follow confirms the parsed hash for free
+(chain-sync FindIntersect at `(S, hash)` + the first block's `prev_hash` contiguity).
 
 ## Committed fixtures
 
