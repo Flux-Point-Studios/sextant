@@ -162,15 +162,20 @@ pub enum AnchorBasis {
 pub enum SpendStatus {
     /// Spend state is not established, and cannot be by the single-tx path (Tier 1).
     NotEstablished,
-    /// The outpoint is unspent as of `through_block` — a member of the certified `UTxOSet(S)`
-    /// (under `basis`) with no spend observed across the verified window `(S, through_block]`
-    /// (Tier 2). Scoped to `through_block` and labelled with `basis`; not an unconditional claim.
+    /// The outpoint is unspent as of `through_block`, in a set that descends from a certified
+    /// snapshot S (of trust class `basis`) and was advanced only by header-verified, body-committed,
+    /// contiguous blocks (Tier 2). This covers BOTH an outpoint carried in `UTxOSet(S)` and still
+    /// unspent, AND one created within the verified window `(S, through_block]` and still unspent —
+    /// the claim is "unspent in the certified-anchored, header-verified set", NOT "a member of
+    /// `UTxOSet(S)`" specifically. Scoped to `through_block` and labelled with `basis`; never an
+    /// unconditional-liveness claim (the ledger still decides at submission).
     CertifiedUnspent {
-        /// The trust class the certified membership@S rests on (uncoercible: read the basis here,
-        /// never assume the stronger one).
+        /// The trust class of the ANCHOR S the set descends from (uncoercible: read the basis here,
+        /// never assume the stronger one). Bound from the set's [`crate::utxoset::SnapshotAnchor`]
+        /// at construction, never chosen at query time.
         basis: AnchorBasis,
-        /// The tip block number through which the no-spend window was verified — the recency the
-        /// consumer must carry (the verdict ages as the chain advances past it).
+        /// The tip block number through which the header-verified no-spend window was maintained —
+        /// the recency the consumer must carry (the verdict ages as the chain advances past it).
         through_block: u64,
     },
 }

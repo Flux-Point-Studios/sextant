@@ -277,6 +277,11 @@ pub struct UtxoSet<S: UtxoStore = MemStore> {
     tip: Option<SetTip>,
     undo: VecDeque<Undo>,
     depth: usize,
+    /// The trust class of the certified snapshot this set descends from, bound at construction from
+    /// a [`SnapshotAnchor`] — `None` for a non-anchored set (from-genesis / plain). It gates
+    /// [`UtxoSet::certified_spend_status`]: without a bound anchor basis, no Tier-2 verdict can be
+    /// produced, so the basis is never a free query-time choice that could mislabel the trust class.
+    basis: Option<AnchorBasis>,
 }
 
 impl UtxoSet<MemStore> {
@@ -296,17 +301,48 @@ impl UtxoSet<MemStore> {
     ) -> Self {
         UtxoSet::with_store(unspent.into_iter().collect(), Some(tip), depth)
     }
+
+    /// An in-memory set seeded from a certified [`SnapshotAnchor`] — the anchored counterpart of
+    /// [`from_snapshot`](UtxoSet::from_snapshot): it binds the anchor's [`AnchorBasis`] into the
+    /// set, so [`certified_spend_status`](UtxoSet::certified_spend_status) can produce a Tier-2
+    /// verdict labelled with the anchor's true trust class.
+    pub fn from_anchor(
+        anchor: SnapshotAnchor,
+        unspent: impl IntoIterator<Item = OutPoint>,
+        depth: usize,
+    ) -> Self {
+        let mut set = UtxoSet::with_store(unspent.into_iter().collect(), Some(anchor.tip), depth);
+        set.basis = Some(anchor.basis);
+        set
+    }
 }
 
 impl<S: UtxoStore> UtxoSet<S> {
     /// Build a set over an arbitrary store — the seam a native host uses to back the set with a
-    /// persistent store already seeded to `tip` (or `None` for an empty from-genesis start).
+    /// persistent store already seeded to `tip` (or `None` for an empty from-genesis start). No
+    /// anchor basis is bound, so this set produces no Tier-2 verdict; use
+    /// [`with_store_anchored`](UtxoSet::with_store_anchored) to bind one.
     pub fn with_store(store: S, tip: Option<SetTip>, depth: usize) -> Self {
         UtxoSet {
             store,
             tip,
             undo: VecDeque::new(),
             depth,
+            basis: None,
+        }
+    }
+
+    /// Build a set over a store already seeded to a certified [`SnapshotAnchor`], binding the
+    /// anchor's [`AnchorBasis`] — the Tier-2 native-host seam (the `snapshot-load`/live-follow
+    /// path). The bound basis is what [`certified_spend_status`](UtxoSet::certified_spend_status)
+    /// labels its verdict with, so the trust class rides the set, never a query-time argument.
+    pub fn with_store_anchored(store: S, anchor: SnapshotAnchor, depth: usize) -> Self {
+        UtxoSet {
+            store,
+            tip: Some(anchor.tip),
+            undo: VecDeque::new(),
+            depth,
+            basis: Some(anchor.basis),
         }
     }
 
@@ -330,25 +366,34 @@ impl<S: UtxoStore> UtxoSet<S> {
         self.store.contains(o)
     }
 
-    /// The composed Tier-2 spend verdict for `o`: [`SpendStatus::CertifiedUnspent`] when `o` is a
-    /// member of the certified set at the current tip (unspent across the verified window from S),
-    /// carrying `basis` (the membership@S trust class) and the tip block number it holds through;
-    /// otherwise [`SpendStatus::NotEstablished`] — `o` is not in the set (spent in the window, or
-    /// never in the certified snapshot), so no certified-unspent evidence exists. Never a false
-    /// positive: the answer is `CertifiedUnspent` only for a genuine set member. `basis` comes from
-    /// the run's [`SnapshotAnchor`], so the caller cannot produce the verdict without it.
-    pub fn certified_spend_status(
-        &self,
-        basis: AnchorBasis,
-        o: &OutPoint,
-    ) -> Result<SpendStatus, StoreError> {
-        if self.is_unspent(o)? {
-            Ok(SpendStatus::CertifiedUnspent {
+    /// The composed Tier-2 spend verdict for `o`.
+    ///
+    /// Returns [`SpendStatus::CertifiedUnspent`] when `o` is a member of the maintained set at the
+    /// current tip — i.e. `o` is unspent as of `through_block` in a set that descends from a
+    /// certified snapshot S (of trust class `basis`) and has been advanced ONLY by header-verified,
+    /// body-committed, contiguous blocks. This holds both for an outpoint carried in `UTxOSet(S)`
+    /// and still unspent, AND for one created within the verified window `(S, through_block]` and
+    /// still unspent: the claim is "unspent in the certified-anchored, header-verified set as of
+    /// `through_block`", NOT "a member of `UTxOSet(S)`" specifically. The `basis` labels the ANCHOR
+    /// the set descends from; the window itself rests on header verification (honest-majority /
+    /// `mithril_quorum`), which a future refinement can grade per sub-region.
+    ///
+    /// Returns [`SpendStatus::NotEstablished`] when `o` is not in the set (spent in the window or
+    /// never present), OR when no anchor basis / tip is bound — a Tier-2 verdict requires an
+    /// established certified anchor, so a non-anchored or pre-tip set yields no positive claim
+    /// rather than a fabricated one. Never a false positive.
+    ///
+    /// The `basis` is the one bound at construction from the set's [`SnapshotAnchor`]
+    /// ([`with_store_anchored`](UtxoSet::with_store_anchored) / [`from_anchor`](UtxoSet::from_anchor)),
+    /// never a query-time argument — so an [`AnchorBasis::AncillarySigned`] set can never be
+    /// mislabelled [`AnchorBasis::StmCertified`] at the point of asking.
+    pub fn certified_spend_status(&self, o: &OutPoint) -> Result<SpendStatus, StoreError> {
+        match (self.basis, self.tip) {
+            (Some(basis), Some(tip)) if self.is_unspent(o)? => Ok(SpendStatus::CertifiedUnspent {
                 basis,
-                through_block: self.tip().map(|t| t.number).unwrap_or(0),
-            })
-        } else {
-            Ok(SpendStatus::NotEstablished)
+                through_block: tip.number,
+            }),
+            _ => Ok(SpendStatus::NotEstablished),
         }
     }
 
@@ -789,17 +834,20 @@ mod tests {
     }
 
     #[test]
-    fn certified_spend_status_grades_membership_with_the_basis_and_recency() {
-        let base = SetTip {
-            number: 100,
-            hash: h(100),
+    fn certified_spend_status_grades_membership_with_the_bound_basis_and_recency() {
+        let anchor = SnapshotAnchor {
+            tip: SetTip {
+                number: 100,
+                hash: h(100),
+            },
+            basis: AnchorBasis::AncillarySigned,
         };
-        let mut u = UtxoSet::from_snapshot(base, [op(50, 0)], 10);
+        let mut u = UtxoSet::from_anchor(anchor, [op(50, 0)], 10);
 
-        // A member at the anchor tip: CertifiedUnspent, carrying the basis and the tip it holds
-        // through (still S = 100 before any block applies).
+        // A member at the anchor tip: CertifiedUnspent, carrying the BOUND basis (from the anchor,
+        // not a query arg) and the tip it holds through (still S = 100 before any block applies).
         assert_eq!(
-            u.certified_spend_status(AnchorBasis::AncillarySigned, &op(50, 0)),
+            u.certified_spend_status(&op(50, 0)),
             Ok(SpendStatus::CertifiedUnspent {
                 basis: AnchorBasis::AncillarySigned,
                 through_block: 100,
@@ -807,12 +855,13 @@ mod tests {
         );
         // A non-member: no certified-unspent evidence, never a false positive.
         assert_eq!(
-            u.certified_spend_status(AnchorBasis::AncillarySigned, &op(99, 9)),
+            u.certified_spend_status(&op(99, 9)),
             Ok(SpendStatus::NotEstablished)
         );
 
         // Advance the window; the recency rides the current tip, and the spent member drops to
-        // NotEstablished while a created one becomes CertifiedUnspent.
+        // NotEstablished while a window-created one becomes CertifiedUnspent — still labelled with
+        // the ANCHOR's basis (AncillarySigned), never upgraded by the window.
         u.apply(&BlockEffects {
             number: 101,
             hash: h(101),
@@ -824,14 +873,41 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            u.certified_spend_status(AnchorBasis::StmCertified, &op(101, 0)),
+            u.certified_spend_status(&op(101, 0)),
             Ok(SpendStatus::CertifiedUnspent {
-                basis: AnchorBasis::StmCertified,
+                basis: AnchorBasis::AncillarySigned,
                 through_block: 101,
             })
         );
         assert_eq!(
-            u.certified_spend_status(AnchorBasis::StmCertified, &op(50, 0)),
+            u.certified_spend_status(&op(50, 0)),
+            Ok(SpendStatus::NotEstablished)
+        );
+    }
+
+    #[test]
+    fn certified_spend_status_fails_closed_without_a_bound_anchor() {
+        // A non-anchored set (no basis bound) can hold members but yields NO Tier-2 verdict — the
+        // basis is never fabricated, so a plain set can't be read as certified.
+        let base = SetTip {
+            number: 100,
+            hash: h(100),
+        };
+        let u = UtxoSet::from_snapshot(base, [op(50, 0)], 10);
+        assert!(u.is_unspent(&op(50, 0)).unwrap());
+        assert_eq!(
+            u.certified_spend_status(&op(50, 0)),
+            Ok(SpendStatus::NotEstablished)
+        );
+
+        // An anchored set with no applied tip (tip: None) likewise yields no positive claim rather
+        // than a `through_block: 0` fabrication.
+        let store: MemStore = [op(50, 0)].into_iter().collect();
+        let mut pre_tip = UtxoSet::with_store(store, None, 10);
+        pre_tip.basis = Some(AnchorBasis::StmCertified);
+        assert!(pre_tip.is_unspent(&op(50, 0)).unwrap());
+        assert_eq!(
+            pre_tip.certified_spend_status(&op(50, 0)),
             Ok(SpendStatus::NotEstablished)
         );
     }
