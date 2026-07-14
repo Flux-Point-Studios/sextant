@@ -16,6 +16,7 @@
 //! Usage: `sextant-audit <ancillary-dir> <preprod|mainnet> <sample-size>`
 
 use anyhow::{Context, Result, bail};
+use sentry::coverage::max_undetected_phantoms;
 use sentry::transport::{fetch_fresh_anchor, fetch_tx_proof, load_committed_base, vectors_dir};
 use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sextant::inclusion::verify_tx_inclusion;
@@ -138,13 +139,33 @@ async fn main() -> Result<()> {
         }
     }
 
+    println!("distinct_members: {n_distinct}");
     println!("sampled: {}", tx_ids.len());
     println!("certified_real: {certified}");
     println!("phantom_or_failed: {phantom}");
-    if phantom == 0 {
-        println!("result: PASS (every sampled set@S transaction is STM-certified real)");
-    } else {
-        println!("result: FAIL ({phantom} sampled transactions are not certified)");
+    if phantom > 0 {
+        println!("result: FAIL ({phantom} sampled transactions are not STM-certified)");
+        return Ok(());
     }
+    // Quantified partial discharge: publish exactly how much this passing sample buys. At 99%
+    // confidence, fewer than this many of the set's distinct tx_ids could be undetected phantoms.
+    const ALPHA: f64 = 0.01;
+    let max_phantoms = max_undetected_phantoms(n_distinct, certified as u32, ALPHA);
+    // The shown fraction is derived from the (exhaustion-capped) count so they always agree.
+    let frac = if n_distinct == 0 {
+        0.0
+    } else {
+        max_phantoms as f64 / n_distinct as f64
+    };
+    println!("result: PASS ({certified} STM-certified, 0 phantom)");
+    println!("confidence: 0.99");
+    println!(
+        "phantom_bound: < {max_phantoms} phantom tx_ids ({:.4}% of {n_distinct}) at 99% confidence",
+        frac * 100.0
+    );
+    println!(
+        "discharge: PARTIAL (sampled) — {certified} members STM-certified; a full \
+         AncillarySigned->StmCertified discharge proves every member (genesis->S recompute)"
+    );
     Ok(())
 }
