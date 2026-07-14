@@ -5,6 +5,7 @@
 //! wasm-safe). The stream is decompressed and untarred incrementally, so the full 1.88 GB
 //! uncompressed archive is never held in memory.
 
+pub mod state;
 pub mod tables;
 
 use std::fs::File;
@@ -14,6 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use memmap2::Mmap;
 use sextant::ancillary::{VerifiedAncillaryManifest, verify_ancillary_manifest};
+use sextant::utxoset::{AnchorBasis, SnapshotAnchor};
 use sha2::{Digest, Sha256};
 
 /// One unpacked entry: its path relative to the destination root and its size in bytes.
@@ -117,6 +119,28 @@ pub fn verify_newest_tables(
 ) -> Result<VerifiedTables> {
     let verified = verify_manifest(ancillary_dir, ancillary_vkey)?;
     verified_tables(ancillary_dir, &verified)
+}
+
+/// Derive the certified snapshot's tip S (T4-tip): confirm the `state` file hashes to the digest
+/// the verified manifest commits, then parse its AnnTip → [`SnapshotAnchor`]. The tip rides the
+/// same signature as the UTxO set, so its basis is [`AnchorBasis::AncillarySigned`] — the T3→T4
+/// seam that lets `snapshot-load` seed a `UtxoSet` at a coherent tip.
+pub fn verified_anchor(
+    ancillary_dir: &Path,
+    verified: &VerifiedAncillaryManifest,
+) -> Result<SnapshotAnchor> {
+    let (slot, _tables_key) =
+        newest_tables_key(verified).context("manifest commits no ledger/<slot>/tables entry")?;
+    let state_key = format!("ledger/{slot}/state");
+
+    let state_bytes = std::fs::read(ancillary_dir.join(&state_key)).context("read state")?;
+    match_digest(sha256_bytes(&state_bytes), verified, &state_key)?;
+
+    let tip = state::parse_tip(&state_bytes, slot)?;
+    Ok(SnapshotAnchor {
+        tip,
+        basis: AnchorBasis::AncillarySigned,
+    })
 }
 
 /// The `ledger/<slot>/tables` key with the greatest slot (two consecutive snapshots ship; the

@@ -1,21 +1,19 @@
-//! `snapshot-load <ancillary-dir> <preprod|mainnet> <redb-path>` — the Tier-2 T3-load step: verify
-//! the ancillary manifest, stream the verified UTxO outpoints into an on-disk `RedbUtxoStore`, and
-//! leave a persisted certified membership set — the outpoints unspent as of the snapshot slot S,
-//! on the `AncillarySigned` basis. The store then answers "is this outpoint in the certified set at
-//! S?" for any outpoint.
-//!
-//! The set is current as of S; binding it to a concrete tip block (hash + number) is the T3→T4
-//! seam. S's block is not in the ancillary — the bundled immutable chunk is a LATER, unrelated
-//! immutable file, and the ledger `state` tip sits inside the ExtLedgerState the amended plan
-//! declines to parse — so T4 resolves S→block against the certified chain it must reach anyway,
-//! then seeds a `UtxoSet` at that tip from this store (`UtxoSet::with_store`).
+//! `snapshot-load <ancillary-dir> <preprod|mainnet> <redb-path>` — the Tier-2 T3-load + T4-tip
+//! step: verify the ancillary manifest, derive the certified tip S (`state` AnnTip), stream the
+//! verified UTxO outpoints into an on-disk `RedbUtxoStore`, and seed a `UtxoSet` at that tip on the
+//! `AncillarySigned` basis. The result is a certified membership set anchored to a concrete tip
+//! block — ready for T4 to follow S→tip via the relay (chain-sync intersect at the tip's
+//! `(slot, hash)`, then apply blocks forward).
 
 use anyhow::{Context, Result, bail};
 use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sextant::utxo::OutPoint;
-use sextant::utxoset::{AnchorBasis, UtxoStore};
-use snapshot::{tables::for_each_outpoint, verified_tables, verify_manifest};
+use sextant::utxoset::{UtxoSet, UtxoStore};
+use snapshot::{tables::for_each_outpoint, verified_anchor, verified_tables, verify_manifest};
 use utxo_store::RedbUtxoStore;
+
+/// The retained rollback window (k = 2160 blocks) the seeded set carries into the follow.
+const DEPTH: usize = 2160;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -35,11 +33,15 @@ fn main() -> Result<()> {
     };
     let dir = std::path::Path::new(&ancillary_dir);
 
-    // One trust root: verify the manifest, then trust the newest tables from its committed digest.
+    // One trust root: verify the manifest, then trust the newest tables + derive the tip from the
+    // committed digests. The anchor's tip and the set share the AncillarySigned basis.
     let verified = verify_manifest(dir, vkey)?;
     let tables = verified_tables(dir, &verified)?;
+    let anchor = verified_anchor(dir, &verified)?;
     eprintln!(
-        "verified: manifest signature OK, tables+meta digests OK, codec gated (slot {})",
+        "verified: manifest signature OK, tables+meta+state digests OK, tip #{} {} (slot {})",
+        anchor.tip.number,
+        hex::encode(anchor.tip.hash),
         tables.slot
     );
 
@@ -67,18 +69,27 @@ fn main() -> Result<()> {
         );
     }
 
+    // Seed the UtxoSet at the derived tip: the persisted store, anchored to (slot S, tip block),
+    // ready for T4 to follow S→tip. Membership answers ride this tip.
+    let set = UtxoSet::with_store(store, Some(anchor.tip), DEPTH);
+
     println!("slot_S: {}", tables.slot);
-    println!("basis: {:?}", AnchorBasis::AncillarySigned);
+    println!(
+        "anchor_tip: #{} {}",
+        anchor.tip.number,
+        hex::encode(anchor.tip.hash)
+    );
+    println!("basis: {:?}", anchor.basis);
     println!("parsed_outpoints: {parsed}");
     println!("loaded_outpoints: {loaded}");
-    println!("store_len: {len}");
-    // Membership probes: a real snapshot outpoint is in the set; a fabricated one is not.
+    println!("set_len: {len}");
+    // Membership probes: a real snapshot outpoint is unspent at the tip; a fabricated one is not.
     if let Some(o) = first {
-        let present = store
-            .contains(&o)
+        let unspent = set
+            .is_unspent(&o)
             .map_err(|e| anyhow::anyhow!("store: {}", e.0))?;
         println!(
-            "probe_present {}#{}: contained={present}",
+            "probe_present {}#{}: is_unspent={unspent}",
             hex::encode(o.tx_id),
             o.index
         );
@@ -87,9 +98,9 @@ fn main() -> Result<()> {
         tx_id: [0xff; 32],
         index: 0,
     };
-    let absent_c = store
-        .contains(&absent)
+    let absent_u = set
+        .is_unspent(&absent)
         .map_err(|e| anyhow::anyhow!("store: {}", e.0))?;
-    println!("probe_absent ff..#0: contained={absent_c}");
+    println!("probe_absent ff..#0: is_unspent={absent_u}");
     Ok(())
 }
