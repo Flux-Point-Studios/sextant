@@ -30,6 +30,8 @@
 #[cfg(feature = "transport")]
 pub mod transport;
 
+pub mod coverage;
+
 use sextant::follow::{AppendRefusal, Rollback, SlotSchedule, WindowFollower};
 use sextant::utxo::{CertifiedTransactions, OutPoint};
 
