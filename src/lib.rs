@@ -3,6 +3,7 @@
 //! Decodes and (in later slices) verifies chain data on its own code path.
 //! Byte providers supply input; Sextant never trusts them for a verdict.
 
+pub mod ancillary;
 pub mod chain;
 mod curve;
 pub mod ed25519;

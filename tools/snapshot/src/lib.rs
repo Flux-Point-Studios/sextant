@@ -5,11 +5,16 @@
 //! wasm-safe). The stream is decompressed and untarred incrementally, so the full 1.88 GB
 //! uncompressed archive is never held in memory.
 
+pub mod tables;
+
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use memmap2::Mmap;
+use sextant::ancillary::{VerifiedAncillaryManifest, verify_ancillary_manifest};
+use sha2::{Digest, Sha256};
 
 /// One unpacked entry: its path relative to the destination root and its size in bytes.
 #[derive(Debug, Clone)]
@@ -44,6 +49,92 @@ pub fn extract_tar_zst(archive: &Path, dest: &Path) -> Result<Vec<Extracted>> {
     }
     out.sort_by(|a, b| b.size.cmp(&a.size));
     Ok(out)
+}
+
+/// A `tables` mapping whose bytes are trusted: this exact memory map hashed to the digest committed
+/// by a signature-verified ancillary manifest, and its `meta` sidecar passed the version gate. It
+/// is the ONLY handle the parse path accepts — the T3-verify → T3-parse wiring the amended plan
+/// requires ("no path where parsed-but-unverified state reaches the store"). The verified mapping
+/// itself is handed to the parser, so there is no re-open between the digest check and the decode
+/// (no swap-the-file TOCTOU): the bytes decoded ARE the bytes hashed.
+pub struct VerifiedTables {
+    tables: Mmap,
+    /// The snapshot slot S (from the `ledger/<slot>/` directory).
+    pub slot: u64,
+}
+
+impl VerifiedTables {
+    /// The trusted `tables` bytes — the exact mapping whose SHA-256 matched the signed digest.
+    pub fn bytes(&self) -> &[u8] {
+        &self.tables
+    }
+}
+
+/// Establish trust in the newest `tables` file under an unpacked ancillary directory, on the full
+/// chain: verify the `ancillary_manifest.json` Ed25519 signature under the pinned network key
+/// (core [`verify_ancillary_manifest`]), then confirm the on-disk `tables` and `meta` files hash
+/// to the digests that signature commits, then gate `meta`'s codec version. Returns a
+/// [`VerifiedTables`] — carrying the verified mapping itself — only when every link holds; a
+/// tampered or unsigned blob fails closed here, before a single outpoint is decoded.
+pub fn verify_newest_tables(
+    ancillary_dir: &Path,
+    ancillary_vkey: &[u8; 32],
+) -> Result<VerifiedTables> {
+    let manifest_bytes = std::fs::read(ancillary_dir.join("ancillary_manifest.json"))
+        .context("read ancillary_manifest.json")?;
+    let verified = verify_ancillary_manifest(&manifest_bytes, ancillary_vkey)
+        .map_err(|e| anyhow::anyhow!("ancillary manifest: {e}"))?;
+
+    let (slot, tables_key) =
+        newest_tables_key(&verified).context("manifest commits no ledger/<slot>/tables entry")?;
+    let meta_key = format!("ledger/{slot}/meta");
+
+    // meta is tiny: read it, match its digest, gate the codec version.
+    let meta_bytes = std::fs::read(ancillary_dir.join(&meta_key)).context("read meta")?;
+    match_digest(sha256_bytes(&meta_bytes), &verified, &meta_key)?;
+    tables::parse_meta(&meta_bytes)?;
+
+    // tables: map ONCE, hash THIS mapping, and hand the very same mapping back to the parser.
+    let file = File::open(ancillary_dir.join(&tables_key)).context("open tables")?;
+    // SAFETY: read-only mapping of a local file, owned by the returned VerifiedTables.
+    let tables = unsafe { Mmap::map(&file) }.context("mmap tables")?;
+    match_digest(sha256_bytes(&tables), &verified, &tables_key)?;
+
+    Ok(VerifiedTables { tables, slot })
+}
+
+/// The `ledger/<slot>/tables` key with the greatest slot (two consecutive snapshots ship; the
+/// newer's slot is S), with the slot parsed out.
+fn newest_tables_key(verified: &VerifiedAncillaryManifest) -> Option<(u64, String)> {
+    verified
+        .files()
+        .filter_map(|f| {
+            let slot = f.strip_prefix("ledger/")?.strip_suffix("/tables")?;
+            Some((slot.parse::<u64>().ok()?, f.to_string()))
+        })
+        .max_by_key(|(slot, _)| *slot)
+}
+
+/// Fail closed unless `actual` equals the digest the verified manifest commits for `key`.
+fn match_digest(actual: [u8; 32], verified: &VerifiedAncillaryManifest, key: &str) -> Result<()> {
+    let expected = verified
+        .digest_for(key)
+        .with_context(|| format!("manifest commits no digest for {key}"))?;
+    if actual != expected {
+        bail!(
+            "{key}: SHA-256 {} does not match the manifest digest {}",
+            hex::encode(actual),
+            hex::encode(expected)
+        );
+    }
+    Ok(())
+}
+
+/// SHA-256 of a byte slice.
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -83,5 +174,33 @@ mod tests {
         assert_eq!(extracted[0].size, 12);
         assert!(extracted[0].path.ends_with("ledger/snapshot"));
         assert_eq!(std::fs::read(&extracted[0].path).unwrap(), b"UTXO-HD-BODY");
+    }
+
+    #[test]
+    fn sha256_bytes_matches_a_known_digest() {
+        // SHA-256("abc")
+        assert_eq!(
+            hex::encode(sha256_bytes(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    /// The gate fails closed on a manifest that does not carry a valid ancillary signature — no
+    /// `tables` handle is issued, so an unsigned/tampered snapshot never reaches the parser.
+    #[test]
+    fn verify_newest_tables_fails_closed_without_a_valid_signature() {
+        use sextant::ancillary::ANCILLARY_VKEY_PREPROD;
+        let dir = tempfile::tempdir().unwrap();
+        // A structurally-valid manifest whose signature is all-zero — cannot verify.
+        let manifest = format!(
+            r#"{{"data":{{"ledger/1/tables":"{}"}},"signature":"{}"}}"#,
+            "00".repeat(32),
+            "00".repeat(64)
+        );
+        File::create(dir.path().join("ancillary_manifest.json"))
+            .unwrap()
+            .write_all(manifest.as_bytes())
+            .unwrap();
+        assert!(verify_newest_tables(dir.path(), &ANCILLARY_VKEY_PREPROD).is_err());
     }
 }

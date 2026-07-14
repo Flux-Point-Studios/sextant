@@ -16,10 +16,23 @@ path = "src/lib.rs"
 name = "snapshot-extract"
 path = "src/bin/extract.rs"
 
+[[bin]]
+name = "snapshot-parse"
+path = "src/bin/parse.rs"
+
 [dependencies]
+# The trust core supplies the outpoint type; the tables decode is on Sextant's own minicbor
+# path, not a provider's.
+sextant = { path = "../.." }
 zstd = "0.13"
 tar = "0.4"
 anyhow = "1"
+minicbor = { version = "2.2.2", features = ["alloc"] }
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
