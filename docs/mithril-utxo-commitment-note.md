@@ -77,6 +77,17 @@ Concrete asks, deliberately minimal. Where we state a preference we will consume
 - **Golden-fixture and differential-test discipline:** byte-exact fixtures harvested from your aggregator, adversarial mutation tests (tampered path node, substituted root, non-member outpoint), and differential checks against an independent implementation — the same harness that today cross-checks our MMR, VRF, KES, and Ed25519 paths against pallas, ckb-mmr, and cardano-crypto. Reproducible issues, filed early, while the format can still move.
 - **Honest-scope reporting.** Our CI mechanically rejects any ABI surface that claims liveness the cryptography cannot back — which means when Sextant ships "certified member of the UTxO set at height S," that claim is exactly as strong as your certificate, no stronger, and visibly so to every reviewer.
 
+## 6.5 In the meantime, we bootstrap from the ancillary — with honest trust accounting
+
+Until the queryable commitment of §5 exists, we bootstrap `UTxOSet(S)` by parsing the cardano-database **ancillary** (the InMemory UTxO-HD ledger snapshot). We are explicit, in our own types and verdict metadata, that this is a **different trust class** from the rest of the chain of trust, and we do not launder the two together:
+
+- The immutable **blocks** are certified by the **STM stake-threshold multi-signature** — the decentralized SPO quorum.
+- The **ancillary** ledger state is signed by a **single IOG-operated Ed25519 key** (per the ancillary-key trail, GHSA-qv97-5qr8-2266).
+
+So a Tier-2 membership answer carries an `AnchorBasis`: `AncillarySigned` (the single-key snapshot) vs `StmCertified` (the quorum). Crucially, `AncillarySigned` is **dischargeable** by us without any change on your side: because the blocks are STM-certified, our shipped extraction path recomputes `UTxOSet(S)` from certified blocks independently of the ancillary — a from-genesis audit once, then incremental audits — and where the recomputed UTxO-set hash matches the ancillary snapshot, the basis upgrades to `StmCertified` and we publish the cross-check hash per snapshot. The IOG key is thereby a bootstrap *convenience*, not a standing safety dependency.
+
+The queryable per-entry commitment you would land (§5) makes this exact: a stake-quorum-certified membership proof replaces the ancillary snapshot as the `StmCertified` source directly, and the discharge audit becomes unnecessary. That is the convergence — our discharge path is the interim, your commitment is the destination.
+
 ## 7. What we are NOT asking for
 
 Non-membership proofs. Tip-state liveness (our window covers the snapshot→tip residue). Any particular tree — Merkle, MMR, or JMT are all fine inside the envelope. A stable API before a PoC — vectors first.
