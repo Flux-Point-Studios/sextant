@@ -43,6 +43,13 @@ name = "sextant-setfollow"
 path = "src/bin/setfollow.rs"
 required-features = ["setfollow"]
 
+# Tier-2 T5-daemon: a long-running service that bootstraps the certified UTxO set, follows the chain
+# live, and serves the Tier-2 certified spend-status verdict over HTTP — the consumer surface.
+[[bin]]
+name = "sextant-utxod"
+path = "src/bin/utxod.rs"
+required-features = ["utxod"]
+
 [features]
 # `transport` off by default so the sans-io lib + its mock gate build with zero network
 # deps; the binaries opt in. `daemon` adds the HTTP server on top of `transport`.
@@ -50,6 +57,8 @@ transport = ["dep:tokio", "dep:pallas-network", "dep:pallas-traverse", "dep:reqw
 daemon = ["transport", "dep:axum", "tokio/rt-multi-thread"]
 # T4-drive: the transport plus the certified-set bootstrap (snapshot) + on-disk store.
 setfollow = ["transport", "dep:snapshot", "dep:utxo-store"]
+# T5-daemon: the Tier-2 certified spend-status served over HTTP (the follow daemon + axum).
+utxod = ["daemon", "setfollow"]
 
 [dependencies]
 # The verifier core. The lib composes only the default (wasm-safe) graph; the binaries
