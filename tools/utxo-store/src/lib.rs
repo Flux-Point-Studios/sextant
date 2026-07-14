@@ -236,6 +236,36 @@ mod tests {
         assert_eq!(set.len().unwrap(), 3);
     }
 
+    /// The redb-backed store must fingerprint IDENTICALLY to the in-memory store for the same set —
+    /// the cross-store consistency the discharge comparison depends on (a native redb recompute and
+    /// a wasm MemStore recompute of the same set@S yield the same commitment). Insertion order and
+    /// backend must not matter; only the set does.
+    #[test]
+    fn redb_and_mem_fingerprints_agree() {
+        let outs = [op(9, 0), op(1, 5), op(1, 0), op(3, 2), op(1, 1)];
+        let tip = SetTip {
+            hash: [7u8; 32],
+            number: 100,
+        };
+        let (mut s, _dir) = store();
+        s.bulk_insert(outs).unwrap();
+        let redb_fp = UtxoSet::with_store(s, Some(tip), 2160)
+            .fingerprint()
+            .unwrap();
+        // Same outpoints in a DIFFERENT order into the in-memory store.
+        let mem_fp = UtxoSet::from_snapshot(
+            tip,
+            [op(3, 2), op(1, 0), op(1, 5), op(9, 0), op(1, 1)],
+            2160,
+        )
+        .fingerprint()
+        .unwrap();
+        assert_eq!(
+            redb_fp, mem_fp,
+            "redb and mem must commit the set identically"
+        );
+    }
+
     #[test]
     fn dropping_a_transaction_aborts_it() {
         let (mut s, _dir) = store();
