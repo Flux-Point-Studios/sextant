@@ -1,7 +1,6 @@
 /target
 /.scratch
-.claude/fluxpoint-loop/
-.claude/settings.local.json
+.claude/
 
 # Internal fluxpoint-loop machinery — kept local, out of the public repo
 LOOP.md
