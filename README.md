@@ -143,8 +143,9 @@ A genuine success from Sextant proves exactly what its documentation says and **
 - A verified **header segment** proves each block's authorship (opcert + leader-VRF + KES) and the hash links — *not* that the segment is the canonical chain (that rests on the Mithril anchor, a surfaced assumption).
 - A verified **UTxO read** proves authentic on-chain bytes + certified inclusion + provenance anchored to genesis *as of a certified height ~100 blocks behind tip* — *not* current spendability.
 - A **windowed no-spend** proves no spend through a verified tip under the Mithril-quorum and data-completeness assumptions — *not* absolute or tip-state unspent.
+- A future **Tier-2 UTxO-set membership** answer at a snapshot S carries its `AnchorBasis`: `StmCertified` when S's state was recomputed from the STM-stake-quorum-certified blocks, or `AncillarySigned` when it was taken from the Mithril cardano-database ancillary — a snapshot signed by a **single IOG-operated Ed25519 key, not the stake quorum**. The two are distinct trust classes, banded like the spend-status tiers and never coerced; the single-key basis is dischargeable to the quorum basis by an independent from-genesis extraction audit.
 
-The one trusted input is the pinned genesis verification key. Everything else is checked. Where a property cannot be checked (e.g. that the served chain is the certified one, absent a per-block ledger-state commitment), Sextant **surfaces it as an assumption** the consumer must weigh — it never fakes the check.
+The one *cryptographic* trusted input is the pinned genesis verification key (and, for an `AncillarySigned` bootstrap, the pinned per-network ancillary key — surfaced, never laundered into the quorum). Everything else is checked. Where a property cannot be checked (e.g. that the served chain is the certified one, absent a per-block ledger-state commitment), Sextant **surfaces it as an assumption** the consumer must weigh — it never fakes the check.
 
 ---
 
