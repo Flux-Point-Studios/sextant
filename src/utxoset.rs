@@ -36,7 +36,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::utxo::{OutPoint, SpendStatus};
+use crate::utxo::{CertifiedTransactions, OutPoint, SpendStatus};
 
 /// The trust-class ladder enum lives with the [`SpendStatus`] ladder it qualifies (`crate::utxo`);
 /// re-exported here because it names the Tier-2 [`SnapshotAnchor`] this engine produces.
@@ -282,6 +282,11 @@ pub struct UtxoSet<S: UtxoStore = MemStore> {
     /// [`UtxoSet::certified_spend_status`]: without a bound anchor basis, no Tier-2 verdict can be
     /// produced, so the basis is never a free query-time choice that could mislabel the trust class.
     basis: Option<AnchorBasis>,
+    /// The highest block number the Mithril `CardanoTransactions` quorum has certified the
+    /// transaction set through — advanced monotonically by [`UtxoSet::re_anchor`] from a VERIFIED
+    /// certificate. A no-spend window entirely at or below this height is quorum-backed; above it
+    /// the window is header-vouched only. `0` until the first re-anchor (nothing certified).
+    anchor_height: u64,
 }
 
 impl UtxoSet<MemStore> {
@@ -329,6 +334,7 @@ impl<S: UtxoStore> UtxoSet<S> {
             undo: VecDeque::new(),
             depth,
             basis: None,
+            anchor_height: 0,
         }
     }
 
@@ -343,6 +349,7 @@ impl<S: UtxoStore> UtxoSet<S> {
             undo: VecDeque::new(),
             depth,
             basis: Some(anchor.basis),
+            anchor_height: 0,
         }
     }
 
@@ -392,9 +399,32 @@ impl<S: UtxoStore> UtxoSet<S> {
             (Some(basis), Some(tip)) if self.is_unspent(o)? => Ok(SpendStatus::CertifiedUnspent {
                 basis,
                 through_block: tip.number,
+                // The window (S, tip] is quorum-backed only if the tip is at or below the Mithril
+                // tx-certified frontier; above it the tail is header-vouched.
+                mithril_quorum: tip.number <= self.anchor_height,
             }),
             _ => Ok(SpendStatus::NotEstablished),
         }
+    }
+
+    /// Advance the Mithril `CardanoTransactions`-certified frontier the set tracks, from a VERIFIED
+    /// certificate's [`CertifiedTransactions`] (the caller must have authenticated it, e.g. via
+    /// `crate::mithril::verify_chain_anchored`). Monotone: a certificate older than the current
+    /// frontier is ignored (returns `false`), never regressing the quorum coverage. Mirrors
+    /// [`crate::follow::WindowFollower::re_anchor`]; it lifts a Tier-2 verdict's `mithril_quorum`
+    /// bit for windows within the certified region.
+    pub fn re_anchor(&mut self, cert: &CertifiedTransactions) -> bool {
+        if cert.block_number > self.anchor_height {
+            self.anchor_height = cert.block_number;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The Mithril tx-certified frontier the set currently tracks (`0` before any re-anchor).
+    pub fn certified_height(&self) -> u64 {
+        self.anchor_height
     }
 
     /// Apply a verified block: remove every consumed outpoint, add every created one, in
@@ -846,11 +876,13 @@ mod tests {
 
         // A member at the anchor tip: CertifiedUnspent, carrying the BOUND basis (from the anchor,
         // not a query arg) and the tip it holds through (still S = 100 before any block applies).
+        // No cert has been re-anchored, so the window is header-vouched (mithril_quorum=false).
         assert_eq!(
             u.certified_spend_status(&op(50, 0)),
             Ok(SpendStatus::CertifiedUnspent {
                 basis: AnchorBasis::AncillarySigned,
                 through_block: 100,
+                mithril_quorum: false,
             })
         );
         // A non-member: no certified-unspent evidence, never a false positive.
@@ -877,12 +909,38 @@ mod tests {
             Ok(SpendStatus::CertifiedUnspent {
                 basis: AnchorBasis::AncillarySigned,
                 through_block: 101,
+                mithril_quorum: false,
             })
         );
         assert_eq!(
             u.certified_spend_status(&op(50, 0)),
             Ok(SpendStatus::NotEstablished)
         );
+
+        // Re-anchor the Mithril tx-certified frontier to the tip: the window is now quorum-backed.
+        let cert = CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 300,
+            block_number: 101,
+        };
+        assert!(u.re_anchor(&cert), "advances the frontier");
+        assert_eq!(u.certified_height(), 101);
+        assert_eq!(
+            u.certified_spend_status(&op(101, 0)),
+            Ok(SpendStatus::CertifiedUnspent {
+                basis: AnchorBasis::AncillarySigned,
+                through_block: 101,
+                mithril_quorum: true,
+            })
+        );
+        // A stale cert (older frontier) is ignored — monotone, never regresses the quorum coverage.
+        let stale = CertifiedTransactions {
+            merkle_root: String::new(),
+            epoch: 300,
+            block_number: 50,
+        };
+        assert!(!u.re_anchor(&stale));
+        assert_eq!(u.certified_height(), 101);
     }
 
     #[test]
