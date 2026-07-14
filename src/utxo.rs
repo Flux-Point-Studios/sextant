@@ -272,12 +272,10 @@ pub fn verify_utxo_read(
 /// decoder silently drops is a spend a watcher would wrongly call unspent.
 pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
     let mut spends = SpendSet::new();
-    for _ in 0..entries {
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         match d.u64().map_err(|_| UtxoError::MalformedTx)? {
             // key 0 = inputs, key 13 = collateral inputs — both are spends.
             0 | 13 => decode_input_set(&mut d, &mut spends)?,
@@ -285,6 +283,7 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
             // field are skipped.
             _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
         }
+        i += 1;
     }
     Ok(spends)
 }
