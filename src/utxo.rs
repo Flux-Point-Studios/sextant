@@ -19,10 +19,12 @@
 //! transaction-set membership is a monotone "created" predicate, no Cardano
 //! commitment exists to prove unspent against, and the verdict trails tip by ~100
 //! blocks. Unspent is the ledger's to decide, atomically, at submission. That
-//! honesty is enforced in the return type: [`SpendStatus`] carries today only
-//! `NotEstablished` (a `#[non_exhaustive]` trust-tier ladder, uncoercible to a
-//! positive-liveness claim), and every verdict carries `certified_at` so no caller
-//! may read it as tip state.
+//! honesty is enforced in the return type: this single-tx read path yields only
+//! [`SpendStatus::NotEstablished`], and every verdict carries `certified_at` so no
+//! caller may read it as tip state. The stronger Tier-2 [`SpendStatus::CertifiedUnspent`]
+//! (unspent across a verified window from a certified snapshot) comes from the
+//! certified-state path ([`crate::utxoset::UtxoSet::certified_spend_status`]), not
+//! this one — the ladder is `#[non_exhaustive]` and uncoercible to unconditional liveness.
 //!
 //! ## The bytes are hashed here, never trusted from a provider
 //! `verify_utxo_read` hashes the *supplied* `tx_bytes` to obtain `H`
@@ -101,35 +103,81 @@ impl CertifiedTransactions {
     }
 }
 
-/// The spend verdict a read-path verifier can make. Deliberately has no `Unspent`
-/// variant today: the read path CANNOT establish liveness (see the module docs), so
-/// no code path can coerce a verdict into a positive-liveness claim.
+/// The trust class the certified snapshot state `UTxOSet(S)` rests on — the ONE distinction
+/// between a stake-quorum recomputation and a single-key snapshot, made impossible to drop.
 ///
-/// `#[non_exhaustive]` marks this as a forward-compatible TRUST-TIER LADDER — a
-/// future tier is additive (a new variant), never a layout break, and an external
-/// `match` must carry a wildcard so a new tier can never be silently read as
-/// `NotEstablished`. This is the ONE canonical home of the ladder; the windowed
-/// read-path ([`crate::window::WatchBasis`]) mirrors Tier 1 over a watch and defers
-/// here for the full enumeration rather than re-listing the tiers:
-/// * **Tier 1 — [`SpendStatus::NotEstablished`] (today, single-tx read).** Inclusion +
-///   provenance are proven; liveness is not, and cannot be, established by this path.
-///   The windowed watch path establishes the stronger "no spend across a verified
-///   window" evidence and surfaces it as [`crate::window::WatchBasis::WatchedWindow`].
-/// * **Tier 2 — `CertifiedUnspent { epoch }` (reserved, CRYPTOGRAPHIC).** A future
-///   Mithril ledger-state certificate + Merkle proof of unspent-ness as of `epoch`.
-/// * **Tier 3 — `Attested { committee, at }` (reserved, ECONOMIC).** A Materios /
-///   Witness-Network committee attestation of liveness.
+/// The immutable blocks are certified by Mithril's STM stake quorum; the cardano-database
+/// *ancillary* (the ledger-state snapshot) is signed by a single IOG-operated Ed25519 key — a
+/// weaker trust class. Bootstrapping `UTxOSet(S)` from the ancillary swaps the anchor's STATE onto
+/// that single key while the chain above stays quorum-certified; a consumer must see that, banded
+/// distinctly (as at the C ABI the spend-status tiers are), and never mistake it for the quorum.
 ///
-/// LOAD-BEARING INVARIANT: an economic tier (3) is NEVER coercible into a
-/// cryptographic one (2). A consumer must always see the trust basis and can never
-/// mistake an attestation for a proof — which is why the tiers are distinct variants
-/// (and, at the C ABI, distinct code bands), not a shared boolean. The future tiers
-/// are documented, not defined: no empty variant exists until its proof does.
+/// [`AnchorBasis::AncillarySigned`] is DISCHARGEABLE to [`AnchorBasis::StmCertified`]: because the
+/// blocks are STM-certified, the verified extraction path ([`crate::effects::extract_block_effects`]
+/// applied through the UTxO engine) can recompute `UTxOSet(S)` from certified blocks INDEPENDENTLY
+/// of the ancillary — a from-genesis audit once, then incremental audits reusing the same
+/// primitive. After a matching audit's hash agrees, the same S is `StmCertified`, and the IOG key
+/// is a bootstrap convenience rather than a standing safety dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AnchorBasis {
+    /// `UTxOSet(S)` recomputed from the STM-stake-quorum-certified immutable blocks via the
+    /// verified extraction path — the same decentralized quorum the chain rests on.
+    StmCertified,
+    /// `UTxOSet(S)` taken from the Mithril cardano-database ancillary, signed by a single
+    /// IOG-operated Ed25519 key — NOT the stake quorum. A bootstrap convenience, dischargeable
+    /// to [`AnchorBasis::StmCertified`] by a matching extraction audit.
+    AncillarySigned,
+}
+
+/// The spend verdict a read-path verifier can make. Deliberately has no unconditional `Unspent`:
+/// the single-tx read path CANNOT establish liveness (see the module docs), so no code path can
+/// coerce a verdict into a positive-liveness claim.
+///
+/// `#[non_exhaustive]` marks this as a forward-compatible TRUST-TIER LADDER — a future tier is
+/// additive (a new variant), never a layout break, and an external `match` must carry a wildcard so
+/// a new tier can never be silently read as `NotEstablished`. This is the ONE canonical home of the
+/// ladder; the windowed read-path ([`crate::window::WatchBasis`]) mirrors Tier 1 over a watch and
+/// defers here for the full enumeration rather than re-listing the tiers:
+/// * **Tier 1 — [`SpendStatus::NotEstablished`] (single-tx read).** Inclusion + provenance are
+///   proven; liveness is not, and cannot be, established by that path. The windowed watch path
+///   establishes the stronger "no spend across a verified window" evidence and surfaces it as
+///   [`crate::window::WatchBasis::WatchedWindow`].
+/// * **Tier 2 — [`SpendStatus::CertifiedUnspent`] (DEFINED, CRYPTOGRAPHIC).** The Tier-2
+///   certified-state ledger: the outpoint is a member of `UTxOSet(S)` (certified under an
+///   [`AnchorBasis`]) and no spend was observed across the verified window `(S, tip]` — so it is
+///   unspent *as of* `through_block`, scoped to that recency and labelled with the basis it rests
+///   on. Never an unconditional-liveness claim: the ledger still decides atomically at submission.
+/// * **Tier 3 — `Attested { committee, at }` (reserved, ECONOMIC).** A Materios / Witness-Network
+///   committee attestation of liveness.
+///
+/// LOAD-BEARING INVARIANT: an economic tier (3) is NEVER coercible into a cryptographic one (2),
+/// and within Tier 2 an [`AnchorBasis::AncillarySigned`] snapshot is never coercible into a
+/// [`AnchorBasis::StmCertified`] one — the basis rides INSIDE the variant, so a consumer cannot read
+/// a single-key snapshot as a stake-quorum one. A consumer must always see the trust basis and can
+/// never mistake an attestation for a proof — which is why the tiers are distinct variants (and, at
+/// the C ABI, distinct code bands), not a shared boolean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SpendStatus {
-    /// Spend state is not established, and cannot be by this path (Tier 1).
+    /// Spend state is not established, and cannot be by the single-tx path (Tier 1).
     NotEstablished,
+    /// The outpoint is unspent as of `through_block`, in a set that descends from a certified
+    /// snapshot S (of trust class `basis`) and was advanced only by header-verified, body-committed,
+    /// contiguous blocks (Tier 2). This covers BOTH an outpoint carried in `UTxOSet(S)` and still
+    /// unspent, AND one created within the verified window `(S, through_block]` and still unspent —
+    /// the claim is "unspent in the certified-anchored, header-verified set", NOT "a member of
+    /// `UTxOSet(S)`" specifically. Scoped to `through_block` and labelled with `basis`; never an
+    /// unconditional-liveness claim (the ledger still decides at submission).
+    CertifiedUnspent {
+        /// The trust class of the ANCHOR S the set descends from (uncoercible: read the basis here,
+        /// never assume the stronger one). Bound from the set's [`crate::utxoset::SnapshotAnchor`]
+        /// at construction, never chosen at query time.
+        basis: AnchorBasis,
+        /// The tip block number through which the header-verified no-spend window was maintained —
+        /// the recency the consumer must carry (the verdict ages as the chain advances past it).
+        through_block: u64,
+    },
 }
 
 /// A verified transaction output: the authentic on-chain bytes of a
@@ -527,15 +575,36 @@ fn read_hash32(d: &mut Decoder<'_>) -> Result<[u8; 32], UtxoError> {
 mod tests {
     use super::*;
 
-    /// Compile-time honesty tripwire: `SpendStatus` has exactly one inhabitant
-    /// today. This same-crate exhaustive match (no wildcard) fails to compile the
-    /// moment a liveness tier is added, forcing the author to consciously wire it
-    /// and update the honest-scope docs — `#[non_exhaustive]` relaxes matching only
-    /// for *external* crates, never here.
+    /// Compile-time honesty tripwire: an exhaustive same-crate match (no wildcard) over every
+    /// `SpendStatus` tier. It fails to compile the moment a NEW tier is added, forcing the author to
+    /// consciously wire it and update the honest-scope docs — `#[non_exhaustive]` relaxes matching
+    /// only for *external* crates, never here. Today: Tier 1 (`NotEstablished`) and the now-DEFINED
+    /// Tier 2 (`CertifiedUnspent`, whose T3/T4 proof exists); Tier 3 (attested) stays undefined.
     #[test]
-    fn spend_status_has_a_single_inhabitant_today() {
-        match SpendStatus::NotEstablished {
-            SpendStatus::NotEstablished => {}
+    fn spend_status_tiers_are_exhaustively_wired() {
+        let tiers = [
+            SpendStatus::NotEstablished,
+            SpendStatus::CertifiedUnspent {
+                basis: AnchorBasis::AncillarySigned,
+                through_block: 1,
+            },
+        ];
+        for tier in tiers {
+            match tier {
+                SpendStatus::NotEstablished => {}
+                SpendStatus::CertifiedUnspent {
+                    basis,
+                    through_block,
+                } => {
+                    // The basis rides INSIDE the variant — a consumer cannot read the verdict
+                    // without seeing whether it is a single-key or stake-quorum snapshot.
+                    assert!(matches!(
+                        basis,
+                        AnchorBasis::AncillarySigned | AnchorBasis::StmCertified
+                    ));
+                    assert!(through_block > 0);
+                }
+            }
         }
     }
 
