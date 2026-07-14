@@ -4,10 +4,7 @@
 //! THEN stream the UTxO outpoints on Sextant's own path. Prints the count, a set fingerprint, and
 //! a few samples. No unverified bytes ever reach the parser.
 
-use std::fs::File;
-
 use anyhow::{Context, Result, bail};
-use memmap2::Mmap;
 use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sha2::{Digest, Sha256};
 use snapshot::{tables::for_each_outpoint, verify_newest_tables};
@@ -32,13 +29,10 @@ fn main() -> Result<()> {
         verified.slot
     );
 
-    let file = File::open(&verified.tables_path).context("open tables")?;
-    // SAFETY: read-only mapping of a local file for the lifetime of this process.
-    let mmap = unsafe { Mmap::map(&file) }.context("mmap tables")?;
-
     let mut hasher = Sha256::new();
     let mut samples = Vec::new();
-    let count = for_each_outpoint(&mmap, |o| {
+    // Parse the VERIFIED mapping itself — the exact bytes whose SHA-256 matched the signed digest.
+    let count = for_each_outpoint(verified.bytes(), |o| {
         hasher.update(o.tx_id);
         hasher.update(o.index.to_be_bytes());
         if samples.len() < 3 {

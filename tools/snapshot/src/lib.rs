@@ -12,6 +12,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use memmap2::Mmap;
 use sextant::ancillary::{VerifiedAncillaryManifest, verify_ancillary_manifest};
 use sha2::{Digest, Sha256};
 
@@ -50,23 +51,31 @@ pub fn extract_tar_zst(archive: &Path, dest: &Path) -> Result<Vec<Extracted>> {
     Ok(out)
 }
 
-/// A `tables` file whose bytes are trusted: its SHA-256 matched the digest committed by a
-/// signature-verified ancillary manifest, and its `meta` sidecar passed the version gate. This is
-/// the ONLY handle the parse path accepts — the T3-verify → T3-parse wiring the amended plan
-/// requires ("no path where parsed-but-unverified state reaches the store").
+/// A `tables` mapping whose bytes are trusted: this exact memory map hashed to the digest committed
+/// by a signature-verified ancillary manifest, and its `meta` sidecar passed the version gate. It
+/// is the ONLY handle the parse path accepts — the T3-verify → T3-parse wiring the amended plan
+/// requires ("no path where parsed-but-unverified state reaches the store"). The verified mapping
+/// itself is handed to the parser, so there is no re-open between the digest check and the decode
+/// (no swap-the-file TOCTOU): the bytes decoded ARE the bytes hashed.
 pub struct VerifiedTables {
-    /// Path to the trusted `tables` file, ready to memory-map and stream.
-    pub tables_path: PathBuf,
+    tables: Mmap,
     /// The snapshot slot S (from the `ledger/<slot>/` directory).
     pub slot: u64,
+}
+
+impl VerifiedTables {
+    /// The trusted `tables` bytes — the exact mapping whose SHA-256 matched the signed digest.
+    pub fn bytes(&self) -> &[u8] {
+        &self.tables
+    }
 }
 
 /// Establish trust in the newest `tables` file under an unpacked ancillary directory, on the full
 /// chain: verify the `ancillary_manifest.json` Ed25519 signature under the pinned network key
 /// (core [`verify_ancillary_manifest`]), then confirm the on-disk `tables` and `meta` files hash
 /// to the digests that signature commits, then gate `meta`'s codec version. Returns a
-/// [`VerifiedTables`] only when every link holds — a tampered or unsigned blob fails closed here,
-/// before a single outpoint is decoded.
+/// [`VerifiedTables`] — carrying the verified mapping itself — only when every link holds; a
+/// tampered or unsigned blob fails closed here, before a single outpoint is decoded.
 pub fn verify_newest_tables(
     ancillary_dir: &Path,
     ancillary_vkey: &[u8; 32],
@@ -80,16 +89,18 @@ pub fn verify_newest_tables(
         newest_tables_key(&verified).context("manifest commits no ledger/<slot>/tables entry")?;
     let meta_key = format!("ledger/{slot}/meta");
 
-    let tables_path = ancillary_dir.join(&tables_key);
-    let meta_path = ancillary_dir.join(&meta_key);
+    // meta is tiny: read it, match its digest, gate the codec version.
+    let meta_bytes = std::fs::read(ancillary_dir.join(&meta_key)).context("read meta")?;
+    match_digest(sha256_bytes(&meta_bytes), &verified, &meta_key)?;
+    tables::parse_meta(&meta_bytes)?;
 
-    check_digest(&tables_path, &verified, &tables_key)?;
-    check_digest(&meta_path, &verified, &meta_key)?;
+    // tables: map ONCE, hash THIS mapping, and hand the very same mapping back to the parser.
+    let file = File::open(ancillary_dir.join(&tables_key)).context("open tables")?;
+    // SAFETY: read-only mapping of a local file, owned by the returned VerifiedTables.
+    let tables = unsafe { Mmap::map(&file) }.context("mmap tables")?;
+    match_digest(sha256_bytes(&tables), &verified, &tables_key)?;
 
-    // Gate the codec version on the now-trusted meta bytes.
-    tables::parse_meta(&std::fs::read(&meta_path).context("read meta")?)?;
-
-    Ok(VerifiedTables { tables_path, slot })
+    Ok(VerifiedTables { tables, slot })
 }
 
 /// The `ledger/<slot>/tables` key with the greatest slot (two consecutive snapshots ship; the
@@ -104,12 +115,11 @@ fn newest_tables_key(verified: &VerifiedAncillaryManifest) -> Option<(u64, Strin
         .max_by_key(|(slot, _)| *slot)
 }
 
-/// Fail closed unless `path`'s SHA-256 equals the digest the verified manifest commits for `key`.
-fn check_digest(path: &Path, verified: &VerifiedAncillaryManifest, key: &str) -> Result<()> {
+/// Fail closed unless `actual` equals the digest the verified manifest commits for `key`.
+fn match_digest(actual: [u8; 32], verified: &VerifiedAncillaryManifest, key: &str) -> Result<()> {
     let expected = verified
         .digest_for(key)
         .with_context(|| format!("manifest commits no digest for {key}"))?;
-    let actual = sha256_file(path)?;
     if actual != expected {
         bail!(
             "{key}: SHA-256 {} does not match the manifest digest {}",
@@ -120,15 +130,11 @@ fn check_digest(path: &Path, verified: &VerifiedAncillaryManifest, key: &str) ->
     Ok(())
 }
 
-/// SHA-256 of a file, memory-mapped so a multi-hundred-MB `tables` blob is not read into the heap.
-pub fn sha256_file(path: &Path) -> Result<[u8; 32]> {
-    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    // SAFETY: read-only mapping of a local file for the duration of the hash.
-    let mmap =
-        unsafe { memmap2::Mmap::map(&file) }.with_context(|| format!("mmap {}", path.display()))?;
+/// SHA-256 of a byte slice.
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(&mmap);
-    Ok(hasher.finalize().into())
+    hasher.update(bytes);
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -171,13 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn sha256_file_matches_a_known_digest() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("blob");
-        File::create(&path).unwrap().write_all(b"abc").unwrap();
+    fn sha256_bytes_matches_a_known_digest() {
         // SHA-256("abc")
         assert_eq!(
-            hex::encode(sha256_file(&path).unwrap()),
+            hex::encode(sha256_bytes(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }

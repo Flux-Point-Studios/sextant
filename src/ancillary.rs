@@ -119,7 +119,12 @@ pub fn verify_ancillary_manifest(
 
     // The signed message is SHA-256 over each (path ‖ hex-digest) of the SORTED map — the hex
     // strings verbatim, since that is what mithril signs. A BTreeMap makes the order canonical
-    // regardless of the JSON key order a hostile provider might present.
+    // regardless of the JSON key order a hostile provider might present. Mithril sorts a
+    // `BTreeMap<PathBuf,_>`; for the manifest's key space (`immutable/<f>`, `ledger/<slot>/<f>` —
+    // all lowercase ASCII with no char below `/` at a component boundary) String order is
+    // byte-identical to PathBuf order, and the `the_real_preprod_manifest_verifies` test pins that
+    // against a signature IOG actually produced. A divergent future key would fail closed (a
+    // false reject on an unverifiable message), never a false accept.
     let mut hasher = Sha256::new();
     for (path, hex_digest) in &manifest.data {
         hasher.update(path.as_bytes());
