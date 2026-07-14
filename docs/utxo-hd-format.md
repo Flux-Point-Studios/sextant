@@ -89,6 +89,23 @@ reordered/duplicate tamper also fails closed.
    `extract_block_effects` over a certified window ending at S — the incremental audit that
    discharges `AncillarySigned → StmCertified`.
 
+## T3-load — the certified set, persisted and queryable
+
+`snapshot-load <ancillary-dir> <network> <redb-path>` verifies the manifest, streams the verified
+outpoints into an on-disk `RedbUtxoStore` (`bulk_insert`: one atomic write transaction), and leaves
+a persisted membership set tagged with slot S and the `AncillarySigned` basis. On the real preprod
+snapshot it loads all **4,176,148** outpoints (~540 MB redb) and answers "is this outpoint in the
+certified set at S?" — a real snapshot outpoint reads present, a fabricated one absent.
+
+**The tip is the T3→T4 seam, not derivable from the ancillary.** Binding the set to a concrete tip
+block (hash + number at S) needs S's block, and it is *not* in the ancillary: the bundled
+`immutable/<n>.chunk` is Mithril's "last immutable file" — a LATER, unrelated chunk (observed: its
+blocks are at slots 128239242–128239523, all *after* the ledger snapshot at 128237957, with a gap),
+and S's own block lives in an earlier immutable chunk that ships only with the full cardano-database.
+The ledger `state` file does carry the tip, but buried inside the ExtLedgerState the amended plan
+declines to parse. So T4 resolves S→block against the certified chain it must reach anyway, then
+seeds a `UtxoSet` at that tip from this store (`UtxoSet::with_store`).
+
 ## Committed fixtures
 
 `tests/vectors/utxohd-meta.json` and `tests/vectors/utxohd-ancillary-manifest.json` are the real

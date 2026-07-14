@@ -56,6 +56,34 @@ impl RedbUtxoStore {
         let db = Database::open(path).map_err(store_err)?;
         Ok(RedbUtxoStore { db })
     }
+
+    /// Bulk-seed the store from a bootstrap snapshot: one write transaction, one table handle, all
+    /// outpoints inserted, committed atomically. This is the T3-load path for the ~millions-entry
+    /// certified set — the per-op `open_table` of the [`UtxoTxn`] seam (built for block-sized
+    /// batches) would be needless overhead at that scale. Returns the number of NEW outpoints
+    /// (duplicates in the source do not inflate it). On any error the whole load aborts — the store
+    /// is left exactly as it was.
+    pub fn bulk_insert(
+        &mut self,
+        outpoints: impl IntoIterator<Item = OutPoint>,
+    ) -> Result<usize, StoreError> {
+        let txn = self.db.begin_write().map_err(store_err)?;
+        let mut inserted = 0;
+        {
+            let mut table = txn.open_table(UTXO).map_err(store_err)?;
+            for o in outpoints {
+                if table
+                    .insert(key(&o).as_slice(), ())
+                    .map_err(store_err)?
+                    .is_none()
+                {
+                    inserted += 1;
+                }
+            }
+        }
+        txn.commit().map_err(store_err)?;
+        Ok(inserted)
+    }
 }
 
 impl UtxoStore for RedbUtxoStore {
@@ -143,6 +171,29 @@ mod tests {
         assert!(s.contains(&op(2, 0)).unwrap());
         assert!(!s.contains(&op(1, 0)).unwrap());
         assert_eq!(s.len().unwrap(), 1);
+    }
+
+    #[test]
+    fn bulk_insert_seeds_a_set_and_backs_a_utxoset() {
+        let (mut s, _dir) = store();
+        // A duplicate in the source must not inflate the NEW count.
+        let inserted = s
+            .bulk_insert([op(1, 0), op(1, 1), op(2, 0), op(1, 0)])
+            .unwrap();
+        assert_eq!(inserted, 3);
+        assert_eq!(s.len().unwrap(), 3);
+        assert!(s.contains(&op(1, 1)).unwrap());
+        assert!(!s.contains(&op(3, 0)).unwrap());
+
+        // The seeded store backs a UtxoSet at the snapshot tip; membership answers hold.
+        let tip = SetTip {
+            hash: [7u8; 32],
+            number: 100,
+        };
+        let set = UtxoSet::with_store(s, Some(tip), 2160);
+        assert!(set.is_unspent(&op(2, 0)).unwrap());
+        assert!(!set.is_unspent(&op(9, 0)).unwrap());
+        assert_eq!(set.len().unwrap(), 3);
     }
 
     #[test]
