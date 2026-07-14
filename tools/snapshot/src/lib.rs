@@ -5,6 +5,8 @@
 //! wasm-safe). The stream is decompressed and untarred incrementally, so the full 1.88 GB
 //! uncompressed archive is never held in memory.
 
+pub mod tables;
+
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};

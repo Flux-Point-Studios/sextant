@@ -53,13 +53,22 @@ is sorted. For the Tier-2 **membership** set the parser reads ONLY the keys — 
 an `OutPoint`; the `TxOut` value is skipped (a consumer needing the output content pairs it with a
 CardanoTransactions inclusion proof, per commitment-note §5.2).
 
-## T3-parse verification (three oracles, per the amended plan)
+## T3-parse — status and verification (three oracles, per the amended plan)
 
-1. **Definitive, one-time:** load this exact snapshot in a cardano-node 11.0.1, `query utxo
-   --whole-utxo`, and golden the full-UTxO-set hash against the parser's output hash.
-2. **Cheap independence:** Koios spot-samples — a parsed outpoint is unspent on preprod.
-3. **Substrate cross-check:** the subset-consistency check against `extract_block_effects` over a
-   certified window ending at S (the discharge audit in miniature).
+`tools/snapshot`'s `tables` module parses this on Sextant's own minicbor path (`snapshot-parse
+<meta> <tables>`). On the real preprod snapshot it decodes **4,176,148 outpoints in ~0.8 s**
+(memory-mapped, streamed — the set is never materialized), gated by the `meta` version.
+
+1. **Cheap independence — DONE.** Koios spot-samples: the first parsed outpoints all exist on
+   preprod and are `is_spent=false` — currently unspent, which is *consistent* with membership at
+   S (unspent-now ⇒ unspent-at-S). The parser produces real, consistent outpoints, not garbage.
+2. **Definitive, one-time — PENDING (needs a node).** Load this exact snapshot in a cardano-node
+   11.0.1, `query utxo --whole-utxo`, and golden the full-UTxO-set hash against the parser's. Our
+   deterministic fingerprint of the parsed set is `sha256` over the sorted 34-byte keys; the node
+   differential is the T3-verify slice's headline check.
+3. **Substrate cross-check — the discharge audit.** The subset-consistency check against
+   `extract_block_effects` over a certified window ending at S (the incremental audit that
+   discharges `AncillarySigned → StmCertified`).
 
 ## Committed fixtures
 
