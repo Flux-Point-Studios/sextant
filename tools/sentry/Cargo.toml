@@ -72,3 +72,8 @@ utxo-store = { path = "../utxo-store", optional = true }
 
 [dev-dependencies]
 hex = "0.4"
+
+[[bin]]
+name = "dump-block"
+path = "src/bin/dumpblock.rs"
+required-features = ["transport"]

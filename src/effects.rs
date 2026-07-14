@@ -159,6 +159,25 @@ fn decode_invalid_transactions(region: &[u8]) -> Result<BTreeSet<usize>, ()> {
 mod tests {
     use super::*;
 
+    /// Regression: a REAL preprod Conway block (#4933014) whose txs encode their outputs as
+    /// INDEFINITE-length CBOR arrays. The live Tier-2 follow wedged here (`MalformedBody`) because
+    /// the tx-body decoders assumed definite-length maps/arrays; extraction must now succeed and
+    /// match pallas (the differential sweep in `tests/effects.rs` covers the outpoint equality).
+    #[test]
+    fn extracts_a_block_with_indefinite_length_tx_bodies() {
+        let hex = include_str!("../tests/vectors/conway-indef-4933014.block");
+        let block = crate::inclusion::decode_hex(hex.trim().as_bytes()).unwrap();
+        let eff = extract_block_effects(&block).expect("indefinite-encoded outputs must extract");
+        assert_eq!(eff.number, 4933014);
+        let created: usize = eff.txs.iter().map(|t| t.created.len()).sum();
+        // Every one of the 21 txs produces at least one output.
+        assert!(
+            created >= 21,
+            "created {created} outputs across {} txs",
+            eff.txs.len()
+        );
+    }
+
     #[test]
     fn empty_invalid_transactions_is_an_empty_set() {
         // The empty array `0x80` — the common case (no phase-2 failures in the block).

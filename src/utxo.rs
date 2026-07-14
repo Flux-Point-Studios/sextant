@@ -272,12 +272,10 @@ pub fn verify_utxo_read(
 /// decoder silently drops is a spend a watcher would wrongly call unspent.
 pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
     let mut spends = SpendSet::new();
-    for _ in 0..entries {
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         match d.u64().map_err(|_| UtxoError::MalformedTx)? {
             // key 0 = inputs, key 13 = collateral inputs — both are spends.
             0 | 13 => decode_input_set(&mut d, &mut spends)?,
@@ -285,8 +283,28 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
             // field are skipped.
             _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
         }
+        i += 1;
     }
     Ok(spends)
+}
+
+/// Whether a CBOR sequence (map or array) declared with header length `len` — `Some(n)` definite,
+/// `None` indefinite — has another item before position `i`. On an indefinite sequence this
+/// consumes the closing `Break` when the sequence ends. Cardano/Conway encodes body maps, input
+/// sets, and output lists in EITHER length form (a real preprod block encodes outputs indefinitely),
+/// so every tx-body navigator must accept both rather than rejecting the indefinite form.
+fn seq_has_next(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, UtxoError> {
+    match len {
+        Some(n) => Ok(i < n),
+        None => {
+            if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Break {
+                d.skip().map_err(|_| UtxoError::MalformedTx)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }
+    }
 }
 
 /// The outpoints in the transaction body's input set at CBOR map key `key`, in array order —
@@ -297,38 +315,43 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
 /// an invalid one spends — never both.
 pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    for _ in 0..entries {
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return decode_input_vec(&mut d);
         }
         d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        i += 1;
     }
     Ok(Vec::new())
 }
 
-/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped) into an ordered `Vec`.
-fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
+/// Read the header of a `set<transaction_input>` (bare array or tag-258 wrapped), returning its
+/// definite length or `None` for the indefinite form.
+fn input_set_len(d: &mut Decoder<'_>) -> Result<Option<u64>, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
         let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
         if tag.as_u64() != 258 {
             return Err(UtxoError::MalformedTx);
         }
     }
-    let count = d
-        .array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
+    d.array().map_err(|_| UtxoError::MalformedTx)
+}
+
+/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped, definite or indefinite) into
+/// an ordered `Vec`.
+fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
+    let len = input_set_len(d)?;
     // Grow as elements decode rather than pre-allocating on the untrusted array count: a
     // direct caller of `inputs_at` with a body declaring a huge count would otherwise force a
     // capacity-overflow before any element is read. Each real element is bounds-checked by
     // `decode_outpoint`, so the vec never exceeds the wire bytes.
     let mut out = Vec::new();
-    for _ in 0..count {
+    let mut i = 0;
+    while seq_has_next(d, len, i)? {
         out.push(decode_outpoint(d)?);
+        i += 1;
     }
     Ok(out)
 }
@@ -337,55 +360,56 @@ fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
 /// return (key 16), which a phase-2-invalid transaction produces at output index `|outputs|`.
 pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    for _ in 0..entries {
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return Ok(true);
         }
         d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        i += 1;
     }
     Ok(false)
 }
 
 /// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
-/// the count of created outpoints `(tx_id, 0..n)`. A definite array is required (fail-closed on
-/// an indefinite one). A body with no outputs key is malformed.
+/// the count of created outpoints `(tx_id, 0..n)`. Accepts both a definite and an indefinite
+/// outputs array (a real preprod block encodes outputs indefinitely). A body with no outputs key
+/// is malformed.
 pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    for _ in 0..entries {
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == 1 {
-            let count = d
-                .array()
-                .map_err(|_| UtxoError::MalformedTx)?
-                .ok_or(UtxoError::MalformedTx)?;
-            return usize::try_from(count).map_err(|_| UtxoError::MalformedTx);
+            let arr = d.array().map_err(|_| UtxoError::MalformedTx)?;
+            return match arr {
+                Some(count) => usize::try_from(count).map_err(|_| UtxoError::MalformedTx),
+                None => {
+                    // Indefinite outputs array: count elements until the closing break.
+                    let mut count = 0usize;
+                    while seq_has_next(&mut d, None, 0)? {
+                        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+                        count += 1;
+                    }
+                    Ok(count)
+                }
+            };
         }
         d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        i += 1;
     }
     Err(UtxoError::MalformedTx)
 }
 
-/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped) into `spends`.
+/// Decode a `set<transaction_input>` (bare array or tag-258 wrapped, definite or indefinite) into
+/// `spends`.
 fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), UtxoError> {
-    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
-        let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
-        if tag.as_u64() != 258 {
-            return Err(UtxoError::MalformedTx);
-        }
-    }
-    let count = d
-        .array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    for _ in 0..count {
+    let len = input_set_len(d)?;
+    let mut i = 0;
+    while seq_has_next(d, len, i)? {
         spends.insert(decode_outpoint(d)?);
+        i += 1;
     }
     Ok(())
 }
@@ -425,16 +449,15 @@ pub fn output_exists(tx_bytes: &[u8], out_index: usize) -> Result<bool, UtxoErro
 /// deviation fails closed.
 fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    for _ in 0..entries {
+    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i)? {
         let key = d.u64().map_err(|_| UtxoError::MalformedTx)?;
         if key == 1 {
             return decode_output_at(&mut d, out_index);
         }
         d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        i += 1;
     }
     Err(UtxoError::MalformedTx)
 }
@@ -443,17 +466,19 @@ fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError>
 type Output = (Vec<u8>, u64, Option<Datum>);
 
 fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, UtxoError> {
-    let count = d
-        .array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    if out_index as u64 >= count {
-        return Err(UtxoError::OutputIndexOutOfRange);
-    }
-    for _ in 0..out_index {
+    // Walk the outputs array (definite or indefinite) to `out_index`; a target beyond the array is
+    // out of range. This handles both length forms without pre-reading a count the indefinite form
+    // does not carry.
+    let len = d.array().map_err(|_| UtxoError::MalformedTx)?;
+    let mut i = 0;
+    while seq_has_next(d, len, i)? {
+        if i as usize == out_index {
+            return decode_single_output(d);
+        }
         d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        i += 1;
     }
-    decode_single_output(d)
+    Err(UtxoError::OutputIndexOutOfRange)
 }
 
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
