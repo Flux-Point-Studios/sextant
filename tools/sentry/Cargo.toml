@@ -35,11 +35,21 @@ name = "scan-invalid"
 path = "src/bin/scan_invalid.rs"
 required-features = ["transport"]
 
+# Tier-2 T4-drive: a bounded live follow proving the Tier-2 set-follower over a real relay.
+# Opens the certified set at S (T3-load output), FindIntersect at the T4-tip point, and applies
+# real blocks forward via setfollow::apply_block. Network-side (the `transport` feature).
+[[bin]]
+name = "sextant-setfollow"
+path = "src/bin/setfollow.rs"
+required-features = ["setfollow"]
+
 [features]
 # `transport` off by default so the sans-io lib + its mock gate build with zero network
 # deps; the binaries opt in. `daemon` adds the HTTP server on top of `transport`.
 transport = ["dep:tokio", "dep:pallas-network", "dep:pallas-traverse", "dep:reqwest", "dep:serde", "dep:serde_json", "dep:hex", "dep:anyhow", "sextant/mithril"]
 daemon = ["transport", "dep:axum", "tokio/rt-multi-thread"]
+# T4-drive: the transport plus the certified-set bootstrap (snapshot) + on-disk store.
+setfollow = ["transport", "dep:snapshot", "dep:utxo-store"]
 
 [dependencies]
 # The verifier core. The lib composes only the default (wasm-safe) graph; the binaries
@@ -56,6 +66,9 @@ hex = { version = "0.4", optional = true }
 anyhow = { version = "1", optional = true }
 # Daemon-only HTTP server (behind the `daemon` feature).
 axum = { version = "0.7", optional = true }
+# T4-drive: the certified-state bootstrap + on-disk store (behind the `setfollow` feature).
+snapshot = { path = "../snapshot", optional = true }
+utxo-store = { path = "../utxo-store", optional = true }
 
 [dev-dependencies]
 hex = "0.4"
