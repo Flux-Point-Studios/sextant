@@ -36,7 +36,11 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use crate::utxo::OutPoint;
+use crate::utxo::{OutPoint, SpendStatus};
+
+/// The trust-class ladder enum lives with the [`SpendStatus`] ladder it qualifies (`crate::utxo`);
+/// re-exported here because it names the Tier-2 [`SnapshotAnchor`] this engine produces.
+pub use crate::utxo::AnchorBasis;
 
 /// One transaction's effect on the set: the outpoints it consumes (its inputs) and the ones it
 /// creates (its outputs, as `this_tx_id # output_index`). A later slice extracts these from a
@@ -73,43 +77,13 @@ pub struct SetTip {
     pub hash: [u8; 32],
 }
 
-/// The TRUST CLASS of a Tier-2 snapshot anchor S — how the base UTxO set was established, which a
-/// membership verdict at S rests on. Distinct from the spend-status ladder
-/// ([`crate::utxo::SpendStatus`], which grades what is proven ABOUT an outpoint); this grades the
-/// ANCHOR the whole set is built from, and must NEVER be laundered into one class.
-///
-/// The distinction is load-bearing: the Cardano immutable blocks are certified by the Mithril STM
-/// stake-threshold multi-signature — a decentralized SPO quorum, the same basis the chain above
-/// the anchor already rests on. The Mithril cardano-database *ancillary* (the ledger-state snapshot
-/// the bootstrap is fastest from) is signed by a SINGLE Ed25519 key IOG operates — a different,
-/// weaker trust class. Bootstrapping `UTxOSet(S)` from the ancillary swaps the anchor's STATE onto
-/// that single key while the chain above stays quorum-certified; a consumer must see that, banded
-/// distinctly (as at the C ABI the spend-status tiers are), and never mistake it for the quorum.
-///
-/// [`AnchorBasis::AncillarySigned`] is DISCHARGEABLE to [`AnchorBasis::StmCertified`]: because the
-/// blocks are STM-certified, the verified extraction path ([`crate::effects::extract_block_effects`]
-/// applied through this engine) can recompute `UTxOSet(S)` from certified blocks INDEPENDENTLY of
-/// the ancillary — a from-genesis audit once, then incremental audits reusing the same primitive.
-/// After a matching audit's hash agrees, the same S is `StmCertified`, and the IOG key is a
-/// bootstrap convenience rather than a standing safety dependency. That discharge is the audit
-/// hook designed into T3 now; the audit itself ships later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AnchorBasis {
-    /// `UTxOSet(S)` recomputed from the STM-stake-quorum-certified immutable blocks via the
-    /// verified extraction path — the same decentralized quorum the chain rests on.
-    StmCertified,
-    /// `UTxOSet(S)` taken from the Mithril cardano-database ancillary, signed by a single
-    /// IOG-operated Ed25519 key — NOT the stake quorum. A bootstrap convenience, dischargeable
-    /// to [`AnchorBasis::StmCertified`] by a matching extraction audit.
-    AncillarySigned,
-}
-
 /// A Tier-2 snapshot anchor: the verified tip S the UTxO set is based at, together with the
 /// [`AnchorBasis`] its state rests on. The T3 bootstrap produces one; the composed Tier-2 verdict
 /// surfaces it, so a consumer always weighs the anchor's trust class alongside the membership
 /// answer — a stake-quorum recomputation is not the same as a single-key snapshot, and the type
-/// makes the difference impossible to drop.
+/// makes the difference impossible to drop. [`AnchorBasis`] is the ladder's trust-class enum
+/// (re-exported below), distinct from [`crate::utxo::SpendStatus`], which grades what is proven
+/// ABOUT an outpoint; this grades the ANCHOR the whole set is built from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotAnchor {
     /// The verified tip the snapshot's UTxO set is current as of.
@@ -354,6 +328,28 @@ impl<S: UtxoStore> UtxoSet<S> {
     /// Whether `o` is unspent at the applied tip — the Tier-2 membership answer.
     pub fn is_unspent(&self, o: &OutPoint) -> Result<bool, StoreError> {
         self.store.contains(o)
+    }
+
+    /// The composed Tier-2 spend verdict for `o`: [`SpendStatus::CertifiedUnspent`] when `o` is a
+    /// member of the certified set at the current tip (unspent across the verified window from S),
+    /// carrying `basis` (the membership@S trust class) and the tip block number it holds through;
+    /// otherwise [`SpendStatus::NotEstablished`] — `o` is not in the set (spent in the window, or
+    /// never in the certified snapshot), so no certified-unspent evidence exists. Never a false
+    /// positive: the answer is `CertifiedUnspent` only for a genuine set member. `basis` comes from
+    /// the run's [`SnapshotAnchor`], so the caller cannot produce the verdict without it.
+    pub fn certified_spend_status(
+        &self,
+        basis: AnchorBasis,
+        o: &OutPoint,
+    ) -> Result<SpendStatus, StoreError> {
+        if self.is_unspent(o)? {
+            Ok(SpendStatus::CertifiedUnspent {
+                basis,
+                through_block: self.tip().map(|t| t.number).unwrap_or(0),
+            })
+        } else {
+            Ok(SpendStatus::NotEstablished)
+        }
     }
 
     /// Apply a verified block: remove every consumed outpoint, add every created one, in
@@ -790,6 +786,54 @@ mod tests {
         assert!(u.is_unspent(&op(101, 0)).unwrap());
         // Cannot roll back past the finalized snapshot base.
         assert_eq!(u.rollback_to(&h(99)), Err(RollbackError::Unreachable));
+    }
+
+    #[test]
+    fn certified_spend_status_grades_membership_with_the_basis_and_recency() {
+        let base = SetTip {
+            number: 100,
+            hash: h(100),
+        };
+        let mut u = UtxoSet::from_snapshot(base, [op(50, 0)], 10);
+
+        // A member at the anchor tip: CertifiedUnspent, carrying the basis and the tip it holds
+        // through (still S = 100 before any block applies).
+        assert_eq!(
+            u.certified_spend_status(AnchorBasis::AncillarySigned, &op(50, 0)),
+            Ok(SpendStatus::CertifiedUnspent {
+                basis: AnchorBasis::AncillarySigned,
+                through_block: 100,
+            })
+        );
+        // A non-member: no certified-unspent evidence, never a false positive.
+        assert_eq!(
+            u.certified_spend_status(AnchorBasis::AncillarySigned, &op(99, 9)),
+            Ok(SpendStatus::NotEstablished)
+        );
+
+        // Advance the window; the recency rides the current tip, and the spent member drops to
+        // NotEstablished while a created one becomes CertifiedUnspent.
+        u.apply(&BlockEffects {
+            number: 101,
+            hash: h(101),
+            prev_hash: h(100),
+            txs: vec![TxEffect {
+                spent: vec![op(50, 0)],
+                created: vec![op(101, 0)],
+            }],
+        })
+        .unwrap();
+        assert_eq!(
+            u.certified_spend_status(AnchorBasis::StmCertified, &op(101, 0)),
+            Ok(SpendStatus::CertifiedUnspent {
+                basis: AnchorBasis::StmCertified,
+                through_block: 101,
+            })
+        );
+        assert_eq!(
+            u.certified_spend_status(AnchorBasis::StmCertified, &op(50, 0)),
+            Ok(SpendStatus::NotEstablished)
+        );
     }
 
     /// A store whose transaction fails on its `fail_at`-th mutation — injects the persistent-store
