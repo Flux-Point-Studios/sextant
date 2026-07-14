@@ -53,22 +53,41 @@ is sorted. For the Tier-2 **membership** set the parser reads ONLY the keys — 
 an `OutPoint`; the `TxOut` value is skipped (a consumer needing the output content pairs it with a
 CardanoTransactions inclusion proof, per commitment-note §5.2).
 
-## T3-parse — status and verification (three oracles, per the amended plan)
+## T3-verify — the trust gate (the `AncillarySigned` basis, made real)
 
-`tools/snapshot`'s `tables` module parses this on Sextant's own minicbor path (`snapshot-parse
-<meta> <tables>`). On the real preprod snapshot it decodes **4,176,148 outpoints in ~0.8 s**
-(memory-mapped, streamed — the set is never materialized), gated by the `meta` version.
+Before any byte is parsed, the ancillary manifest is verified — this is what the `AncillarySigned`
+anchor basis (utxoset.rs) actually rests on, no longer merely asserted. `snapshot-parse
+<ancillary-dir> <preprod|mainnet>` runs the full chain via `verify_newest_tables`:
 
-1. **Cheap independence — DONE.** Koios spot-samples: the first parsed outpoints all exist on
-   preprod and are `is_spent=false` — currently unspent, which is *consistent* with membership at
-   S (unspent-now ⇒ unspent-at-S). The parser produces real, consistent outpoints, not garbage.
-2. **Definitive, one-time — PENDING (needs a node).** Load this exact snapshot in a cardano-node
-   11.0.1, `query utxo --whole-utxo`, and golden the full-UTxO-set hash against the parser's. Our
-   deterministic fingerprint of the parsed set is `sha256` over the sorted 34-byte keys; the node
-   differential is the T3-verify slice's headline check.
-3. **Substrate cross-check — the discharge audit.** The subset-consistency check against
-   `extract_block_effects` over a certified window ending at S (the incremental audit that
-   discharges `AncillarySigned → StmCertified`).
+1. **Manifest signature** (core `ancillary::verify_ancillary_manifest`): `compute_hash` = SHA-256
+   over each `(path ‖ hex-digest)` of the manifest's sorted map, then Ed25519 `verify_strict`
+   under the **pinned per-network ancillary key** (`ANCILLARY_VKEY_PREPROD` /
+   `ANCILLARY_VKEY_MAINNET`, decoded from `mithril-infra/configuration/<net>/ancillary.vkey`).
+   This is a SINGLE IOG key — a different trust class from the STM stake-quorum certification of
+   the immutable blocks, which is exactly why it is surfaced as its own basis.
+2. **File digests**: the on-disk `tables` and `meta` files must SHA-256 to the digests that
+   signature commits, or the gate fails closed — no `tables` handle is issued.
+3. **Codec gate**: `meta` must be `backend=utxohd-mem` + `tablesCodecVersion=1`.
+
+Verified end-to-end on the real preprod snapshot: signature OK under the pinned key, the real
+909 MB `tables` hashes to the signed digest `d1d2288f…`, and only then does the parse run.
+
+## T3-parse — the decode, and its verification oracles
+
+`tools/snapshot`'s `tables` module parses the (now trust-established) bytes on Sextant's own
+minicbor path. On the real preprod snapshot it decodes **4,176,148 outpoints** (memory-mapped,
+streamed — the set is never materialized), enforcing the strictly-increasing key invariant so a
+reordered/duplicate tamper also fails closed.
+
+1. **Manifest-signature independence — DONE.** See T3-verify above: the parsed bytes are pinned by
+   IOG's Ed25519 signature over the SHA-256 digest of this exact file.
+2. **Cheap independence — DONE.** Koios spot-samples: the first parsed outpoints all exist on
+   preprod and are `is_spent=false` — consistent with membership at S (unspent-now ⇒ unspent-at-S).
+3. **Definitive, one-time — PENDING (needs a node).** Load this exact snapshot in a cardano-node
+   11.0.1, `query utxo --whole-utxo`, and golden the full-UTxO-set hash against the parser's.
+4. **Substrate cross-check — the discharge audit.** The subset-consistency check against
+   `extract_block_effects` over a certified window ending at S — the incremental audit that
+   discharges `AncillarySigned → StmCertified`.
 
 ## Committed fixtures
 

@@ -1,31 +1,38 @@
-//! `snapshot-parse <meta> <tables>` — gate the meta, memory-map the tables file, stream the UTxO
-//! outpoints on Sextant's own path, and print the count, a deterministic set fingerprint, and a
-//! few samples. Tier-2 T3-parse: proves the parser at snapshot scale and produces the numbers the
-//! differential (node `query utxo --whole-utxo`, Koios spot-samples) checks against.
+//! `snapshot-parse <ancillary-dir> <network>` — the GATED certified-state bootstrap read: verify
+//! the ancillary manifest's Ed25519 signature under the pinned network key, confirm the on-disk
+//! `tables`/`meta` hash to the digests that signature commits, gate the codec version, and only
+//! THEN stream the UTxO outpoints on Sextant's own path. Prints the count, a set fingerprint, and
+//! a few samples. No unverified bytes ever reach the parser.
 
 use std::fs::File;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use memmap2::Mmap;
+use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sha2::{Digest, Sha256};
-use snapshot::tables::{for_each_outpoint, parse_meta};
+use snapshot::{tables::for_each_outpoint, verify_newest_tables};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let meta_path = args
+    let ancillary_dir = args
         .next()
-        .context("usage: snapshot-parse <meta> <tables>")?;
-    let tables_path = args
+        .context("usage: snapshot-parse <ancillary-dir> <preprod|mainnet>")?;
+    let network = args
         .next()
-        .context("usage: snapshot-parse <meta> <tables>")?;
+        .context("usage: snapshot-parse <ancillary-dir> <preprod|mainnet>")?;
+    let vkey = match network.as_str() {
+        "preprod" => &ANCILLARY_VKEY_PREPROD,
+        "mainnet" => &ANCILLARY_VKEY_MAINNET,
+        other => bail!("unknown network {other:?} (expected preprod or mainnet)"),
+    };
 
-    let meta = parse_meta(&std::fs::read(&meta_path).context("read meta")?)?;
+    let verified = verify_newest_tables(std::path::Path::new(&ancillary_dir), vkey)?;
     eprintln!(
-        "meta OK: backend={} tablesCodecVersion={}",
-        meta.backend, meta.tables_codec_version
+        "verified: manifest signature OK, tables+meta digests OK, codec gated (slot {})",
+        verified.slot
     );
 
-    let file = File::open(&tables_path).context("open tables")?;
+    let file = File::open(&verified.tables_path).context("open tables")?;
     // SAFETY: read-only mapping of a local file for the lifetime of this process.
     let mmap = unsafe { Mmap::map(&file) }.context("mmap tables")?;
 
