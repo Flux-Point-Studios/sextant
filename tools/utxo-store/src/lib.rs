@@ -14,7 +14,7 @@
 //! block is visible to a later spend); batching many blocks per commit is a bootstrap-speed
 //! optimisation, not a correctness one, and is left to T3.
 
-use redb::{Database, ReadableTableMetadata, TableDefinition, WriteTransaction};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition, WriteTransaction};
 use sextant::utxo::OutPoint;
 use sextant::utxoset::{StoreError, UtxoStore, UtxoTxn};
 
@@ -111,6 +111,23 @@ impl UtxoStore for RedbUtxoStore {
         let txn = self.db.begin_read().map_err(store_err)?;
         let table = txn.open_table(UTXO).map_err(store_err)?;
         Ok(table.len().map_err(store_err)? as usize)
+    }
+
+    fn for_each(&self, f: &mut dyn FnMut(OutPoint)) -> Result<(), StoreError> {
+        let txn = self.db.begin_read().map_err(store_err)?;
+        let table = txn.open_table(UTXO).map_err(store_err)?;
+        // redb iterates in key order; each key is the 34-byte `tx_id ‖ BE-u16 index`.
+        for entry in table.iter().map_err(store_err)? {
+            let (k, _v) = entry.map_err(store_err)?;
+            let key = k.value();
+            let tx_id: [u8; 32] = key
+                .get(..32)
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(|| StoreError("utxo key is not 34 bytes".to_string()))?;
+            let index = u16::from_be_bytes([key[32], key[33]]);
+            f(OutPoint { tx_id, index });
+        }
+        Ok(())
     }
 }
 
