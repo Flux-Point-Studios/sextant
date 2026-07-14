@@ -19,10 +19,12 @@
 //! transaction-set membership is a monotone "created" predicate, no Cardano
 //! commitment exists to prove unspent against, and the verdict trails tip by ~100
 //! blocks. Unspent is the ledger's to decide, atomically, at submission. That
-//! honesty is enforced in the return type: [`SpendStatus`] carries today only
-//! `NotEstablished` (a `#[non_exhaustive]` trust-tier ladder, uncoercible to a
-//! positive-liveness claim), and every verdict carries `certified_at` so no caller
-//! may read it as tip state.
+//! honesty is enforced in the return type: this single-tx read path yields only
+//! [`SpendStatus::NotEstablished`], and every verdict carries `certified_at` so no
+//! caller may read it as tip state. The stronger Tier-2 [`SpendStatus::CertifiedUnspent`]
+//! (unspent across a verified window from a certified snapshot) comes from the
+//! certified-state path ([`crate::utxoset::UtxoSet::certified_spend_status`]), not
+//! this one — the ladder is `#[non_exhaustive]` and uncoercible to unconditional liveness.
 //!
 //! ## The bytes are hashed here, never trusted from a provider
 //! `verify_utxo_read` hashes the *supplied* `tx_bytes` to obtain `H`
