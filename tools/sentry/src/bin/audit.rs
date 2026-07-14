@@ -16,7 +16,7 @@
 //! Usage: `sextant-audit <ancillary-dir> <preprod|mainnet> <sample-size>`
 
 use anyhow::{Context, Result, bail};
-use sentry::coverage::{max_undetected_phantoms, phantom_fraction_bound};
+use sentry::coverage::max_undetected_phantoms;
 use sentry::transport::{fetch_fresh_anchor, fetch_tx_proof, load_committed_base, vectors_dir};
 use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sextant::inclusion::verify_tx_inclusion;
@@ -150,8 +150,13 @@ async fn main() -> Result<()> {
     // Quantified partial discharge: publish exactly how much this passing sample buys. At 99%
     // confidence, fewer than this many of the set's distinct tx_ids could be undetected phantoms.
     const ALPHA: f64 = 0.01;
-    let frac = phantom_fraction_bound(certified as u32, ALPHA);
     let max_phantoms = max_undetected_phantoms(n_distinct, certified as u32, ALPHA);
+    // The shown fraction is derived from the (exhaustion-capped) count so they always agree.
+    let frac = if n_distinct == 0 {
+        0.0
+    } else {
+        max_phantoms as f64 / n_distinct as f64
+    };
     println!("result: PASS ({certified} STM-certified, 0 phantom)");
     println!("confidence: 0.99");
     println!(

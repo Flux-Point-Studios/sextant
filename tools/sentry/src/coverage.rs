@@ -30,9 +30,13 @@ pub fn phantom_fraction_bound(k: u32, alpha: f64) -> f64 {
 }
 
 /// The (1 − `alpha`)-confidence upper bound on the COUNT of undetected phantom members among `n`
-/// distinct members, given `k` passing proofs. Rounds UP — the honest (conservative) direction.
+/// distinct members, given `k` passing proofs. Rounds UP — the honest (conservative) direction — and
+/// is capped by the EXACT combinatorial ceiling `n − k`: `k` distinct members were proven real, so at
+/// most the `n − k` unchecked ones can be phantom (this makes the bound exactly `0` at full coverage
+/// `k == n`, where the probabilistic envelope would otherwise report a spurious residual).
 pub fn max_undetected_phantoms(n: u64, k: u32, alpha: f64) -> u64 {
-    (n as f64 * phantom_fraction_bound(k, alpha)).ceil() as u64
+    let envelope = (n as f64 * phantom_fraction_bound(k, alpha)).ceil() as u64;
+    envelope.min(n.saturating_sub(u64::from(k)))
 }
 
 #[cfg(test)]
@@ -62,6 +66,15 @@ mod tests {
     fn tighter_confidence_widens_the_bound() {
         // Demanding MORE confidence (smaller alpha) gives a WEAKER (larger) fraction bound at fixed k.
         assert!(phantom_fraction_bound(100, 0.001) > phantom_fraction_bound(100, 0.05));
+    }
+
+    #[test]
+    fn full_coverage_is_an_exact_zero_bound() {
+        // Proving every distinct member (k == n) leaves NO room for a phantom — exact, not the
+        // probabilistic floor the (1-f)^k envelope would report.
+        assert_eq!(max_undetected_phantoms(1000, 1000, 0.01), 0);
+        // Near-full coverage is capped by n - k (you have only 5 unchecked members).
+        assert_eq!(max_undetected_phantoms(1000, 995, 0.01), 5);
     }
 
     #[test]
