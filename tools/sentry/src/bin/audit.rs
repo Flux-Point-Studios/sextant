@@ -9,7 +9,9 @@
 //! phantom's `tx_id` is listed non-certified or fails the recompute, never a trusted "yes".
 //!
 //! This is the trustless complement to the forward subset-consistency audit (setfollow.rs). It is a
-//! SAMPLE, not the full set; a full `AncillarySigned → StmCertified` discharge proves every member.
+//! reservoir SAMPLE (uniform across the whole set@S, seeded from the certified root so a
+//! placement-aware padder cannot predict which members are checked), NOT the full set; a full
+//! `AncillarySigned → StmCertified` discharge proves every member.
 //!
 //! Usage: `sextant-audit <ancillary-dir> <preprod|mainnet> <sample-size>`
 
@@ -18,7 +20,31 @@ use sentry::transport::{fetch_fresh_anchor, fetch_tx_proof, load_committed_base,
 use sextant::ancillary::{ANCILLARY_VKEY_MAINNET, ANCILLARY_VKEY_PREPROD};
 use sextant::inclusion::verify_tx_inclusion;
 use snapshot::{tables::for_each_outpoint, verified_tables, verify_manifest};
-use std::collections::HashSet;
+
+/// A tiny deterministic PRNG (SplitMix64) for reservoir sampling — seeded from the certified root so
+/// the sample is reproducible yet unpredictable to whoever built the ancillary.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn seed(root: &[u8; 32]) -> Self {
+        let mut s = 0u64;
+        for chunk in root.chunks_exact(8) {
+            s ^= u64::from_le_bytes(chunk.try_into().unwrap());
+        }
+        SplitMix64(s)
+    }
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    /// A value uniform in `[0, n)` (`n > 0`); the modulo skew is negligible for sampling.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -41,27 +67,12 @@ async fn main() -> Result<()> {
     };
     let dir = std::path::Path::new(&dir);
 
-    // Trust the tables from the signed manifest, then sample distinct tx_ids from the set@S.
+    // Trust the tables from the signed manifest.
     let verified = verify_manifest(dir, vkey)?;
     let tables = verified_tables(dir, &verified)?;
-    let mut seen = HashSet::new();
-    let mut tx_ids: Vec<[u8; 32]> = Vec::new();
-    let _ = for_each_outpoint(tables.bytes(), |o| {
-        if seen.insert(o.tx_id) {
-            tx_ids.push(o.tx_id);
-            if tx_ids.len() >= sample {
-                bail!("__sampled__"); // sentinel: stop after `sample` distinct tx_ids
-            }
-        }
-        Ok(())
-    });
-    eprintln!(
-        "sampled {} distinct tx_ids from the certified set@S",
-        tx_ids.len()
-    );
 
     // The genesis-anchored, STM-certified transaction Merkle root — the trust root the proofs are
-    // recomputed against.
+    // recomputed against. Fetched FIRST so the sample can be seeded from it.
     let (base, genesis_vkey) = load_committed_base(&vectors_dir())?;
     let http = reqwest::Client::new();
     let anchor = fetch_fresh_anchor(&http, &base, &genesis_vkey).await?;
@@ -71,6 +82,36 @@ async fn main() -> Result<()> {
     eprintln!(
         "certified transaction root @ epoch {} block {} (genesis-anchored)",
         anchor.epoch, anchor.block_number
+    );
+
+    // RESERVOIR-sample `sample` distinct tx_ids UNIFORMLY across the WHOLE set@S — not a low-tx_id
+    // prefix a placement-aware padder could hide phantoms above. The RNG is seeded from the
+    // certified root (future to whoever built the ancillary), so the sample is reproducible yet
+    // unpredictable to a padder. The tables are strictly key-increasing, so equal tx_ids are
+    // adjacent and distinct-counting needs no set. A real parse error propagates (never swallowed).
+    let mut rng = SplitMix64::seed(&root);
+    let mut prev: Option<[u8; 32]> = None;
+    let mut n_distinct: u64 = 0;
+    let mut tx_ids: Vec<[u8; 32]> = Vec::with_capacity(sample);
+    for_each_outpoint(tables.bytes(), |o| {
+        if prev != Some(o.tx_id) {
+            prev = Some(o.tx_id);
+            let i = n_distinct;
+            n_distinct += 1;
+            if (i as usize) < sample {
+                tx_ids.push(o.tx_id);
+            } else {
+                let j = rng.below(n_distinct); // uniform in [0, i]
+                if (j as usize) < sample {
+                    tx_ids[j as usize] = o.tx_id;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    eprintln!(
+        "reservoir-sampled {} of {n_distinct} distinct set@S tx_ids (root-seeded, uniform)",
+        tx_ids.len()
     );
 
     let mut certified = 0usize;
