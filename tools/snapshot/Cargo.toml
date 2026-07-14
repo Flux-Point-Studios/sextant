@@ -1,0 +1,25 @@
+[package]
+name = "snapshot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Tier-2 T3-fetch: acquire + unpack the Mithril cardano-database ancillary (the InMemory
+# UTxO-HD ledger-state snapshot). zstd/tar live HERE, in the tools workspace — never in the
+# sextant trust core, which stays sans-io and wasm-safe.
+
+[lib]
+name = "snapshot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snapshot-extract"
+path = "src/bin/extract.rs"
+
+[dependencies]
+zstd = "0.13"
+tar = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
