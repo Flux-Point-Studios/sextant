@@ -83,6 +83,12 @@ fn main() -> Result<()> {
     println!("parsed_outpoints: {parsed}");
     println!("loaded_outpoints: {loaded}");
     println!("set_len: {len}");
+    // The loaded set's own commitment — must equal the ancillary tables' set_fingerprint_sha256
+    // (snapshot-parse), proving the redb-backed load is byte-faithful to the signed snapshot.
+    let fp = set
+        .fingerprint()
+        .map_err(|e| anyhow::anyhow!("fingerprint: {}", e.0))?;
+    println!("set_fingerprint_sha256: {}", hex::encode(fp));
     // Membership probes: a real snapshot outpoint is unspent at the tip; a fabricated one is not.
     if let Some(o) = first {
         let unspent = set

@@ -36,6 +36,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use sha2::{Digest, Sha256};
+
 use crate::utxo::{CertifiedTransactions, OutPoint, SpendStatus};
 
 /// The trust-class ladder enum lives with the [`SpendStatus`] ladder it qualifies (`crate::utxo`);
@@ -151,6 +153,10 @@ pub trait UtxoStore {
     fn is_empty(&self) -> Result<bool, StoreError> {
         Ok(self.len()? == 0)
     }
+    /// Visit every committed outpoint in ASCENDING key order (`tx_id` then `index`) — the order the
+    /// snapshot `tables` are sorted in, so [`UtxoSet::fingerprint`] over this matches the ancillary's
+    /// own set hash byte-for-byte.
+    fn for_each(&self, f: &mut dyn FnMut(OutPoint)) -> Result<(), StoreError>;
 }
 
 /// An in-flight write transaction over a [`UtxoStore`]. `insert`/`remove` are read-your-writes
@@ -202,6 +208,14 @@ impl UtxoStore for MemStore {
     }
     fn len(&self) -> Result<usize, StoreError> {
         Ok(self.set.len())
+    }
+    fn for_each(&self, f: &mut dyn FnMut(OutPoint)) -> Result<(), StoreError> {
+        // BTreeSet iterates in `Ord` order, which for `OutPoint` is (tx_id lex, then index) — the
+        // same order as the 34-byte `tx_id ‖ BE-u16` keys.
+        for o in &self.set {
+            f(*o);
+        }
+        Ok(())
     }
 }
 
@@ -361,6 +375,21 @@ impl<S: UtxoStore> UtxoSet<S> {
     /// The number of unspent outpoints held.
     pub fn len(&self) -> Result<usize, StoreError> {
         self.store.len()
+    }
+
+    /// A deterministic SHA-256 commitment to the CURRENT set: `H(tx_id ‖ BE-u16 index)` over every
+    /// outpoint in ascending key order. This is byte-identical to the ancillary `tables`' own set
+    /// fingerprint (same key layout, same order), so it (a) proves a T3-load is faithful — the loaded
+    /// set's fingerprint equals the signed snapshot's — and (b) is the comparison the discharge rests
+    /// on: a set recomputed from STM-certified blocks matches the ancillary IFF their fingerprints
+    /// are equal. Order-canonical, so it commits the set, not an encoding.
+    pub fn fingerprint(&self) -> Result<[u8; 32], StoreError> {
+        let mut hasher = Sha256::new();
+        self.store.for_each(&mut |o| {
+            hasher.update(o.tx_id);
+            hasher.update(o.index.to_be_bytes());
+        })?;
+        Ok(hasher.finalize().into())
     }
 
     /// Whether the set holds no unspent outpoints.
@@ -944,6 +973,62 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_is_the_ordered_sha256_over_outpoint_keys() {
+        use sha2::{Digest, Sha256};
+        // Insert out of order; the fingerprint must be order-canonical (same for any insert order).
+        let a = op(2, 1);
+        let b = op(1, 0);
+        let c = op(1, 5);
+        let u = UtxoSet::from_snapshot(
+            SetTip {
+                number: 1,
+                hash: h(1),
+            },
+            [a, c, b],
+            10,
+        );
+
+        // Independent recompute: SHA-256 over tx_id ‖ BE-index in ASCENDING key order.
+        let mut ordered = [a, b, c];
+        ordered.sort();
+        let mut hasher = Sha256::new();
+        for o in ordered {
+            hasher.update(o.tx_id);
+            hasher.update(o.index.to_be_bytes());
+        }
+        let expected: [u8; 32] = hasher.finalize().into();
+        assert_eq!(u.fingerprint().unwrap(), expected);
+
+        // Applying a block changes the fingerprint deterministically; reversing it restores it.
+        let before = u.fingerprint().unwrap();
+        let mut u = u;
+        u.apply(&BlockEffects {
+            number: 2,
+            hash: h(2),
+            prev_hash: h(1),
+            txs: vec![TxEffect {
+                spent: vec![b],
+                created: vec![op(9, 0)],
+            }],
+        })
+        .unwrap();
+        assert_ne!(u.fingerprint().unwrap(), before);
+        u.rollback_to(&h(1)).unwrap();
+        assert_eq!(
+            u.fingerprint().unwrap(),
+            before,
+            "rollback restores the exact set commitment"
+        );
+
+        // The empty set has the SHA-256 of the empty input.
+        let empty = UtxoSet::new(10);
+        assert_eq!(
+            empty.fingerprint().unwrap(),
+            <[u8; 32]>::from(Sha256::new().finalize())
+        );
+    }
+
+    #[test]
     fn certified_spend_status_fails_closed_without_a_bound_anchor() {
         // A non-anchored set (no basis bound) can hold members but yields NO Tier-2 verdict — the
         // basis is never fabricated, so a plain set can't be read as certified.
@@ -1055,6 +1140,12 @@ mod tests {
         }
         fn len(&self) -> Result<usize, StoreError> {
             Ok(self.set.len())
+        }
+        fn for_each(&self, f: &mut dyn FnMut(OutPoint)) -> Result<(), StoreError> {
+            for o in &self.set {
+                f(*o);
+            }
+            Ok(())
         }
     }
 

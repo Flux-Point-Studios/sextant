@@ -14,7 +14,7 @@
 //! block is visible to a later spend); batching many blocks per commit is a bootstrap-speed
 //! optimisation, not a correctness one, and is left to T3.
 
-use redb::{Database, ReadableTableMetadata, TableDefinition, WriteTransaction};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition, WriteTransaction};
 use sextant::utxo::OutPoint;
 use sextant::utxoset::{StoreError, UtxoStore, UtxoTxn};
 
@@ -111,6 +111,25 @@ impl UtxoStore for RedbUtxoStore {
         let txn = self.db.begin_read().map_err(store_err)?;
         let table = txn.open_table(UTXO).map_err(store_err)?;
         Ok(table.len().map_err(store_err)? as usize)
+    }
+
+    fn for_each(&self, f: &mut dyn FnMut(OutPoint)) -> Result<(), StoreError> {
+        let txn = self.db.begin_read().map_err(store_err)?;
+        let table = txn.open_table(UTXO).map_err(store_err)?;
+        // redb iterates in key order; each key is the 34-byte `tx_id ‖ BE-u16 index`.
+        for entry in table.iter().map_err(store_err)? {
+            let (k, _v) = entry.map_err(store_err)?;
+            // Validate the FULL 34-byte width before indexing, so a foreign-written short key fails
+            // closed (StoreError) rather than panicking on key[32]/key[33].
+            let key: [u8; 34] = k
+                .value()
+                .try_into()
+                .map_err(|_| StoreError("utxo key is not 34 bytes".to_string()))?;
+            let tx_id: [u8; 32] = key[..32].try_into().expect("34 >= 32");
+            let index = u16::from_be_bytes([key[32], key[33]]);
+            f(OutPoint { tx_id, index });
+        }
+        Ok(())
     }
 }
 
@@ -217,6 +236,36 @@ mod tests {
         assert!(set.is_unspent(&op(2, 0)).unwrap());
         assert!(!set.is_unspent(&op(9, 0)).unwrap());
         assert_eq!(set.len().unwrap(), 3);
+    }
+
+    /// The redb-backed store must fingerprint IDENTICALLY to the in-memory store for the same set —
+    /// the cross-store consistency the discharge comparison depends on (a native redb recompute and
+    /// a wasm MemStore recompute of the same set@S yield the same commitment). Insertion order and
+    /// backend must not matter; only the set does.
+    #[test]
+    fn redb_and_mem_fingerprints_agree() {
+        let outs = [op(9, 0), op(1, 5), op(1, 0), op(3, 2), op(1, 1)];
+        let tip = SetTip {
+            hash: [7u8; 32],
+            number: 100,
+        };
+        let (mut s, _dir) = store();
+        s.bulk_insert(outs).unwrap();
+        let redb_fp = UtxoSet::with_store(s, Some(tip), 2160)
+            .fingerprint()
+            .unwrap();
+        // Same outpoints in a DIFFERENT order into the in-memory store.
+        let mem_fp = UtxoSet::from_snapshot(
+            tip,
+            [op(3, 2), op(1, 0), op(1, 5), op(9, 0), op(1, 1)],
+            2160,
+        )
+        .fingerprint()
+        .unwrap();
+        assert_eq!(
+            redb_fp, mem_fp,
+            "redb and mem must commit the set identically"
+        );
     }
 
     #[test]
