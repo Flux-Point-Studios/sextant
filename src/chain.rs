@@ -59,7 +59,7 @@ impl core::fmt::Display for ChainError {
     }
 }
 
-impl std::error::Error for ChainError {}
+impl core::error::Error for ChainError {}
 
 /// Why a single header's authorship did not verify — the index-free core of the
 /// crypto failures in [`ChainError`]. [`verify_segment`] adds the block index; the

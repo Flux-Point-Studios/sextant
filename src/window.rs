@@ -30,6 +30,7 @@
 //! Freshness alone cannot close (2): the `max_lag` needed to admit the honestly
 //! tip-trailing Mithril window also admits a spend hidden just under the tip.
 
+use alloc::vec::Vec;
 use core::ops::Range;
 
 use minicbor::Decoder;
@@ -62,7 +63,7 @@ impl core::fmt::Display for BindError {
     }
 }
 
-impl std::error::Error for BindError {}
+impl core::error::Error for BindError {}
 
 /// Verify that a block's transaction bodies are the ones its header commits to,
 /// and return the decoded [`HeaderView`]. The recomputed body commitment must

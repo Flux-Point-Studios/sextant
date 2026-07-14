@@ -17,7 +17,9 @@
 //! is Babbage-onward; a pre-Babbage (Alonzo) invalid transaction consumes all collateral with
 //! no return, a delta this Conway-scoped path does not model, so it fails closed there.
 
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use minicbor::Decoder;
 use minicbor::data::Type;

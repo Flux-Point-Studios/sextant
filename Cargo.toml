@@ -10,11 +10,16 @@ license = "Apache-2.0"
 # (tokio, reqwest, pallas-network) never enter the trust-substrate lib's
 # build. Harness commands operate on the `sextant` package only.
 [workspace]
-members = ["tools/harvest", "tools/sentry", "tools/utxo-store", "tools/snapshot"]
+members = ["tools/harvest", "tools/sentry", "tools/utxo-store", "tools/snapshot", "tools/guest-canary"]
 resolver = "3"
 
+# rlib only in the manifest: a multi-crate-type lib is built with ALL its
+# crate-types even as a dependency, and cdylib/staticlib demand a panic handler
+# + global allocator on bare-metal targets -- which would break every no_std
+# consumer (zkVM guests, tools/guest-canary). The C-ABI artifacts still exist:
+# the artifacts pipeline requests them explicitly via `cargo rustc --crate-type`.
 [lib]
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib"]
 
 # The Live-line consumer: a keeper/batcher stand-in that composes the shipped
 # verify path (genesis-anchored Mithril chain -> certified UTxO read -> spend
@@ -34,6 +39,12 @@ path = "examples/windowed_spend_gate/main.rs"
 required-features = ["mithril"]
 
 [features]
+default = ["std"]
+# Host builds: enables the C ABI (`ffi`, which needs `catch_unwind`) and the std
+# prelude. `--no-default-features` yields the no_std+alloc guest graph -- the
+# verify paths are identical; only the FFI surface and the prelude differ
+# (`tools/guest-canary` builds it for rv32im in the harness).
+std = []
 # Mithril certificate-chain verification. OFF by default so the default lib and
 # the wasm32 artifact stay lean (no JSON/serde/chrono, and — in later slices —
 # no mithril-stm/blst wasm C-toolchain need). The harness exercises it on the
@@ -72,6 +83,10 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "allo
 # assembly, signed-message and AVK-chain binding — in src/mithril.rs. Rides blst
 # `portable`; `num-integer-backend` avoids GMP (`rug`), which would break wasm —
 # and the whole thing stays behind the `mithril` feature, out of default+wasm.
+# src/mithril.rs itself is no_std-clean; building `mithril` WITHOUT `std` also
+# needs the dep graph (mithril-stm -> blst C, rayon) to resolve for the target --
+# on zkVM targets that is the vendor-toolchain question (heliograph M0), not a
+# Sextant source question.
 mithril-stm = { version = "0.10.5", default-features = false, features = ["num-integer-backend"], optional = true }
 
 [dev-dependencies]

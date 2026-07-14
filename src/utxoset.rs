@@ -34,7 +34,9 @@
 //! the wasm/mobile core carries only the set-in-RAM path, while a native host swaps in a
 //! persistent store (redb) via [`UtxoSet::with_store`] without any file I/O entering this core.
 
-use std::collections::{BTreeSet, VecDeque};
+use alloc::collections::{BTreeSet, VecDeque};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use sha2::{Digest, Sha256};
 

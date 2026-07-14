@@ -7,9 +7,11 @@ steps:
     commands:
       - rustup target add wasm32-unknown-unknown
       # Build the shipped DoD line-6 artifacts: the lean default static library
-      # (no blst — mithril is off by default) and the wasm32 module.
-      - cargo build --release
-      - cargo build --release --target wasm32-unknown-unknown
+      # (no blst — mithril is off by default) and the wasm32 module. The manifest
+      # is rlib-only (dependency builds must stay linkable-free for no_std
+      # consumers), so the linkable forms are requested explicitly here.
+      - cargo rustc --release --crate-type staticlib
+      - cargo rustc --release --target wasm32-unknown-unknown --crate-type cdylib
       # Link the real static library through the committed C header and run it:
       # proves external C linkage + #[no_mangle] symbol retention on the Linux
       # artifact target. Built without -DSEXTANT_MITHRIL, so it also proves the
