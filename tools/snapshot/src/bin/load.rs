@@ -58,6 +58,15 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("bulk load: {}", e.0))?;
     let len = store.len().map_err(|e| anyhow::anyhow!("store: {}", e.0))?;
 
+    // Checked post-condition: the parser dedups (strictly-increasing keys) into a fresh store, so
+    // every parsed outpoint is a new insert and the store holds exactly them. Any divergence means
+    // a lossy load OR a non-empty start (a stale DB unioned in) — fail closed, never report clean.
+    if loaded != parsed || len != parsed {
+        bail!(
+            "load discrepancy: parsed={parsed} loaded={loaded} store_len={len} (non-empty start or lossy load)"
+        );
+    }
+
     println!("slot_S: {}", tables.slot);
     println!("basis: {:?}", AnchorBasis::AncillarySigned);
     println!("parsed_outpoints: {parsed}");
