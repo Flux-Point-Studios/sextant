@@ -28,6 +28,12 @@ use utxo_store::RedbUtxoStore;
 /// The retained rollback window (k = 2160 blocks).
 const DEPTH: usize = 2160;
 
+/// Bail after this many consecutive relay events that make NO forward progress (rollbacks with no
+/// intervening apply). A legitimate rollback is bounded by `DEPTH`; a relay that only ever rolls
+/// back — including endless no-op rollbacks to the current tip, which never advance `applied` — is
+/// byzantine and would otherwise wedge the follow. The set is never wrong; this bounds liveness.
+const STALL_LIMIT: u64 = 2 * DEPTH as u64;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -50,6 +56,10 @@ async fn main() -> Result<()> {
         "mainnet" => &ANCILLARY_VKEY_MAINNET,
         other => bail!("unknown network {other:?}"),
     };
+    // `connect()` targets the preprod relay; a mainnet live follow needs a mainnet relay wired.
+    if network != "preprod" {
+        bail!("live follow targets the preprod relay; {network} is not wired");
+    }
     let dir = std::path::Path::new(&dir);
     let http = reqwest::Client::new();
     let schedule = preprod_schedule();
@@ -95,6 +105,9 @@ async fn main() -> Result<()> {
     let mut staged: Vec<(u64, [u8; 32])> = Vec::new();
     let mut applied = 0u64;
     let mut rollbacks = 0u64;
+    // Consecutive no-forward-progress events; reset on each apply. Bounds a byzantine relay that
+    // never advances (see STALL_LIMIT).
+    let mut stall = 0u64;
     while applied < max_blocks {
         match peer
             .chainsync()
@@ -125,6 +138,7 @@ async fn main() -> Result<()> {
                 match apply_block(&mut set, &block, &eta0) {
                     Ok(new_tip) => {
                         applied += 1;
+                        stall = 0;
                         if applied <= 3 || applied.is_multiple_of(250) {
                             eprintln!(
                                 "applied #{applied}: slot {slot} -> set tip #{}",
@@ -136,18 +150,23 @@ async fn main() -> Result<()> {
                 }
             }
             NextResponse::RollBackward(point, _tip) => {
-                if let Point::Specific(_, h) = &point
-                    && h.len() == 32
-                {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(h);
-                    // Rolling back to the intersection point (== our current tip) is a no-op.
-                    set.rollback_to(&hash)
-                        .map_err(|e| anyhow::anyhow!("rollback: {e:?}"))?;
-                    if hash != anchor.tip.hash {
-                        rollbacks += 1;
-                        eprintln!("rolled back to slot {}", point_slot(&point));
-                    }
+                let Point::Specific(_, h) = &point else {
+                    bail!("relay sent an unusable rollback point: {point:?}");
+                };
+                let hash: [u8; 32] = h
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("rollback point hash is not 32 bytes"))?;
+                // Rolling back to the intersection point (== our current tip) is a no-op.
+                set.rollback_to(&hash)
+                    .map_err(|e| anyhow::anyhow!("rollback: {e:?}"))?;
+                if hash != anchor.tip.hash {
+                    rollbacks += 1;
+                    eprintln!("rolled back to slot {}", point_slot(&point));
+                }
+                stall += 1;
+                if stall > STALL_LIMIT {
+                    bail!("relay made no forward progress in {stall} events (byzantine)");
                 }
             }
             NextResponse::Await => {
