@@ -1,0 +1,59 @@
+{
+  "repo": "sextant",
+  "primitives": [
+    {
+      "id": "praos-header-verifier",
+      "name": "Praos header and chain verifier",
+      "desc": "Decodes Conway and Babbage Praos block headers and verifies them on its own code path: the leader VRF proof against the epoch nonce, the operational certificate, the Sum6 KES body signature, and hash-linked gap-free chain segments across epoch boundaries with nonce evolution. A byte provider can only make a genuine proof fail, never make a forged one pass.",
+      "kind": "engine",
+      "paths": ["src/header.rs", "src/vrf.rs", "src/kes.rs", "src/ed25519.rs", "src/curve.rs", "src/nonce.rs", "src/chain.rs", "src/hash.rs"],
+      "consumes": [],
+      "status": "live"
+    },
+    {
+      "id": "mithril-certificate-verifier",
+      "name": "Mithril certificate-chain verifier",
+      "desc": "Verifies a Mithril certificate chain anchored at the network genesis key: genesis Ed25519 root, STM stake-threshold multi-signatures, AVK binding across epochs and byte-exact content hashing, plus the cardano-database ancillary manifest. Behind the mithril feature so the default and WebAssembly builds stay lean.",
+      "kind": "engine",
+      "paths": ["src/mithril.rs", "src/ancillary.rs"],
+      "consumes": [],
+      "status": "live"
+    },
+    {
+      "id": "certified-utxo-read",
+      "name": "Certified transaction inclusion and UTxO read",
+      "desc": "Proves a transaction's inclusion in the Mithril CardanoTransactions set by recomputing the MMR and map proofs, then decodes the output it names (address, lovelace, datum). Inclusion proves an output was created as of a certified height; it never claims the output is still unspent.",
+      "kind": "engine",
+      "paths": ["src/inclusion.rs", "src/utxo.rs"],
+      "consumes": ["mithril-certificate-verifier"],
+      "status": "live"
+    },
+    {
+      "id": "windowed-unspent",
+      "name": "Windowed-unspent follower",
+      "desc": "Tier 1 of the trust ladder: from a certified anchor to a verified tip, re-verifies every block header and binds every block body, and reports whether any input spent a watched outpoint inside that gap-free window. An unverifiable stretch is reported as stalled, never as unspent. Also carries the self-verified UTxO-set engine and its per-block effects for the reserved Tier 2.",
+      "kind": "engine",
+      "paths": ["src/follow.rs", "src/window.rs", "src/setfollow.rs", "src/utxoset.rs", "src/effects.rs"],
+      "consumes": ["praos-header-verifier", "certified-utxo-read", "mithril-certificate-verifier"],
+      "status": "live"
+    },
+    {
+      "id": "sextant-abi",
+      "name": "Sextant C ABI and WebAssembly surface",
+      "desc": "The stable cbindgen-generated C header over a cdylib or staticlib, every export inside a panic guard, plus the wasm32 build of the default graph for in-browser and on-device verification. This is how a non-Rust consumer (a keeper, a wallet, a page) calls the verifiers.",
+      "kind": "toolkit",
+      "paths": ["src/ffi.rs", "include/sextant.h", "cbindgen.toml"],
+      "consumes": ["praos-header-verifier", "mithril-certificate-verifier", "certified-utxo-read", "windowed-unspent"],
+      "status": "live"
+    },
+    {
+      "id": "sextant-watchd",
+      "name": "Windowed-unspent watch daemon",
+      "desc": "An HTTP service: POST an outpoint, and it follows the chain from the creating block to the live tip over a node-to-node relay, re-verifies every block through the windowed follower, re-anchors to fresh Mithril certificates, and serves no_spend_observed, spend_observed or stalled as JSON. Wired for preprod only today, and it locates creating transactions through Koios.",
+      "kind": "gateway",
+      "paths": ["tools/sentry/src"],
+      "consumes": ["windowed-unspent", "certified-utxo-read", "mithril-certificate-verifier"],
+      "status": "preprod"
+    }
+  ]
+}
