@@ -176,6 +176,19 @@ pub fn proposal_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
     }
 }
 
+/// Does a watched key appear as a verification-key witness -- witness-set key 0
+/// (vkey witnesses) or key 2 (bootstrap witnesses), each a set of
+/// `[vkey (32 bytes), signature, ...]`. The 28-byte key hash is BLAKE2b-224 of the
+/// 32-byte vkey: the one watched-key surface that must hash rather than read a
+/// credential in clear (Option A, `VarBlake2b::new(28)`). STUB (RED): a definite
+/// wrong answer; the real walk and its hash are held until the native RED.
+pub fn witness_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +196,14 @@ mod tests {
     const PAY: [u8; 28] = [0xA1; 28];
     const STK: [u8; 28] = [0xA2; 28];
     const NAT: [u8; 28] = [0xA3; 28];
+    const VK: [u8; 32] = [0xB1; 32];
+    const SIG: [u8; 64] = [0xB2; 64];
+    const OTHER: [u8; 28] = [0xC9; 28];
+    // BLAKE2b-224 of VK, precomputed: the witness surface hashes the 32-byte vkey.
+    const VK_HASH: [u8; 28] = [
+        0x7c, 0x06, 0x4e, 0xf9, 0x8a, 0xbe, 0xb5, 0xc3, 0xca, 0x85, 0xfa, 0xd6, 0x25, 0x61,
+        0x27, 0xb2, 0xc9, 0xdd, 0xae, 0x79, 0xe2, 0x32, 0xe4, 0xf2, 0x7c, 0x45, 0x5f, 0x41,
+    ];
 
     fn with_header(header: u8, body: &[&[u8]]) -> Vec<u8> {
         let mut a = vec![header];
@@ -410,5 +431,38 @@ mod tests {
     fn malformed_proposal_is_incomplete() {
         // {20: 5} -- proposals not a set/array.
         assert!(!proposal_use(&[0xa1, 0x14, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    // --- witness surface (vkey / bootstrap, BLAKE2b-224): RED snapshot; production walk + hash held ---
+
+    /// `{slot: [[vkey(32), sig(64)]]}` = a1 <slot> 81 82 58 20 <vkey> 58 40 <sig>.
+    fn witness_map(slot: u8) -> Vec<u8> {
+        let mut w = vec![0xa1, slot, 0x81, 0x82, 0x58, 0x20];
+        w.extend_from_slice(&VK);
+        w.extend_from_slice(&[0x58, 0x40]);
+        w.extend_from_slice(&SIG);
+        w
+    }
+
+    #[test]
+    fn watched_vkey_witness_is_found() {
+        assert!(witness_use(&witness_map(0x00), &watched_set(&[VK_HASH])).found);
+    }
+
+    #[test]
+    fn unwatched_vkey_witness_is_not_found_but_complete() {
+        let s = witness_use(&witness_map(0x00), &watched_set(&[OTHER]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn watched_bootstrap_witness_is_found() {
+        assert!(witness_use(&witness_map(0x02), &watched_set(&[VK_HASH])).found);
+    }
+
+    #[test]
+    fn malformed_witness_is_incomplete() {
+        // {0: 5} -- vkey witnesses not an array.
+        assert!(!witness_use(&[0xa1, 0x00, 0x05], &watched_set(&[VK_HASH])).complete);
     }
 }
