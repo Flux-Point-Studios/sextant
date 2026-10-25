@@ -14,6 +14,11 @@
 //! build on these; this slice is the credential parser alone, so the no_std and
 //! test harness is proven before the minicbor surface walk lands.
 
+use alloc::collections::BTreeSet;
+use minicbor::Decoder;
+
+use crate::utxo::{input_set_len, read_bytes, seq_has_next};
+
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
 /// address carries no payment credential. Addresses whose header nibble is
 /// 0..=7 carry one at bytes `[1..29]`; a reward address (nibble 14/15), a Byron
@@ -56,8 +61,6 @@ pub fn reward_credential(reward_account: &[u8]) -> Option<[u8; 28]> {
     }
 }
 
-use alloc::collections::BTreeSet;
-
 /// The result of scanning a transaction surface for a watched key: whether a
 /// watched credential was found, and whether coverage was provably complete. An
 /// incomplete scan — a body shape the walker could not fully decode — must never
@@ -73,16 +76,60 @@ pub struct Scan {
 
 /// Does a watched key appear as a required signer — body key 14, a
 /// `set<addr_keyhash>` (tag-258 or a bare array) of 28-byte key hashes carried in
-/// clear, so no hashing is needed. A body that does not fully decode yields
-/// `complete = false`.
-///
-/// STUB (RED): returns a definite wrong answer so the behavioural RED is genuine
-/// before the real walk lands; replaced in the GREEN increment.
-pub fn required_signer_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// clear, so no hashing is needed. Reuses the crate's own body-map and set
+/// cursor helpers. Any field that does not fully decode — a non-map body, a
+/// key-14 value that is not a set, or a signer that is not a 28-byte hash —
+/// yields `complete = false`, never a clean `found = false`.
+pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 14 {
+            let set_len = match input_set_len(&mut d) {
+                Ok(set_len) => set_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, set_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                let bytes = match read_bytes(&mut d) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return Scan { found, complete: false },
+                };
+                match <[u8; 28]>::try_from(bytes.as_slice()) {
+                    Ok(key_hash) => {
+                        if watched.contains(&key_hash) {
+                            found = true;
+                        }
+                    }
+                    Err(_) => return Scan { found, complete: false },
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete: true }
 }
 
 #[cfg(test)]

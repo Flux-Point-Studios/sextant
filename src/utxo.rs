@@ -305,7 +305,7 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
 /// consumes the closing `Break` when the sequence ends. Cardano/Conway encodes body maps, input
 /// sets, and output lists in EITHER length form (a real preprod block encodes outputs indefinitely),
 /// so every tx-body navigator must accept both rather than rejecting the indefinite form.
-fn seq_has_next(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, UtxoError> {
+pub(crate) fn seq_has_next(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, UtxoError> {
     match len {
         Some(n) => Ok(i < n),
         None => {
@@ -341,7 +341,7 @@ pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> 
 
 /// Read the header of a `set<transaction_input>` (bare array or tag-258 wrapped), returning its
 /// definite length or `None` for the indefinite form.
-fn input_set_len(d: &mut Decoder<'_>) -> Result<Option<u64>, UtxoError> {
+pub(crate) fn input_set_len(d: &mut Decoder<'_>) -> Result<Option<u64>, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
         let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
         if tag.as_u64() != 258 {
@@ -590,7 +590,7 @@ fn decode_datum_option(d: &mut Decoder<'_>) -> Result<Datum, UtxoError> {
 }
 
 /// Read a definite byte string.
-fn read_bytes(d: &mut Decoder<'_>) -> Result<Vec<u8>, UtxoError> {
+pub(crate) fn read_bytes(d: &mut Decoder<'_>) -> Result<Vec<u8>, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? != Type::Bytes {
         return Err(UtxoError::MalformedTx);
     }
