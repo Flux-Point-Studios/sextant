@@ -497,39 +497,277 @@ pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan { found, complete: true }
 }
 
-/// Does a watched key appear in a certificate -- body key 4, a set of certs each
-/// deep-walked for 28-byte credentials (stake / DRep / committee credentials, and
-/// pool owners and operators). An unknown cert kind, or a known kind of the wrong
-/// arity, leaves coverage incomplete rather than reading as absence. STUB (RED): a
-/// definite wrong answer; the real deep walk is held until its native RED.
-pub fn certificate_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// Node budget and recursion depth for the deep walk. Real certificates, native
+/// scripts and parameter updates are far smaller; exceeding either leaves coverage
+/// unprovable, so the scan reports incomplete rather than reading absence.
+const WALK_BUDGET: u32 = 100_000;
+const WALK_DEPTH: u32 = 64;
+
+/// Element count the Conway CDDL fixes for each modelled certificate kind. An
+/// unknown kind, or a known kind of a different arity, marks the scan incomplete;
+/// a future cert variant cannot read as absence. Mirrors the reference table.
+fn certificate_arity(kind: u64) -> Option<u64> {
+    match kind {
+        0 | 1 => Some(2),
+        2 | 4 | 7 | 8 | 9 | 14 | 15 | 17 | 18 => Some(3),
+        3 => Some(10),
+        10 | 11 | 12 | 16 => Some(4),
+        13 => Some(5),
+        _ => None,
     }
+}
+
+/// Deep-walks one CBOR item, reporting (found, complete). `found` is true when any
+/// 28-byte byte string is a watched credential or any 29-byte one a watched reward
+/// account (bytes [1..29]). `complete` is false when the node budget or the depth
+/// limit was reached before the subtree was fully walked. Every coin/slot/epoch
+/// field in these surfaces is a uint or a nested container, so a bare 28/29-byte
+/// string is always a credential and this leaf test has no value-field false
+/// positives. Mirrors the reference `_collect_hashes`; consumes exactly one item;
+/// `Err` only on a malformed stream.
+fn collect_watched(
+    d: &mut Decoder<'_>,
+    watched: &BTreeSet<[u8; 28]>,
+    budget: &mut u32,
+    depth: u32,
+) -> Result<(bool, bool), ()> {
+    if depth == 0 || *budget == 0 {
+        d.skip().map_err(|_| ())?;
+        return Ok((false, false));
+    }
+    *budget -= 1;
+    match d.datatype().map_err(|_| ())? {
+        Type::Bytes => {
+            let bytes = read_bytes(d).map_err(|_| ())?;
+            let hit = match bytes.len() {
+                28 => <[u8; 28]>::try_from(bytes.as_slice())
+                    .map(|h| watched.contains(&h))
+                    .unwrap_or(false),
+                29 => reward_credential(&bytes).is_some_and(|c| watched.contains(&c)),
+                _ => false,
+            };
+            Ok((hit, true))
+        }
+        Type::Array | Type::ArrayIndef => {
+            let len = d.array().map_err(|_| ())?;
+            let mut found = false;
+            let mut complete = true;
+            let mut i = 0u64;
+            loop {
+                match seq_has_next(d, len, i) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Err(()),
+                }
+                let (f, c) = collect_watched(d, watched, budget, depth - 1)?;
+                found |= f;
+                complete &= c;
+                i += 1;
+            }
+            Ok((found, complete))
+        }
+        Type::Map | Type::MapIndef => {
+            let len = d.map().map_err(|_| ())?;
+            let mut found = false;
+            let mut complete = true;
+            let mut i = 0u64;
+            loop {
+                match seq_has_next(d, len, i) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Err(()),
+                }
+                let (fk, ck) = collect_watched(d, watched, budget, depth - 1)?;
+                let (fv, cv) = collect_watched(d, watched, budget, depth - 1)?;
+                found |= fk || fv;
+                complete &= ck && cv;
+                i += 1;
+            }
+            Ok((found, complete))
+        }
+        Type::Tag => {
+            d.tag().map_err(|_| ())?;
+            collect_watched(d, watched, budget, depth - 1)
+        }
+        _ => {
+            d.skip().map_err(|_| ())?;
+            Ok((false, true))
+        }
+    }
+}
+
+/// Does a watched key appear in a certificate -- body key 4, a set of certs. Each
+/// cert `[kind, ...]` has its kind/arity checked (an unknown kind or a wrong arity
+/// leaves coverage incomplete) and its elements deep-walked for 28-byte
+/// credentials and 29-byte reward accounts (stake / DRep / committee credentials,
+/// pool owners and operators).
+pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut complete = true;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 4 {
+            let set_len = match input_set_len(&mut d) {
+                Ok(set_len) => set_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut budget = WALK_BUDGET;
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, set_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                let cert_len = match d.array() {
+                    Ok(cert_len) => cert_len,
+                    Err(_) => return Scan { found, complete: false },
+                };
+                let mut kind: Option<u64> = None;
+                let mut k = 0u64;
+                loop {
+                    match seq_has_next(&mut d, cert_len, k) {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(_) => return Scan { found, complete: false },
+                    }
+                    if k == 0 && matches!(d.datatype(), Ok(Type::U8 | Type::U16 | Type::U32 | Type::U64)) {
+                        kind = match d.u64() {
+                            Ok(kind) => Some(kind),
+                            Err(_) => return Scan { found, complete: false },
+                        };
+                    } else {
+                        match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+                            Ok((f, c)) => {
+                                found |= f;
+                                complete &= c;
+                            }
+                            Err(_) => return Scan { found, complete: false },
+                        }
+                    }
+                    k += 1;
+                }
+                match kind.map(certificate_arity) {
+                    Some(Some(arity)) => {
+                        if cert_len != Some(arity) {
+                            complete = false;
+                        }
+                    }
+                    _ => complete = false,
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
+    }
+    Scan { found, complete }
 }
 
 /// Does a watched key appear in a native script of the witness set -- witness-set
 /// key 1, a set of native scripts whose `sig` clauses carry 28-byte key hashes in
-/// clear (deep-walked). Coverage is incomplete only when the walk budget is
-/// exhausted, matching the reference. STUB (RED): a definite wrong answer; the real
-/// deep walk is held until its native RED.
-pub fn native_script_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// clear. Each script is deep-walked; the only incompleteness is budget exhaustion.
+pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(witnesses);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut complete = true;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 1 {
+            let set_len = match input_set_len(&mut d) {
+                Ok(set_len) => set_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut budget = WALK_BUDGET;
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, set_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+                    Ok((f, c)) => {
+                        found |= f;
+                        complete &= c;
+                    }
+                    Err(_) => return Scan { found, complete: false },
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete }
 }
 
 /// Does a watched key appear in the protocol-parameter update -- body key 6, whose
-/// genesis-delegate key hashes are 28-byte leaves (deep-walked). Coverage is
-/// incomplete only when the walk budget is exhausted, matching the reference. STUB
-/// (RED): a definite wrong answer; the real deep walk is held until its native RED.
-pub fn update_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// genesis-delegate key hashes are 28-byte leaves. The update value is deep-walked;
+/// the only incompleteness is budget exhaustion.
+pub fn update_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut complete = true;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 6 {
+            let mut budget = WALK_BUDGET;
+            match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+                Ok((f, c)) => {
+                    found |= f;
+                    complete &= c;
+                }
+                Err(_) => return Scan { found, complete: false },
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete }
 }
 
 #[cfg(test)]
