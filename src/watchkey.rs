@@ -1,18 +1,4 @@
-//! Watched-key first use (U1): does a watched 28-byte key hash appear in a
-//! transaction, and is that answer provably complete?
-//!
-//! This is the Rust counterpart of the Python reference extractor
-//! (`aegis` r57-live `scripts/r57_first_use.py`) and is checked against the same
-//! hand-labelled parity vectors. It reuses the crate's existing body navigation
-//! (`crate::utxo`) and hand-rolled minicbor decoding; it adds no crypto and no
-//! consensus or follower machinery.
-//!
-//! The one primitive the crate lacked is here: splitting a Shelley address or a
-//! reward account into its 28-byte payment and stake credentials. That is pure
-//! byte slicing — no hashing, no new dependency — and stays `no_std` + `alloc`
-//! clean. The transaction-surface walk and the fail-closed watched-key verdict
-//! build on these; this slice is the credential parser alone, so the no_std and
-//! test harness is proven before the minicbor surface walk lands.
+//! Watched transaction credentials and fail-closed scan coverage.
 
 use alloc::collections::BTreeSet;
 use minicbor::Decoder;
@@ -76,6 +62,31 @@ pub struct Scan {
     pub complete: bool,
 }
 
+fn scan_map(
+    data: &[u8],
+    mut field: impl FnMut(u64, &mut Decoder<'_>, &mut Scan) -> Result<(), ()>,
+) -> Scan {
+    let mut d = Decoder::new(data);
+    let mut scan = Scan {
+        found: false,
+        complete: true,
+    };
+    let result = (|| {
+        let len = d.map().map_err(|_| ())?;
+        let mut i = 0u64;
+        while seq_has_next(&mut d, len, i).map_err(|_| ())? {
+            let key = d.u64().map_err(|_| ())?;
+            field(key, &mut d, &mut scan)?;
+            i += 1;
+        }
+        Ok::<(), ()>(())
+    })();
+    if result.is_err() {
+        scan.complete = false;
+    }
+    scan
+}
+
 /// Does a watched key appear as a required signer — body key 14, a
 /// `set<addr_keyhash>` (tag-258 or a bare array) of 28-byte key hashes carried in
 /// clear, so no hashing is needed. Reuses the crate's own body-map and set
@@ -83,55 +94,38 @@ pub struct Scan {
 /// key-14 value that is not a set, or a signer that is not a 28-byte hash —
 /// yields `complete = false`, never a clean `found = false`.
 pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 14 {
-            let set_len = match input_set_len(&mut d) {
+            let set_len = match input_set_len(d) {
                 Ok(set_len) => set_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, set_len, j) {
+                match seq_has_next(d, set_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
-                let bytes = match read_bytes(&mut d) {
+                let bytes = match read_bytes(d) {
                     Ok(bytes) => bytes,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 };
                 match <[u8; 28]>::try_from(bytes.as_slice()) {
                     Ok(key_hash) => {
                         if watched.contains(&key_hash) {
-                            found = true;
+                            scan.found = true;
                         }
                     }
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Whether a raw address's payment OR stake credential is watched, via the
@@ -181,243 +175,175 @@ fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> 
 /// for the output's payment or stake credential. Body-1 is a list of
 /// transaction_outputs; the body-16 collateral return is a single one.
 pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 1 {
             let out_len = match d.array() {
                 Ok(out_len) => out_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, out_len, j) {
+                match seq_has_next(d, out_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
-                match decode_single_output(&mut d) {
+                match decode_single_output(d) {
                     Ok((address, _, _)) => {
                         if address_watched(&address, watched) {
-                            found = true;
+                            scan.found = true;
                         }
                     }
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 j += 1;
             }
         } else if key == 16 {
-            match decode_single_output(&mut d) {
+            match decode_single_output(d) {
                 Ok((address, _, _)) => {
                     if address_watched(&address, watched) {
-                        found = true;
+                        scan.found = true;
                     }
                 }
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Does a watched key appear as a withdrawal reward account -- body key 5, a map
 /// from a reward_account to coin; the 28-byte credential is bytes [1..29] of each
 /// account key (the `reward_credential` parser above).
 pub fn withdrawal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 5 {
             let wd_len = match d.map() {
                 Ok(wd_len) => wd_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, wd_len, j) {
+                match seq_has_next(d, wd_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
-                match reward_account_watched(&mut d, watched) {
-                    Ok(true) => found = true,
+                match reward_account_watched(d, watched) {
+                    Ok(true) => scan.found = true,
                     Ok(false) => {}
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 if d.skip().is_err() {
-                    return Scan { found, complete: false };
+                    return Err(());
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Does a watched key appear as a voter -- body key 19, a map whose keys are
 /// `[voter_type, 28-byte key hash]`. The key hash is element 1 of each voter.
 pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 19 {
             let v_len = match d.map() {
                 Ok(v_len) => v_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, v_len, j) {
+                match seq_has_next(d, v_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 let voter_len = match d.array() {
                     Ok(voter_len) => voter_len,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 };
                 let mut k = 0u64;
                 loop {
-                    match seq_has_next(&mut d, voter_len, k) {
+                    match seq_has_next(d, voter_len, k) {
                         Ok(true) => {}
                         Ok(false) => break,
-                        Err(_) => return Scan { found, complete: false },
+                        Err(_) => return Err(()),
                     }
                     if k == 1 {
-                        match credential_watched(&mut d, watched) {
-                            Ok(true) => found = true,
+                        match credential_watched(d, watched) {
+                            Ok(true) => scan.found = true,
                             Ok(false) => {}
-                            Err(_) => return Scan { found, complete: false },
+                            Err(_) => return Err(()),
                         }
                     } else if d.skip().is_err() {
-                        return Scan { found, complete: false };
+                        return Err(());
                     }
                     k += 1;
                 }
                 if d.skip().is_err() {
-                    return Scan { found, complete: false };
+                    return Err(());
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Does a watched key appear as a proposal's deposit-return reward account -- body
 /// key 20, a set of `[deposit, reward_account, gov_action, anchor]`; the 28-byte
 /// credential is bytes [1..29] of element 1.
 pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 20 {
-            let p_len = match input_set_len(&mut d) {
+            let p_len = match input_set_len(d) {
                 Ok(p_len) => p_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, p_len, j) {
+                match seq_has_next(d, p_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 let prop_len = match d.array() {
                     Ok(prop_len) => prop_len,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 };
                 let mut k = 0u64;
                 loop {
-                    match seq_has_next(&mut d, prop_len, k) {
+                    match seq_has_next(d, prop_len, k) {
                         Ok(true) => {}
                         Ok(false) => break,
-                        Err(_) => return Scan { found, complete: false },
+                        Err(_) => return Err(()),
                     }
                     if k == 1 {
-                        match reward_account_watched(&mut d, watched) {
-                            Ok(true) => found = true,
+                        match reward_account_watched(d, watched) {
+                            Ok(true) => scan.found = true,
                             Ok(false) => {}
-                            Err(_) => return Scan { found, complete: false },
+                            Err(_) => return Err(()),
                         }
                     } else if d.skip().is_err() {
-                        return Scan { found, complete: false };
+                        return Err(());
                     }
                     k += 1;
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and
@@ -453,48 +379,31 @@ fn witness_vkey_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Re
 /// 32-byte vkey (Option A): the one watched-key surface that hashes rather than
 /// reading a credential in clear.
 pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(witnesses);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(witnesses, |key, d, scan| {
         if key == 0 || key == 2 {
-            let set_len = match input_set_len(&mut d) {
+            let set_len = match input_set_len(d) {
                 Ok(set_len) => set_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, set_len, j) {
+                match seq_has_next(d, set_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
-                match witness_vkey_watched(&mut d, watched) {
-                    Ok(true) => found = true,
+                match witness_vkey_watched(d, watched) {
+                    Ok(true) => scan.found = true,
                     Ok(false) => {}
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete: true }
+        Ok(())
+    })
 }
 
 /// Node budget and recursion depth for the deep walk. Real certificates, native
@@ -602,61 +511,49 @@ fn collect_watched(
 /// credentials and 29-byte reward accounts (stake / DRep / committee credentials,
 /// pool owners and operators).
 pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut complete = true;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 4 {
-            let set_len = match input_set_len(&mut d) {
+            let set_len = match input_set_len(d) {
                 Ok(set_len) => set_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut budget = WALK_BUDGET;
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, set_len, j) {
+                match seq_has_next(d, set_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 let cert_len = match d.array() {
                     Ok(cert_len) => cert_len,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 };
                 let mut kind: Option<u64> = None;
                 let mut k = 0u64;
                 loop {
-                    match seq_has_next(&mut d, cert_len, k) {
+                    match seq_has_next(d, cert_len, k) {
                         Ok(true) => {}
                         Ok(false) => break,
-                        Err(_) => return Scan { found, complete: false },
+                        Err(_) => return Err(()),
                     }
-                    if k == 0 && matches!(d.datatype(), Ok(Type::U8 | Type::U16 | Type::U32 | Type::U64)) {
+                    if k == 0
+                        && matches!(
+                            d.datatype(),
+                            Ok(Type::U8 | Type::U16 | Type::U32 | Type::U64)
+                        )
+                    {
                         kind = match d.u64() {
                             Ok(kind) => Some(kind),
-                            Err(_) => return Scan { found, complete: false },
+                            Err(_) => return Err(()),
                         };
                     } else {
-                        match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+                        match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
                             Ok((f, c)) => {
-                                found |= f;
-                                complete &= c;
+                                scan.found |= f;
+                                scan.complete &= c;
                             }
-                            Err(_) => return Scan { found, complete: false },
+                            Err(_) => return Err(()),
                         }
                     }
                     k += 1;
@@ -664,110 +561,73 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                 match kind.map(certificate_arity) {
                     Some(Some(arity)) => {
                         if cert_len != Some(arity) {
-                            complete = false;
+                            scan.complete = false;
                         }
                     }
-                    _ => complete = false,
+                    _ => scan.complete = false,
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete }
+        Ok(())
+    })
 }
 
 /// Does a watched key appear in a native script of the witness set -- witness-set
 /// key 1, a set of native scripts whose `sig` clauses carry 28-byte key hashes in
 /// clear. Each script is deep-walked; the only incompleteness is budget exhaustion.
 pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(witnesses);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut complete = true;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(witnesses, |key, d, scan| {
         if key == 1 {
-            let set_len = match input_set_len(&mut d) {
+            let set_len = match input_set_len(d) {
                 Ok(set_len) => set_len,
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             };
             let mut budget = WALK_BUDGET;
             let mut j = 0u64;
             loop {
-                match seq_has_next(&mut d, set_len, j) {
+                match seq_has_next(d, set_len, j) {
                     Ok(true) => {}
                     Ok(false) => break,
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
-                match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+                match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
                     Ok((f, c)) => {
-                        found |= f;
-                        complete &= c;
+                        scan.found |= f;
+                        scan.complete &= c;
                     }
-                    Err(_) => return Scan { found, complete: false },
+                    Err(_) => return Err(()),
                 }
                 j += 1;
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete }
+        Ok(())
+    })
 }
 
 /// Does a watched key appear in the protocol-parameter update -- body key 6, whose
 /// genesis-delegate key hashes are 28-byte leaves. The update value is deep-walked;
 /// the only incompleteness is budget exhaustion.
 pub fn update_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    let mut d = Decoder::new(body);
-    let len = match d.map() {
-        Ok(len) => len,
-        Err(_) => return Scan { found: false, complete: false },
-    };
-    let mut found = false;
-    let mut complete = true;
-    let mut i = 0u64;
-    loop {
-        match seq_has_next(&mut d, len, i) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Scan { found, complete: false },
-        }
-        let key = match d.u64() {
-            Ok(key) => key,
-            Err(_) => return Scan { found, complete: false },
-        };
+    scan_map(body, |key, d, scan| {
         if key == 6 {
             let mut budget = WALK_BUDGET;
-            match collect_watched(&mut d, watched, &mut budget, WALK_DEPTH) {
+            match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
                 Ok((f, c)) => {
-                    found |= f;
-                    complete &= c;
+                    scan.found |= f;
+                    scan.complete &= c;
                 }
-                Err(_) => return Scan { found, complete: false },
+                Err(_) => return Err(()),
             }
         } else if d.skip().is_err() {
-            return Scan { found, complete: false };
+            return Err(());
         }
-        i += 1;
-    }
-    Scan { found, complete }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -782,8 +642,8 @@ mod tests {
     const OTHER: [u8; 28] = [0xC9; 28];
     // BLAKE2b-224 of VK, precomputed: the witness surface hashes the 32-byte vkey.
     const VK_HASH: [u8; 28] = [
-        0x7c, 0x06, 0x4e, 0xf9, 0x8a, 0xbe, 0xb5, 0xc3, 0xca, 0x85, 0xfa, 0xd6, 0x25, 0x61,
-        0x27, 0xb2, 0xc9, 0xdd, 0xae, 0x79, 0xe2, 0x32, 0xe4, 0xf2, 0x7c, 0x45, 0x5f, 0x41,
+        0x7c, 0x06, 0x4e, 0xf9, 0x8a, 0xbe, 0xb5, 0xc3, 0xca, 0x85, 0xfa, 0xd6, 0x25, 0x61, 0x27,
+        0xb2, 0xc9, 0xdd, 0xae, 0x79, 0xe2, 0x32, 0xe4, 0xf2, 0x7c, 0x45, 0x5f, 0x41,
     ];
 
     fn with_header(header: u8, body: &[&[u8]]) -> Vec<u8> {
@@ -917,7 +777,10 @@ mod tests {
 
     #[test]
     fn unwatched_output_is_not_found_but_complete() {
-        let s = output_use(&body_one_output(&legacy_output(&enterprise_addr(&PAY))), &watched_set(&[NAT]));
+        let s = output_use(
+            &body_one_output(&legacy_output(&enterprise_addr(&PAY))),
+            &watched_set(&[NAT]),
+        );
         assert!(!s.found && s.complete);
     }
 
@@ -969,7 +832,10 @@ mod tests {
 
     #[test]
     fn unwatched_withdrawal_is_not_found_but_complete() {
-        let s = withdrawal_use(&body_one_withdrawal(&reward_account(&STK)), &watched_set(&[PAY]));
+        let s = withdrawal_use(
+            &body_one_withdrawal(&reward_account(&STK)),
+            &watched_set(&[PAY]),
+        );
         assert!(!s.found && s.complete);
     }
 
@@ -1004,7 +870,10 @@ mod tests {
 
     #[test]
     fn unwatched_proposal_is_not_found_but_complete() {
-        let s = proposal_use(&body_one_proposal(&reward_account(&STK)), &watched_set(&[PAY]));
+        let s = proposal_use(
+            &body_one_proposal(&reward_account(&STK)),
+            &watched_set(&[PAY]),
+        );
         assert!(!s.found && s.complete);
     }
 
@@ -1071,7 +940,13 @@ mod tests {
     #[test]
     fn unknown_certificate_kind_is_incomplete() {
         // {4: [[99, 5]]} -- a cert of an unmodelled kind; coverage cannot be proven complete.
-        assert!(!certificate_use(&[0xa1, 0x04, 0x81, 0x82, 0x18, 0x63, 0x05], &watched_set(&[STK])).complete);
+        assert!(
+            !certificate_use(
+                &[0xa1, 0x04, 0x81, 0x82, 0x18, 0x63, 0x05],
+                &watched_set(&[STK])
+            )
+            .complete
+        );
     }
 
     #[test]

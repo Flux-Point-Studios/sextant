@@ -305,7 +305,11 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
 /// consumes the closing `Break` when the sequence ends. Cardano/Conway encodes body maps, input
 /// sets, and output lists in EITHER length form (a real preprod block encodes outputs indefinitely),
 /// so every tx-body navigator must accept both rather than rejecting the indefinite form.
-pub(crate) fn seq_has_next(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, UtxoError> {
+pub(crate) fn seq_has_next(
+    d: &mut Decoder<'_>,
+    len: Option<u64>,
+    i: u64,
+) -> Result<bool, UtxoError> {
     match len {
         Some(n) => Ok(i < n),
         None => {
