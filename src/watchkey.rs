@@ -144,12 +144,45 @@ pub fn output_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
     }
 }
 
+/// Does a watched key appear as a withdrawal reward account -- body key 5, a map
+/// from a 29-byte reward_account to coin. The 28-byte credential is bytes [1..29]
+/// of each account key (the `reward_credential` parser above). STUB (RED): a
+/// definite wrong answer; the real map walk is held until its native RED.
+pub fn withdrawal_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
+/// Does a watched key appear as a voter -- body key 19, a map whose keys are
+/// `[voter_type, 28-byte key hash]`. STUB (RED): a definite wrong answer; the real
+/// map walk is held until its native RED.
+pub fn voting_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
+/// Does a watched key appear as a proposal's deposit-return reward account -- body
+/// key 20, a set of `[deposit, reward_account, gov_action, anchor]`. The 28-byte
+/// credential is bytes [1..29] of element 1. STUB (RED): a definite wrong answer;
+/// the real set walk is held until its native RED.
+pub fn proposal_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const PAY: [u8; 28] = [0xA1; 28];
     const STK: [u8; 28] = [0xA2; 28];
+    const NAT: [u8; 28] = [0xA3; 28];
 
     fn with_header(header: u8, body: &[&[u8]]) -> Vec<u8> {
         let mut a = vec![header];
@@ -291,5 +324,91 @@ mod tests {
         // {1: [5]} — an output that is neither an array nor a map.
         let s = output_use(&[0xa1, 0x01, 0x81, 0x05], &watched_set(&[PAY]));
         assert!(!s.complete);
+    }
+
+    // --- withdrawal / voting / proposal surfaces: RED snapshots; production walks held ---
+
+    /// Reward account byte string: 58 1d (bytes len 29) e0 (stake-key header) + 28-byte cred.
+    fn reward_account(cred: &[u8; 28]) -> Vec<u8> {
+        let mut a = vec![0x58, 0x1d, 0xe0];
+        a.extend_from_slice(cred);
+        a
+    }
+
+    /// `{5: {<reward_account>: 0}}` = a1 05 a1 <account> 00.
+    fn body_one_withdrawal(account: &[u8]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x05, 0xa1];
+        b.extend_from_slice(account);
+        b.push(0x00);
+        b
+    }
+
+    /// `{19: {[2, <28-byte key hash>]: {}}}` = a1 13 a1 82 02 58 1c <hash> a0.
+    fn body_one_voter(key_hash: &[u8; 28]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x13, 0xa1, 0x82, 0x02, 0x58, 0x1c];
+        b.extend_from_slice(key_hash);
+        b.push(0xa0);
+        b
+    }
+
+    /// `{20: [[0, <reward_account>, 0, null]]}` = a1 14 81 84 00 <account> 00 f6.
+    fn body_one_proposal(account: &[u8]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x14, 0x81, 0x84, 0x00];
+        b.extend_from_slice(account);
+        b.extend_from_slice(&[0x00, 0xf6]);
+        b
+    }
+
+    #[test]
+    fn watched_withdrawal_credential_is_found() {
+        let body = body_one_withdrawal(&reward_account(&STK));
+        assert!(withdrawal_use(&body, &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_withdrawal_is_not_found_but_complete() {
+        let s = withdrawal_use(&body_one_withdrawal(&reward_account(&STK)), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn malformed_withdrawal_is_incomplete() {
+        // {5: 5} -- withdrawals not a map.
+        assert!(!withdrawal_use(&[0xa1, 0x05, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    #[test]
+    fn watched_voter_credential_is_found() {
+        assert!(voting_use(&body_one_voter(&STK), &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_voter_is_not_found_but_complete() {
+        let s = voting_use(&body_one_voter(&STK), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn malformed_voter_is_incomplete() {
+        // {19: 5} -- voters not a map.
+        assert!(!voting_use(&[0xa1, 0x13, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    #[test]
+    fn watched_proposal_reward_account_is_found() {
+        let body = body_one_proposal(&reward_account(&STK));
+        assert!(proposal_use(&body, &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_proposal_is_not_found_but_complete() {
+        let s = proposal_use(&body_one_proposal(&reward_account(&STK)), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn malformed_proposal_is_incomplete() {
+        // {20: 5} -- proposals not a set/array.
+        assert!(!proposal_use(&[0xa1, 0x14, 0x05], &watched_set(&[STK])).complete);
     }
 }
