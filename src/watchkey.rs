@@ -132,6 +132,18 @@ pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan { found, complete: true }
 }
 
+/// Does a watched key appear in an output of body key 1 — an address payment or
+/// stake credential (via the credential parser above), or a native
+/// reference-script sig clause. STUB (RED): a definite wrong answer so the
+/// behavioural RED is genuine; the real body-1 walk is held until its native RED,
+/// per the integration owner's test-only-snapshot direction.
+pub fn output_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +233,63 @@ mod tests {
     fn malformed_body_is_incomplete_never_a_clean_no_use() {
         // Map header declares one entry, key 14 present, its value truncated away.
         let s = required_signer_use(&[0xa1, 0x0e], &watched_set(&[PAY]));
+        assert!(!s.complete);
+    }
+
+    // --- output surface (body key 1): RED snapshot; production walk held ---
+
+    /// `{1: [output]}` = a1 01 81 <output>.
+    fn body_one_output(output: &[u8]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x01, 0x81];
+        b.extend_from_slice(output);
+        b
+    }
+
+    /// Legacy output `[address, 1]` = 82 <address> 01.
+    fn legacy_output(address: &[u8]) -> Vec<u8> {
+        let mut o = vec![0x82];
+        o.extend_from_slice(address);
+        o.push(0x01);
+        o
+    }
+
+    /// Enterprise address byte string: 58 1d (bytes, len 29) 60 (header) + 28-byte cred.
+    fn enterprise_addr(cred: &[u8; 28]) -> Vec<u8> {
+        let mut a = vec![0x58, 0x1d, 0x60];
+        a.extend_from_slice(cred);
+        a
+    }
+
+    /// Base address byte string: 58 39 (bytes, len 57) 00 (header) + 28 payment + 28 stake.
+    fn base_addr(pay: &[u8; 28], stk: &[u8; 28]) -> Vec<u8> {
+        let mut a = vec![0x58, 0x39, 0x00];
+        a.extend_from_slice(pay);
+        a.extend_from_slice(stk);
+        a
+    }
+
+    #[test]
+    fn watched_output_payment_credential_is_found() {
+        let body = body_one_output(&legacy_output(&enterprise_addr(&PAY)));
+        assert!(output_use(&body, &watched_set(&[PAY])).found);
+    }
+
+    #[test]
+    fn watched_output_stake_credential_is_found() {
+        let body = body_one_output(&legacy_output(&base_addr(&PAY, &STK)));
+        assert!(output_use(&body, &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_output_is_not_found_but_complete() {
+        let s = output_use(&body_one_output(&legacy_output(&enterprise_addr(&PAY))), &watched_set(&[NAT]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn malformed_output_is_incomplete() {
+        // {1: [5]} — an output that is neither an array nor a map.
+        let s = output_use(&[0xa1, 0x01, 0x81, 0x05], &watched_set(&[PAY]));
         assert!(!s.complete);
     }
 }
