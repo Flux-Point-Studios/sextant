@@ -132,11 +132,12 @@ pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan { found, complete: true }
 }
 
-/// Does a watched key appear in an output of body key 1 — an address payment or
-/// stake credential (via the credential parser above), or a native
-/// reference-script sig clause. STUB (RED): a definite wrong answer so the
-/// behavioural RED is genuine; the real body-1 walk is held until its native RED,
-/// per the integration owner's test-only-snapshot direction.
+/// Does a watched key appear in a transaction output -- a body-1 output or the
+/// body-16 collateral return, which share the transaction_output shape and the
+/// same walk -- as an address payment or stake credential (via the credential
+/// parser above), or a native reference-script sig clause. STUB (RED): a definite
+/// wrong answer so the behavioural RED is genuine; the real walk is held until its
+/// native RED, per the integration owner's test-only-snapshot direction.
 pub fn output_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan {
         found: false,
@@ -195,6 +196,29 @@ pub fn witness_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
 /// arity, leaves coverage incomplete rather than reading as absence. STUB (RED): a
 /// definite wrong answer; the real deep walk is held until its native RED.
 pub fn certificate_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
+/// Does a watched key appear in a native script of the witness set -- witness-set
+/// key 1, a set of native scripts whose `sig` clauses carry 28-byte key hashes in
+/// clear (deep-walked). Coverage is incomplete only when the walk budget is
+/// exhausted, matching the reference. STUB (RED): a definite wrong answer; the real
+/// deep walk is held until its native RED.
+pub fn native_script_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
+/// Does a watched key appear in the protocol-parameter update -- body key 6, whose
+/// genesis-delegate key hashes are 28-byte leaves (deep-walked). Coverage is
+/// incomplete only when the walk budget is exhausted, matching the reference. STUB
+/// (RED): a definite wrong answer; the real deep walk is held until its native RED.
+pub fn update_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan {
         found: false,
         complete: true,
@@ -509,5 +533,64 @@ mod tests {
     fn malformed_certificates_is_incomplete() {
         // {4: 5} -- certificates not a set/array.
         assert!(!certificate_use(&[0xa1, 0x04, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    // --- native script (witness key 1) / update (body key 6) / collateral return (body 16) ---
+
+    /// `{1: [[0, <28-byte cred>]]}` -- a native `sig` clause. = a1 01 81 82 00 58 1c <cred>.
+    fn witness_one_native_sig(cred: &[u8; 28]) -> Vec<u8> {
+        let mut w = vec![0xa1, 0x01, 0x81, 0x82, 0x00, 0x58, 0x1c];
+        w.extend_from_slice(cred);
+        w
+    }
+
+    /// `{6: [{<28-byte genesis hash>: {}}, 0]}` = a1 06 82 a1 58 1c <hash> a0 00.
+    fn body_one_update(genesis_hash: &[u8; 28]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x06, 0x82, 0xa1, 0x58, 0x1c];
+        b.extend_from_slice(genesis_hash);
+        b.extend_from_slice(&[0xa0, 0x00]);
+        b
+    }
+
+    /// `{16: [<enterprise address>, 0]}` -- a legacy collateral-return output.
+    /// = a1 10 82 58 1d 60 <cred> 00.
+    fn body_collateral_return(cred: &[u8; 28]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x10, 0x82, 0x58, 0x1d, 0x60];
+        b.extend_from_slice(cred);
+        b.push(0x00);
+        b
+    }
+
+    #[test]
+    fn watched_native_script_sig_is_found() {
+        assert!(native_script_use(&witness_one_native_sig(&STK), &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_native_script_is_not_found_but_complete() {
+        let s = native_script_use(&witness_one_native_sig(&STK), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn watched_update_genesis_hash_is_found() {
+        assert!(update_use(&body_one_update(&STK), &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_update_is_not_found_but_complete() {
+        let s = update_use(&body_one_update(&STK), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn watched_collateral_return_credential_is_found() {
+        assert!(output_use(&body_collateral_return(&STK), &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn malformed_collateral_return_is_incomplete() {
+        // {16: 5} -- collateral return neither an array nor a map.
+        assert!(!output_use(&[0xa1, 0x10, 0x05], &watched_set(&[STK])).complete);
     }
 }
