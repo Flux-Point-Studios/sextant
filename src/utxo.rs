@@ -496,7 +496,7 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
 /// 3?: script_ref}`) or a legacy array (`[address, value]` or
 /// `[address, value, datum_hash]`).
-fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
+pub(crate) fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
         Type::Map => decode_map_output(d),
         Type::Array => decode_legacy_output(d),

@@ -16,8 +16,9 @@
 
 use alloc::collections::BTreeSet;
 use minicbor::Decoder;
+use minicbor::data::Type;
 
-use crate::utxo::{input_set_len, read_bytes, seq_has_next};
+use crate::utxo::{decode_single_output, input_set_len, read_bytes, seq_has_next};
 
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
 /// address carries no payment credential. Addresses whose header nibble is
@@ -132,49 +133,282 @@ pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan { found, complete: true }
 }
 
-/// Does a watched key appear in a transaction output -- a body-1 output or the
-/// body-16 collateral return, which share the transaction_output shape and the
-/// same walk -- as an address payment or stake credential (via the credential
-/// parser above), or a native reference-script sig clause. STUB (RED): a definite
-/// wrong answer so the behavioural RED is genuine; the real walk is held until its
-/// native RED, per the integration owner's test-only-snapshot direction.
-pub fn output_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// Whether a raw address's payment OR stake credential is watched, via the
+/// credential parsers above (Byron and reward addresses yield neither).
+fn address_watched(address: &[u8], watched: &BTreeSet<[u8; 28]>) -> bool {
+    payment_credential(address).is_some_and(|c| watched.contains(&c))
+        || stake_credential(address).is_some_and(|c| watched.contains(&c))
+}
+
+/// Reads one CBOR item as a possible 28-byte credential and reports whether it is
+/// watched. A non-28-byte or non-bytes item is skipped and reported unwatched, not
+/// an error -- it is simply not a credential, which the reference treats the same
+/// way. `Err` is reserved for a malformed stream.
+fn credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    match d.datatype().map_err(|_| ())? {
+        Type::Bytes => {
+            let bytes = read_bytes(d).map_err(|_| ())?;
+            Ok(<[u8; 28]>::try_from(bytes.as_slice())
+                .map(|h| watched.contains(&h))
+                .unwrap_or(false))
+        }
+        _ => {
+            d.skip().map_err(|_| ())?;
+            Ok(false)
+        }
     }
+}
+
+/// Reads one CBOR item as a possible reward account and reports whether its 28-byte
+/// credential (bytes [1..29]) is watched. A non-bytes item is skipped and reported
+/// unwatched; `Err` is reserved for a malformed stream.
+fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    match d.datatype().map_err(|_| ())? {
+        Type::Bytes => {
+            let account = read_bytes(d).map_err(|_| ())?;
+            Ok(reward_credential(&account).is_some_and(|c| watched.contains(&c)))
+        }
+        _ => {
+            d.skip().map_err(|_| ())?;
+            Ok(false)
+        }
+    }
+}
+
+/// Does a watched key appear in a transaction output -- body key 1, a list of
+/// transaction_outputs, each decoded by the crate's own output parser for its
+/// payment or stake credential. The body-16 collateral return shares the
+/// transaction_output shape and this same `decode_single_output`; it folds in at
+/// its own native RED and is not walked here yet.
+pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 1 {
+            let out_len = match d.array() {
+                Ok(out_len) => out_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, out_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                match decode_single_output(&mut d) {
+                    Ok((address, _, _)) => {
+                        if address_watched(&address, watched) {
+                            found = true;
+                        }
+                    }
+                    Err(_) => return Scan { found, complete: false },
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
+    }
+    Scan { found, complete: true }
 }
 
 /// Does a watched key appear as a withdrawal reward account -- body key 5, a map
-/// from a 29-byte reward_account to coin. The 28-byte credential is bytes [1..29]
-/// of each account key (the `reward_credential` parser above). STUB (RED): a
-/// definite wrong answer; the real map walk is held until its native RED.
-pub fn withdrawal_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// from a reward_account to coin; the 28-byte credential is bytes [1..29] of each
+/// account key (the `reward_credential` parser above).
+pub fn withdrawal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 5 {
+            let wd_len = match d.map() {
+                Ok(wd_len) => wd_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, wd_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                match reward_account_watched(&mut d, watched) {
+                    Ok(true) => found = true,
+                    Ok(false) => {}
+                    Err(_) => return Scan { found, complete: false },
+                }
+                if d.skip().is_err() {
+                    return Scan { found, complete: false };
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete: true }
 }
 
 /// Does a watched key appear as a voter -- body key 19, a map whose keys are
-/// `[voter_type, 28-byte key hash]`. STUB (RED): a definite wrong answer; the real
-/// map walk is held until its native RED.
-pub fn voting_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// `[voter_type, 28-byte key hash]`. The key hash is element 1 of each voter.
+pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 19 {
+            let v_len = match d.map() {
+                Ok(v_len) => v_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, v_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                let voter_len = match d.array() {
+                    Ok(voter_len) => voter_len,
+                    Err(_) => return Scan { found, complete: false },
+                };
+                let mut k = 0u64;
+                loop {
+                    match seq_has_next(&mut d, voter_len, k) {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(_) => return Scan { found, complete: false },
+                    }
+                    if k == 1 {
+                        match credential_watched(&mut d, watched) {
+                            Ok(true) => found = true,
+                            Ok(false) => {}
+                            Err(_) => return Scan { found, complete: false },
+                        }
+                    } else if d.skip().is_err() {
+                        return Scan { found, complete: false };
+                    }
+                    k += 1;
+                }
+                if d.skip().is_err() {
+                    return Scan { found, complete: false };
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete: true }
 }
 
 /// Does a watched key appear as a proposal's deposit-return reward account -- body
-/// key 20, a set of `[deposit, reward_account, gov_action, anchor]`. The 28-byte
-/// credential is bytes [1..29] of element 1. STUB (RED): a definite wrong answer;
-/// the real set walk is held until its native RED.
-pub fn proposal_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// key 20, a set of `[deposit, reward_account, gov_action, anchor]`; the 28-byte
+/// credential is bytes [1..29] of element 1.
+pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(body);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 20 {
+            let p_len = match input_set_len(&mut d) {
+                Ok(p_len) => p_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, p_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                let prop_len = match d.array() {
+                    Ok(prop_len) => prop_len,
+                    Err(_) => return Scan { found, complete: false },
+                };
+                let mut k = 0u64;
+                loop {
+                    match seq_has_next(&mut d, prop_len, k) {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(_) => return Scan { found, complete: false },
+                    }
+                    if k == 1 {
+                        match reward_account_watched(&mut d, watched) {
+                            Ok(true) => found = true,
+                            Ok(false) => {}
+                            Err(_) => return Scan { found, complete: false },
+                        }
+                    } else if d.skip().is_err() {
+                        return Scan { found, complete: false };
+                    }
+                    k += 1;
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete: true }
 }
 
 /// Does a watched key appear as a verification-key witness -- witness-set key 0
