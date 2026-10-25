@@ -18,6 +18,7 @@ use alloc::collections::BTreeSet;
 use minicbor::Decoder;
 use minicbor::data::Type;
 
+use crate::hash::blake2b224;
 use crate::utxo::{decode_single_output, input_set_len, read_bytes, seq_has_next};
 
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
@@ -175,11 +176,10 @@ fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> 
     }
 }
 
-/// Does a watched key appear in a transaction output -- body key 1, a list of
-/// transaction_outputs, each decoded by the crate's own output parser for its
-/// payment or stake credential. The body-16 collateral return shares the
-/// transaction_output shape and this same `decode_single_output`; it folds in at
-/// its own native RED and is not walked here yet.
+/// Does a watched key appear in a transaction output -- a body-1 output or the
+/// body-16 collateral return, both decoded by the crate's own decode_single_output
+/// for the output's payment or stake credential. Body-1 is a list of
+/// transaction_outputs; the body-16 collateral return is a single one.
 pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     let mut d = Decoder::new(body);
     let len = match d.map() {
@@ -219,6 +219,15 @@ pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     Err(_) => return Scan { found, complete: false },
                 }
                 j += 1;
+            }
+        } else if key == 16 {
+            match decode_single_output(&mut d) {
+                Ok((address, _, _)) => {
+                    if address_watched(&address, watched) {
+                        found = true;
+                    }
+                }
+                Err(_) => return Scan { found, complete: false },
             }
         } else if d.skip().is_err() {
             return Scan { found, complete: false };
@@ -411,17 +420,81 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     Scan { found, complete: true }
 }
 
+/// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and
+/// reports whether BLAKE2b-224 of its 32-byte vkey is watched. Elements after the
+/// vkey are skipped; a first element that is not 32 bytes is not a vkey and is
+/// skipped. `Err` is reserved for a malformed stream.
+fn witness_vkey_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    let len = d.array().map_err(|_| ())?;
+    let mut hit = false;
+    let mut k = 0u64;
+    loop {
+        match seq_has_next(d, len, k) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Err(()),
+        }
+        if k == 0 && d.datatype().map_err(|_| ())? == Type::Bytes {
+            let vkey = read_bytes(d).map_err(|_| ())?;
+            if vkey.len() == 32 && watched.contains(&blake2b224(&vkey)) {
+                hit = true;
+            }
+        } else {
+            d.skip().map_err(|_| ())?;
+        }
+        k += 1;
+    }
+    Ok(hit)
+}
+
 /// Does a watched key appear as a verification-key witness -- witness-set key 0
 /// (vkey witnesses) or key 2 (bootstrap witnesses), each a set of
 /// `[vkey (32 bytes), signature, ...]`. The 28-byte key hash is BLAKE2b-224 of the
-/// 32-byte vkey: the one watched-key surface that must hash rather than read a
-/// credential in clear (Option A, `VarBlake2b::new(28)`). STUB (RED): a definite
-/// wrong answer; the real walk and its hash are held until the native RED.
-pub fn witness_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
-    Scan {
-        found: false,
-        complete: true,
+/// 32-byte vkey (Option A): the one watched-key surface that hashes rather than
+/// reading a credential in clear.
+pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
+    let mut d = Decoder::new(witnesses);
+    let len = match d.map() {
+        Ok(len) => len,
+        Err(_) => return Scan { found: false, complete: false },
+    };
+    let mut found = false;
+    let mut i = 0u64;
+    loop {
+        match seq_has_next(&mut d, len, i) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => return Scan { found, complete: false },
+        }
+        let key = match d.u64() {
+            Ok(key) => key,
+            Err(_) => return Scan { found, complete: false },
+        };
+        if key == 0 || key == 2 {
+            let set_len = match input_set_len(&mut d) {
+                Ok(set_len) => set_len,
+                Err(_) => return Scan { found, complete: false },
+            };
+            let mut j = 0u64;
+            loop {
+                match seq_has_next(&mut d, set_len, j) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => return Scan { found, complete: false },
+                }
+                match witness_vkey_watched(&mut d, watched) {
+                    Ok(true) => found = true,
+                    Ok(false) => {}
+                    Err(_) => return Scan { found, complete: false },
+                }
+                j += 1;
+            }
+        } else if d.skip().is_err() {
+            return Scan { found, complete: false };
+        }
+        i += 1;
     }
+    Scan { found, complete: true }
 }
 
 /// Does a watched key appear in a certificate -- body key 4, a set of certs each
