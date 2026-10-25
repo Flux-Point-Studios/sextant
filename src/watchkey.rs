@@ -189,6 +189,18 @@ pub fn witness_use(_witnesses: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
     }
 }
 
+/// Does a watched key appear in a certificate -- body key 4, a set of certs each
+/// deep-walked for 28-byte credentials (stake / DRep / committee credentials, and
+/// pool owners and operators). An unknown cert kind, or a known kind of the wrong
+/// arity, leaves coverage incomplete rather than reading as absence. STUB (RED): a
+/// definite wrong answer; the real deep walk is held until its native RED.
+pub fn certificate_use(_body: &[u8], _watched: &BTreeSet<[u8; 28]>) -> Scan {
+    Scan {
+        found: false,
+        complete: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +476,38 @@ mod tests {
     fn malformed_witness_is_incomplete() {
         // {0: 5} -- vkey witnesses not an array.
         assert!(!witness_use(&[0xa1, 0x00, 0x05], &watched_set(&[VK_HASH])).complete);
+    }
+
+    // --- certificate surface (body key 4, deep walk): RED snapshot; production walk held ---
+
+    /// `{4: [[0, [0, <28-byte cred>]]]}` -- a stake-registration cert (kind 0) whose
+    /// stake credential is `[0, addr_keyhash]`. = a1 04 81 82 00 82 00 58 1c <cred>.
+    fn body_one_stake_cert(cred: &[u8; 28]) -> Vec<u8> {
+        let mut b = vec![0xa1, 0x04, 0x81, 0x82, 0x00, 0x82, 0x00, 0x58, 0x1c];
+        b.extend_from_slice(cred);
+        b
+    }
+
+    #[test]
+    fn watched_certificate_credential_is_found() {
+        assert!(certificate_use(&body_one_stake_cert(&STK), &watched_set(&[STK])).found);
+    }
+
+    #[test]
+    fn unwatched_certificate_is_not_found_but_complete() {
+        let s = certificate_use(&body_one_stake_cert(&STK), &watched_set(&[PAY]));
+        assert!(!s.found && s.complete);
+    }
+
+    #[test]
+    fn unknown_certificate_kind_is_incomplete() {
+        // {4: [[99, 5]]} -- a cert of an unmodelled kind; coverage cannot be proven complete.
+        assert!(!certificate_use(&[0xa1, 0x04, 0x81, 0x82, 0x18, 0x63, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    #[test]
+    fn malformed_certificates_is_incomplete() {
+        // {4: 5} -- certificates not a set/array.
+        assert!(!certificate_use(&[0xa1, 0x04, 0x05], &watched_set(&[STK])).complete);
     }
 }
