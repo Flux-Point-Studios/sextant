@@ -8,6 +8,7 @@ use minicbor::data::Type;
 use crate::hash::blake2b224;
 use crate::utxo::{
     OutPoint, decode_outpoint, decode_single_output, input_set_len, read_bytes, seq_has_next,
+    skip_item,
 };
 
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
@@ -198,29 +199,40 @@ fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> 
 /// body-16 collateral return -- as the output's payment or stake credential or in
 /// a native reference script it carries. Body-1 is a list of transaction_outputs;
 /// the body-16 collateral return is a single one. Every output's reference script
-/// draws on one walk budget.
+/// draws on one walk budget. An address counts only once the whole body has
+/// decoded: an output that ends short reads its last entries from the field after
+/// it, and only the failure that follows shows it.
 pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     let mut budget = WALK_BUDGET;
-    scan_map(body, |key, d, scan| match key {
+    let mut outputs = Scan {
+        found: false,
+        complete: true,
+    };
+    let walk = scan_map(body, |key, d, _| match key {
         1 => {
             let len = d.array().map_err(|_| ())?;
             let mut i = 0u64;
             while seq_has_next(d, len, i).map_err(|_| ())? {
-                output_watched(d, watched, &mut budget, scan)?;
+                output_watched(d, watched, &mut budget, &mut outputs)?;
                 i += 1;
             }
             Ok(())
         }
-        16 => output_watched(d, watched, &mut budget, scan),
+        16 => output_watched(d, watched, &mut budget, &mut outputs),
         _ => d.skip().map_err(|_| ()),
-    })
+    });
+    Scan {
+        found: outputs.found && walk.complete,
+        complete: outputs.complete && walk.complete,
+    }
 }
 
-/// One output: its address credentials through the crate's own decode_single_output,
-/// then the reference script at map key 3, which that read-path decoder skips. A
-/// map key outside 0-3 (address, value, datum_option, script_ref), or a repeated
-/// key, leaves coverage incomplete. decode_single_output keeps only the last
-/// address, so every address a repeated key 0 carries is read here too.
+/// One output, read in place so its boundary is exact. A map's entries are walked
+/// with skip_item, which takes no break for an item, reading every address a key 0
+/// carries and every native reference script at key 3; a legacy array goes through
+/// the crate's own decode_single_output. A map key outside 0-3 (address, value,
+/// datum_option, script_ref), a repeated key, or a map that decoder refuses leaves
+/// coverage incomplete, and every address read still counts.
 fn output_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
@@ -228,23 +240,19 @@ fn output_watched(
     scan: &mut Scan,
 ) -> Result<(), ()> {
     let start = d.position();
-    let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
-    scan.found |= address_watched(&address, watched);
-    let mut output = Decoder::new(&d.input()[start..d.position()]);
-    if !matches!(
-        output.datatype().map_err(|_| ())?,
-        Type::Map | Type::MapIndef
-    ) {
+    if !matches!(d.datatype().map_err(|_| ())?, Type::Map | Type::MapIndef) {
+        let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
+        scan.found |= address_watched(&address, watched);
         return Ok(());
     }
-    let len = output.map().map_err(|_| ())?;
+    let len = d.map().map_err(|_| ())?;
     let mut seen = [false; 4];
     let mut i = 0u64;
-    while seq_has_next(&mut output, len, i).map_err(|_| ())? {
-        let key = output.u64().map_err(|_| ())?;
-        let value = output.position();
-        output.skip().map_err(|_| ())?;
-        let item = &output.input()[value..output.position()];
+    while seq_has_next(d, len, i).map_err(|_| ())? {
+        let key = d.u64().map_err(|_| ())?;
+        let value = d.position();
+        skip_item(d).map_err(|_| ())?;
+        let item = &d.input()[value..d.position()];
         let repeated = key <= 3 && core::mem::replace(&mut seen[key as usize], true);
         let read = match key {
             0 => match Decoder::new(item).bytes() {
@@ -261,6 +269,8 @@ fn output_watched(
         scan.complete &= read && !repeated;
         i += 1;
     }
+    let output = &d.input()[start..d.position()];
+    scan.complete &= decode_single_output(&mut Decoder::new(output)).is_ok();
     Ok(())
 }
 

@@ -460,7 +460,7 @@ fn expect_end(d: &mut Decoder<'_>, len: Option<u64>, read: u64) -> Result<(), Ut
 /// Skip one item where the shape requires one. minicbor's `skip` reads a break as an item,
 /// which would let a container short of an item end on the break of the container around
 /// it and read on into that container.
-fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
+pub(crate) fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Break {
         return Err(UtxoError::MalformedTx);
     }
@@ -532,9 +532,9 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
 
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
 /// 3?: script_ref}`) or a legacy array (`[address, value]` or
-/// `[address, value, datum_hash]`). The address, coin and datum must decode; a map
-/// key outside 0-2 is skipped unread, and a repeated key keeps its last value. This
-/// reads the output's read-path fields and validates nothing else in it.
+/// `[address, value, datum_hash]`). The address, coin and datum must decode, and a
+/// repeated map key is refused; a key outside 0-2 is skipped unread. This reads the
+/// output's read-path fields and validates nothing else in it.
 pub(crate) fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
         Type::Map | Type::MapIndef => decode_map_output(d),
@@ -548,9 +548,15 @@ fn decode_map_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     let mut address: Option<Vec<u8>> = None;
     let mut lovelace: Option<u64> = None;
     let mut datum: Option<Datum> = None;
+    let mut keys = BTreeSet::new();
     let mut i = 0;
     while seq_has_next(d, entries, i)? {
-        match d.u64().map_err(|_| UtxoError::MalformedTx)? {
+        let key = d.u64().map_err(|_| UtxoError::MalformedTx)?;
+        // The ledger refuses a repeated key, which a last-wins read would hide.
+        if !keys.insert(key) {
+            return Err(UtxoError::MalformedTx);
+        }
+        match key {
             0 => address = Some(read_bytes(d)?),
             1 => lovelace = Some(decode_value(d)?),
             2 => datum = Some(decode_datum_option(d)?),
@@ -923,6 +929,39 @@ mod tests {
                 decode_output(&body, 0),
                 Err(UtxoError::MalformedTx),
                 "{body:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_output_key_is_refused() {
+        // The ledger refuses a repeated output-map key in either length form; a last-wins
+        // read would bind one of several values.
+        let hash = [0x22u8; 32];
+        for output in [
+            // {0: h'00', 0: h'01', 1: 7}
+            vec![0xa3, 0x00, 0x41, 0x00, 0x00, 0x41, 0x01, 0x01, 0x07],
+            // {0: h'00', 1: 7, 1: 8}
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x01, 0x08],
+            // {_ 0: h'00', 1: 7, 9: 0, 9: 0}
+            vec![
+                0xbf, 0x00, 0x41, 0x00, 0x01, 0x07, 0x09, 0x00, 0x09, 0x00, 0xff,
+            ],
+            // {0: h'00', 1: 7, 2: [0, hash], 2: [0, hash]}
+            [
+                &[
+                    0xa4, 0x00, 0x41, 0x00, 0x01, 0x07, 0x02, 0x82, 0x00, 0x58, 0x20,
+                ][..],
+                &hash,
+                &[0x02, 0x82, 0x00, 0x58, 0x20],
+                &hash,
+            ]
+            .concat(),
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
             );
         }
     }

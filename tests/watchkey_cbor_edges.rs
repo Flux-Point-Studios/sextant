@@ -281,3 +281,85 @@ fn an_indefinite_output_map_keeps_the_output_closure() {
         );
     }
 }
+
+#[test]
+fn a_repeated_output_field_is_incomplete_without_a_use() {
+    // {1: [{0: other, 1: 1, k: v, k: v}]} for the coin, a datum hash and an unwatched script.
+    for repeated in [
+        vec![0x01, 0x02],
+        [vec![0x02, 0x82, 0x00, 0x58, 0x20], vec![0x22; 32]].concat(),
+        [vec![0x03], native_script_ref(&OTHER)].concat(),
+    ] {
+        let body = [
+            vec![0xa1, 0x01, 0x81, 0xa4, 0x00],
+            address(&OTHER),
+            vec![0x01, 0x01],
+            repeated.clone(),
+            repeated,
+        ]
+        .concat();
+        assert_eq!(
+            output_use(&body, &watched()),
+            Scan {
+                found: false,
+                complete: false
+            },
+            "{body:02x?}"
+        );
+    }
+}
+
+#[test]
+fn an_output_takes_no_address_from_the_field_after_it() {
+    // {1: [{0: other, 1: 1, <a third entry declared>}], 0: h'60 watched'}: the short output
+    // map would read the body's next entry as its own second address.
+    let body = [
+        vec![0xa2, 0x01, 0x81, 0xa3, 0x00],
+        address(&OTHER),
+        vec![0x01, 0x01, 0x00],
+        address(&WATCHED),
+    ]
+    .concat();
+    assert_eq!(
+        output_use(&body, &watched()),
+        Scan {
+            found: false,
+            complete: false
+        }
+    );
+}
+
+#[test]
+fn a_break_for_an_output_value_proves_no_use() {
+    // {1: [{0: watched, 1: 1, 3: break}]}: a stray break leaves the output's end
+    // unprovable, so even the address read before it proves no use.
+    let body = [
+        vec![0xa1, 0x01, 0x81, 0xa3, 0x00],
+        address(&WATCHED),
+        vec![0x01, 0x01, 0x03, 0xff],
+    ]
+    .concat();
+    assert_eq!(
+        output_use(&body, &watched()),
+        Scan {
+            found: false,
+            complete: false
+        }
+    );
+}
+
+#[test]
+fn an_output_the_read_path_refuses_is_incomplete() {
+    // {1: [{0: other}]} carries no coin; {1: [{0: other, 1: h''}]} a coin that is no number.
+    for (entries, tail) in [(0xa1, vec![]), (0xa2, vec![0x01, 0x40])] {
+        let body = [vec![0xa1, 0x01, 0x81, entries, 0x00], address(&OTHER), tail].concat();
+        assert_eq!(
+            output_use(&body, &watched()),
+            Scan {
+                found: false,
+                complete: false
+            },
+            "{body:02x?}"
+        );
+    }
+}
