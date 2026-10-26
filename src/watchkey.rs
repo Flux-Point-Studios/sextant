@@ -305,12 +305,12 @@ fn output_watched(
     Ok(())
 }
 
-/// A reference script: a tag-24 wrapper over CBOR `[script_type, script]`. A
-/// native script (type 0) carries its sig clauses in clear and is deep-walked on
-/// the caller's budget; Plutus scripts (types 1-3) are byte strings with no
-/// credential in clear. A wrapper that does not unwrap, a Plutus script that is no
-/// byte string, an unknown type or trailing bytes return `Err`, which leaves
-/// coverage incomplete.
+/// A reference script: a tag-24 wrapper over CBOR `[script_type, script]`, the pair
+/// in either length form, as the ledger reads it. A native script (type 0) carries
+/// its sig clauses in clear and is deep-walked on the caller's budget; Plutus
+/// scripts (types 1-3) are byte strings with no credential in clear. A wrapper that
+/// does not unwrap, a pair of another arity, a Plutus script that is no byte string,
+/// an unknown type or trailing bytes return `Err`, which leaves coverage incomplete.
 fn reference_script_watched(
     wrapped: &[u8],
     watched: &BTreeSet<[u8; 28]>,
@@ -322,7 +322,8 @@ fn reference_script_watched(
         return Err(());
     }
     let mut script = Decoder::new(d.bytes().map_err(|_| ())?);
-    if script.array().map_err(|_| ())? != Some(2) {
+    let len = script.array().map_err(|_| ())?;
+    if len.is_some_and(|n| n != 2) {
         return Err(());
     }
     match script.u64().map_err(|_| ())? {
@@ -332,7 +333,9 @@ fn reference_script_watched(
         }
         _ => return Err(()),
     }
-    if script.position() == script.input().len() {
+    if !seq_has_next(&mut script, len, 2).map_err(|_| ())?
+        && script.position() == script.input().len()
+    {
         Ok(())
     } else {
         Err(())

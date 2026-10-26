@@ -160,24 +160,108 @@ fn chunked_bytes_under_tag_24_are_incomplete() {
     );
 }
 
-#[test]
-fn an_indefinite_script_ref_array_is_incomplete() {
-    // tag24(bytes([_ 0, [0, other]])): the wrapper must be the definite pair.
-    let inner = [
-        vec![0x9f, 0x00, 0x82, 0x00, 0x58, 0x1c],
-        OTHER.to_vec(),
-        vec![0xff],
-    ]
-    .concat();
+/// `{1: [{0: other, 1: 1, 3: tag24(bytes(script))}]}` around a reference script.
+fn body_with_script_ref(script: &[u8]) -> Vec<u8> {
     let output = [
         vec![0xa3, 0x00],
         address(&OTHER),
-        vec![0x01, 0x01, 0x03, 0xd8, 0x18, 0x58, inner.len() as u8],
-        inner,
+        vec![0x01, 0x01, 0x03, 0xd8, 0x18, 0x58, script.len() as u8],
+        script.to_vec(),
     ]
     .concat();
-    let body = [vec![0xa1, 0x01, 0x81], output].concat();
-    assert!(!output_use(&body, &watched()).complete);
+    [vec![0xa1, 0x01, 0x81], output].concat()
+}
+
+/// `[0, [0, h'credential']]`, a native script with one `sig` clause, or with `indefinite`
+/// the same pair as `[_ 0, [0, h'credential']]`.
+fn native_pair(credential: &[u8; 28], indefinite: bool) -> Vec<u8> {
+    let (open, close) = if indefinite {
+        (0x9f, vec![0xff])
+    } else {
+        (0x82, vec![])
+    };
+    [
+        vec![open, 0x00, 0x82, 0x00, 0x58, 0x1c],
+        credential.to_vec(),
+        close,
+    ]
+    .concat()
+}
+
+#[test]
+fn an_indefinite_script_ref_pair_reads_like_its_definite_twin() {
+    // The ledger reads the [script_type, script] pair in either length form.
+    for credential in [&WATCHED, &OTHER] {
+        let definite = output_use(
+            &body_with_script_ref(&native_pair(credential, false)),
+            &watched(),
+        );
+        let indefinite = output_use(
+            &body_with_script_ref(&native_pair(credential, true)),
+            &watched(),
+        );
+        assert_eq!(indefinite, definite);
+        assert_eq!(
+            indefinite,
+            Scan {
+                found: credential == &WATCHED,
+                complete: true
+            }
+        );
+    }
+    // [2, h'<15-byte Plutus V2 script>'] and [_ 2, h'...']
+    let bytecode = [
+        0x4e, 0x4d, 0x01, 0x00, 0x00, 0x33, 0x22, 0x22, 0x20, 0x05, 0x12, 0x00, 0x12, 0x00, 0x11,
+    ];
+    let plutus = |open: u8, close: &[u8]| [&[open, 0x02, 0x4f][..], &bytecode, close].concat();
+    let indefinite = output_use(&body_with_script_ref(&plutus(0x9f, &[0xff])), &watched());
+    assert_eq!(
+        indefinite,
+        output_use(&body_with_script_ref(&plutus(0x82, &[])), &watched())
+    );
+    assert_eq!(
+        indefinite,
+        Scan {
+            found: false,
+            complete: true
+        }
+    );
+}
+
+#[test]
+fn an_indefinite_script_ref_pair_keeps_its_arity() {
+    let open = |credential: &[u8; 28]| {
+        [
+            vec![0x9f, 0x00, 0x82, 0x00, 0x58, 0x1c],
+            credential.to_vec(),
+        ]
+        .concat()
+    };
+    for (script, found) in [
+        // A third element before the break; the sig clause read before it still counts.
+        ([open(&WATCHED), vec![0x05, 0xff]].concat(), true),
+        ([open(&OTHER), vec![0x05, 0xff]].concat(), false),
+        // No break before the wrapped bytes end, and a byte after the break.
+        (open(&OTHER), false),
+        ([open(&OTHER), vec![0xff, 0x00]].concat(), false),
+        // [_ 0] and [_ 1]: a script type with no script.
+        (vec![0x9f, 0x00, 0xff], false),
+        (vec![0x9f, 0x01, 0xff], false),
+        // A definite pair declared as one element, with the script after it.
+        (
+            [vec![0x81, 0x00, 0x82, 0x00, 0x58, 0x1c], OTHER.to_vec()].concat(),
+            false,
+        ),
+    ] {
+        assert_eq!(
+            output_use(&body_with_script_ref(&script), &watched()),
+            Scan {
+                found,
+                complete: false
+            },
+            "{script:02x?}"
+        );
+    }
 }
 
 #[test]
