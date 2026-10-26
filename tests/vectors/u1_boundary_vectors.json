@@ -1,0 +1,149 @@
+{
+  "note": "Hand-labelled from the Conway CDDL and U1_CONTRACT.md, which counts uses and classes data the ledger only carries as a mention. These pin the contract's boundary on the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "vectors": [
+    {
+      "name": "reference_input_signed",
+      "description": "a reference input's script needs the VKH: its vkey witness is the use",
+      "raw_tx_hex": "84a11281825820777777777777777777777777777777777777777777777777777777777777777700a100818258200000000000000000000000000000000000000000000000000000000000000000584000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f5f6",
+      "target_vkh": "f9dca21a6c826ec8acb4cf395cbc24351937bfe6560b2683ab8b415f",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "reference_input_unsigned",
+      "description": "by design: a reference input whose script names the VKH, with no signature, is no use",
+      "raw_tx_hex": "84a11281825820777777777777777777777777777777777777777777777777777777777777777700a0f5f6",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "inline_datum_mention",
+      "description": "by design: an inline datum holding the VKH is a mention",
+      "raw_tx_hex": "84a10181a300581d60e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2011a000f4240028201d818581e581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1a0f5f6",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "plutus_data_mention",
+      "description": "by design: witness-set plutus_data holding the VKH is a mention",
+      "raw_tx_hex": "84a0a10481581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1f5f6",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "redeemer_mention",
+      "description": "by design: a redeemer whose data holds the VKH is a mention",
+      "raw_tx_hex": "84a0a10581840000581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1820101f5f6",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "aux_script_allegra_mention",
+      "description": "by design: auxiliary data is a mention; an Allegra [metadata, [native_script]] naming the VKH",
+      "raw_tx_hex": "84a10758208e7bbb8970fe089b5da5fd357d1e83ef596fc0b7bb4a9b0277a7fae293ec47fda0f582a0818200581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "aux_script_alonzo_mention",
+      "description": "by design: auxiliary data is a mention; an Alonzo tag-259 key-1 native script naming the VKH",
+      "raw_tx_hex": "84a1075820d978c08d58104917fd80d3e0d018780ab8155b138da30c70c8a55143615425f9a0f5d90103a101818200581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "aux_metadata_mention",
+      "description": "by design: auxiliary data is a mention; label-674 metadata holding the VKH",
+      "raw_tx_hex": "84a10758209ea862f2b25a284b2bcf6865357bae5c85024a5669de9b356f69b6fc86850ff0a0f5a11902a2a1636d7367581ce1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "target_vkh": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    }
+  ]
+}
