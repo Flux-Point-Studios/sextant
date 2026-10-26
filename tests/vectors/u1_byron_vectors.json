@@ -1,5 +1,5 @@
 {
-  "note": "Hand-labelled from the Conway CDDL, the U1 contract and the shipped ledger's verdicts: a well-formed Byron address closes a spent input with no credential, every other credential-free address leaves it open, a witness row is read only in its CDDL shape, and a break where an item is due in the body or the witness set leaves the transaction open. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract; a vector's correction records a label it once carried.",
+  "note": "Hand-labelled from the Conway CDDL, the U1 contract and the shipped ledger's verdicts: a well-formed Byron address carries its root as a spent input's payment credential, an address with no payment credential leaves the input open, a witness row is read only in its CDDL shape, and a break where an item is due in the body or the witness set leaves the transaction open. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract; a vector's correction records a label it once carried.",
   "vectors": [
     {
       "name": "byron_icarus_unwatched",

@@ -11,18 +11,17 @@ use crate::utxo::{
     skip_item, walk_item,
 };
 
-/// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
-/// address carries no payment credential. Addresses whose header nibble is
-/// 0..=7 carry one at bytes `[1..29]`; a reward address (nibble 14/15), a Byron
-/// address (nibble 8), and any slice shorter than 29 bytes yield `None`.
+/// Payment credential (28 bytes) of an address, or `None` when it carries none. A
+/// Shelley address whose header nibble is 0..=7 carries one at bytes `[1..29]`. A
+/// well-formed Byron address carries its root, which the ledger types as a payment
+/// key hash: a crafted root equal to a VKH is spent through that VKH's own vkey
+/// witness. A reward address (nibble 14/15), any other address, and any slice
+/// shorter than 29 bytes yield `None`.
 pub fn payment_credential(address: &[u8]) -> Option<[u8; 28]> {
-    if address.len() < 29 {
-        return None;
-    }
-    if address[0] >> 4 <= 7 {
+    if address.len() >= 29 && address[0] >> 4 <= 7 {
         address[1..29].try_into().ok()
     } else {
-        None
+        byron_root(address)
     }
 }
 
@@ -66,55 +65,53 @@ pub struct Scan {
     pub complete: bool,
 }
 
-/// Whether `address` is a well-formed Byron address: exactly the CBOR item
-/// `[#6.24(bytes payload), crc]` opening with the byte 0x82, on which the ledger
-/// dispatches, the payload a definite byte string that [`byron_payload`] accepts and
-/// `crc` its CRC-32. Heads elsewhere may be non-minimal, as the shipped ledger reads
-/// them. A Byron address carries no VKH: the key behind it can spend only through a
-/// bootstrap witness, which [`witness_use`] hashes.
-fn byron_address(address: &[u8]) -> bool {
+/// The root of a well-formed Byron address, the payment key hash the ledger reads it
+/// as. Well-formed is exactly the CBOR item `[#6.24(bytes payload), crc]` opening
+/// with the byte 0x82, on which the ledger dispatches, the payload a definite byte
+/// string that [`byron_payload`] accepts and `crc` its CRC-32. Heads elsewhere may be
+/// non-minimal, as the shipped ledger reads them.
+fn byron_root(address: &[u8]) -> Option<[u8; 28]> {
     let Some((&0x82, pair)) = address.split_first() else {
-        return false;
+        return None;
     };
     let mut d = Decoder::new(pair);
-    let payload = (|| {
-        if d.tag().ok()?.as_u64() != 24 {
-            return None;
-        }
-        let payload = d.bytes().ok()?;
-        (d.u64().ok()? == u64::from(crc32(payload))).then_some(payload)
-    })();
-    payload.is_some_and(|payload| d.position() == pair.len() && byron_payload(payload))
+    if d.tag().ok()?.as_u64() != 24 {
+        return None;
+    }
+    let payload = d.bytes().ok()?;
+    if d.u64().ok()? != u64::from(crc32(payload)) || d.position() != pair.len() {
+        return None;
+    }
+    byron_payload(payload)
 }
 
-/// Whether a Byron address payload is exactly `[bytes .size 28, attributes, type]` as
-/// the ledger reads it: the attributes a definite `Map Word8 ByteString` with strictly
-/// ascending keys, the derivation path (key 1) one canonical byte string and the
-/// network magic (key 2) one canonical uint below 2^32, other keys opaque; the type
-/// 0 (a key) or 2 (a redeem key) in the one byte the ledger decodes it from.
-fn byron_payload(payload: &[u8]) -> bool {
+/// The root of a Byron address payload that is exactly `[bytes .size 28, attributes,
+/// type]` as the ledger reads it: the attributes a definite `Map Word8 ByteString`
+/// with strictly ascending keys, the derivation path (key 1) one canonical byte
+/// string and the network magic (key 2) one canonical uint below 2^32, other keys
+/// opaque; the type 0 (a key) or 2 (a redeem key) in the one byte the ledger decodes
+/// it from.
+fn byron_payload(payload: &[u8]) -> Option<[u8; 28]> {
     let mut d = Decoder::new(payload);
-    let read = (|| {
-        if d.array().ok()? != Some(3) || d.bytes().ok()?.len() != 28 {
+    if d.array().ok()? != Some(3) {
+        return None;
+    }
+    let root = d.bytes().ok()?.try_into().ok()?;
+    let mut previous = None;
+    for _ in 0..d.map().ok()?? {
+        let key = d.u8().ok()?;
+        let value = d.bytes().ok()?;
+        let typed = match key {
+            1 => canonical_bytes(value),
+            2 => canonical_magic(value),
+            _ => true,
+        };
+        if !typed || previous.is_some_and(|previous| key <= previous) {
             return None;
         }
-        let mut previous = None;
-        for _ in 0..d.map().ok()?? {
-            let key = d.u8().ok()?;
-            let value = d.bytes().ok()?;
-            let typed = match key {
-                1 => canonical_bytes(value),
-                2 => canonical_magic(value),
-                _ => true,
-            };
-            if !typed || previous.is_some_and(|previous| key <= previous) {
-                return None;
-            }
-            previous = Some(key);
-        }
-        Some(())
-    })();
-    read.is_some() && matches!(&payload[d.position()..], [0x00] | [0x02])
+        previous = Some(key);
+    }
+    matches!(&payload[d.position()..], [0x00] | [0x02]).then_some(root)
 }
 
 /// Whether `content` is exactly one byte string in its canonical encoding, the form
@@ -148,7 +145,8 @@ fn crc32(data: &[u8]) -> u32 {
 
 /// Payment credentials of regular inputs for valid transactions, collateral otherwise.
 /// Unresolved inputs, resolver errors, and resolved addresses without a payment
-/// credential leave coverage incomplete, except a well-formed Byron address.
+/// credential leave coverage incomplete; a well-formed Byron address carries its root
+/// as one.
 pub fn input_use<'a>(
     body: &[u8],
     is_valid: bool,
@@ -167,7 +165,7 @@ pub fn input_use<'a>(
             match resolve(&input) {
                 Ok(Some(address)) => match payment_credential(address) {
                     Some(credential) => scan.found |= watched.contains(&credential),
-                    None => scan.complete &= byron_address(address),
+                    None => scan.complete = false,
                 },
                 Ok(None) | Err(()) => scan.complete = false,
             }
@@ -245,11 +243,16 @@ pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     })
 }
 
-/// Whether a raw address's payment OR stake credential is watched, via the
-/// credential parsers above (Byron and reward addresses yield neither).
-fn address_watched(address: &[u8], watched: &BTreeSet<[u8; 28]>) -> bool {
-    payment_credential(address).is_some_and(|c| watched.contains(&c))
-        || stake_credential(address).is_some_and(|c| watched.contains(&c))
+/// Records an output address's watched payment or stake credential in `scan`, and
+/// answers whether the address yields a payment credential at all. A reward address
+/// yields none.
+fn output_address(address: &[u8], watched: &BTreeSet<[u8; 28]>, scan: &mut Scan) -> bool {
+    let payment = payment_credential(address);
+    scan.found |= payment
+        .into_iter()
+        .chain(stake_credential(address))
+        .any(|credential| watched.contains(&credential));
+    payment.is_some()
 }
 
 /// Reads the byte string at a credential-bearing position.
@@ -312,8 +315,9 @@ pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 /// with skip_item, which takes no break for an item, reading every address a key 0
 /// carries and every native reference script at key 3; a legacy array goes through
 /// the crate's own decode_single_output. A map key outside 0-3 (address, value,
-/// datum_option, script_ref), a repeated key, or a map that decoder refuses leaves
-/// coverage incomplete, and every address read still counts.
+/// datum_option, script_ref), a repeated key, an address with no payment credential,
+/// or a map that decoder refuses leaves coverage incomplete, and every address read
+/// still counts.
 fn output_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
@@ -323,7 +327,8 @@ fn output_watched(
     let start = d.position();
     if !matches!(d.datatype().map_err(|_| ())?, Type::Map | Type::MapIndef) {
         let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
-        scan.found |= address_watched(&address, watched);
+        let read = output_address(&address, watched, scan);
+        scan.complete &= read;
         return Ok(());
     }
     let len = d.map().map_err(|_| ())?;
@@ -337,10 +342,7 @@ fn output_watched(
         let repeated = key <= 3 && core::mem::replace(&mut seen[key as usize], true);
         let read = match key {
             0 => match Decoder::new(item).bytes() {
-                Ok(address) => {
-                    scan.found |= address_watched(address, watched);
-                    true
-                }
+                Ok(address) => output_address(address, watched, scan),
                 Err(_) => false,
             },
             1 | 2 => true,
@@ -1024,9 +1026,24 @@ mod tests {
     }
 
     #[test]
-    fn byron_address_yields_nothing() {
+    fn a_malformed_byron_address_yields_nothing() {
         let addr = with_header(0x82, &[&[0u8; 40]]); // nibble 8
         assert_eq!(payment_credential(&addr), None);
+        assert_eq!(stake_credential(&addr), None);
+    }
+
+    #[test]
+    fn a_byron_root_is_the_payment_credential() {
+        // [#6.24(h'83 581c <PAY> a0 00'), crc]: root PAY, no attributes, type 0.
+        let payload = [&[0x83, 0x58, 0x1c][..], &PAY, &[0xa0, 0x00]].concat();
+        let addr = [
+            &[0x82, 0xd8, 0x18, 0x58, payload.len() as u8][..],
+            &payload,
+            &[0x1a],
+            &crc32(&payload).to_be_bytes(),
+        ]
+        .concat();
+        assert_eq!(payment_credential(&addr), Some(PAY));
         assert_eq!(stake_credential(&addr), None);
     }
 

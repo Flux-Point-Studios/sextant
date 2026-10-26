@@ -1,0 +1,548 @@
+{
+  "note": "Hand-labelled from the U1 contract under F5 Option A and A1: the root of a well-formed Byron address is its payment credential, and an output, collateral return or consumed input whose address yields no payment credential leaves the scan incomplete. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "vectors": [
+    {
+      "name": "f5_pay_to_byron_root_vkh",
+      "description": "materios's F5 skeptic vector f5_pay_to_byron_root_vkh (now=NO_USE A=USE_FOUND | cli-built (build-raw + assemble))",
+      "raw_tx_hex": "84a300d9010281825820888888888888888888888888888888888888888888888888888888888888888800018282582e82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a01a001e848082581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a007704c0021a00030d40a100d90102818258203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c58400606d117e8380f878db5b4817a17c24b831cc51d6ab9cf7a32fa45b15abff494bfaa6cf8913298262d4f62f8790df6b35df01895c48df615e3ad08d6f0dcf908f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "f5_spend_byron_root_vkh_vkey_witness",
+      "description": "materios's F5 skeptic vector f5_spend_byron_root_vkh_vkey_witness (now=USE_FOUND A=USE_FOUND | cli-built)",
+      "raw_tx_hex": "84a300d90102818258202f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff2900018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a001b7740021a00030d40a100d9010281825820d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a58400761ca72bd491615c19b5f0af688c608628aa42f066c986d4c4be377ade384f121965ea968635830c7a99e9b3aaba4f68153140fcca7c9a25b6072ee744a0c00f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "2f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff29#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "f5_spend_byron_root_vkh_bootstrap_witness_ledger_invalid",
+      "description": "materios's F5 skeptic vector f5_spend_byron_root_vkh_bootstrap_witness_ledger_invalid (now=USE_FOUND A=USE_FOUND | cli-built)",
+      "raw_tx_hex": "84a300d90102818258202f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff2900018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a001b7740021a00030d40a102d9010281845820d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a58400761ca72bd491615c19b5f0af688c608628aa42f066c986d4c4be377ade384f121965ea968635830c7a99e9b3aaba4f68153140fcca7c9a25b6072ee744a0c005820333333333333333333333333333333333333333333333333333333333333333344a1024101f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "2f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff29#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "f5_spend_byron_root_vkh_other_witness_ledger_invalid",
+      "description": "materios's F5 skeptic vector f5_spend_byron_root_vkh_other_witness_ledger_invalid (now=NO_USE A=USE_FOUND | cli-built)",
+      "raw_tx_hex": "84a300d90102818258202f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff2900018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a001b7740021a00030d40a100d9010281825820fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025584050d817bc1aa61bd6de747b20de5df6dddda2f9fca8cdc44c101193ce82ab8bdd11e3efd401451f3ac4694b24dc66cfbcc4671db443c465db37854e46fbb96d04f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "2f08c18fde747f0ef66c94166f4ff0796347b9e5bd0598930b9527cf31b8ff29#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "f5_pay_to_byron_root_vkh_mainnet",
+      "description": "materios's F5 skeptic vector f5_pay_to_byron_root_vkh_mainnet (now=NO_USE A=USE_FOUND | cli-built)",
+      "raw_tx_hex": "84a300d9010281825820888888888888888888888888888888888888888888888888888888888888888800018282582b82d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0001a8d1bea881a001e848082581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a007704c0021a00030d40a100d90102818258203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c58402ee92a5072f3cce74eb75894d9bf7e99b84218c2a9f09ebd0c5098522db7a228c984de35b8b3ec0e42aa05844e09ba02b0a7328c8b8d58f3756cf58e85ac8506f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "f5_pay_to_byron_root_vkh_redeem_type2",
+      "description": "materios's F5 skeptic vector f5_pay_to_byron_root_vkh_redeem_type2 (now=NO_USE A=USE_FOUND | cli-built)",
+      "raw_tx_hex": "84a300d9010281825820888888888888888888888888888888888888888888888888888888888888888800018282582e82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101021a2fb7178c1a001e848082581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a007704c0021a00030d40a100d90102818258203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c5840e051078c8a05791d65e345f6a53e1c79ad401f1b811d4a862ae08dd16ba5b2ebd1aa3a70fa49111b7b0828b8f9d53913b5fce1302064409e6419d046d9160209f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_icarus_built_out",
+      "description": "materios's F5 skeptic vector g_icarus_built@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582b82d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0001a8d1bea881a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_magic1_outmap",
+      "description": "materios's F5 skeptic vector g_magic1@outmap (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a300818258208888888888888888888888888888888888888888888888888888888888888888000181a200582e82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a0011a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_daedalus_testnet_colret",
+      "description": "materios's F5 skeptic vector g_daedalus_testnet@colret (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a50081825820888888888888888888888888888888888888888888888888888888888888888800018182581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a000f4240021a00030d400d8182582099999999999999999999999999999999999999999999999999999999999999990010a200584f82d818584583581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a201581e581c5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e024101001ac574d2ba011a001e8480a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27",
+        "9999999999999999999999999999999999999999999999999999999999999999#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_redeem_type2_magic_in",
+      "description": "materios's F5 skeptic vector g_redeem_type2_magic@in (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a000f4240021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101021a2fb7178c"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_magic1_in_collateral_invalid",
+      "description": "materios's F5 skeptic vector g_magic1@in_collateral_invalid (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a40081825820999999999999999999999999999999999999999999999999999999999999999900018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a000f4240021a00030d400d81825820888888888888888888888888888888888888888888888888888888888888888800a0f4f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac1b976a0",
+        "9999999999999999999999999999999999999999999999999999999999999999#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "o_tag24_nonminimal2_out",
+      "description": "materios's F5 skeptic vector o_tag24_nonminimal2@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582c82d90018582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0001a8d1bea881a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "o_crc_nonminimal8_outmap",
+      "description": "materios's F5 skeptic vector o_crc_nonminimal8@outmap (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a300818258208888888888888888888888888888888888888888888888888888888888888888000181a200582f82d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0001b000000008d1bea88011a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "a_key_nonmin8_colret",
+      "description": "materios's F5 skeptic vector a_key_nonmin8@colret (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a50081825820888888888888888888888888888888888888888888888888888888888888888800018182581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a000f4240021a00030d400d8182582099999999999999999999999999999999999999999999999999999999999999990010a200583682d818582c83581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a11b00000000000000024101001a02983a63011a001e8480a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27",
+        "9999999999999999999999999999999999999999999999999999999999999999#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "e_root_len_w8_out",
+      "description": "materios's F5 skeptic vector e_root_len_w8@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182583582d818582b835b000000000000001c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101001ac66947151a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "e_attrs_100_unknown_in",
+      "description": "materios's F5 skeptic vector e_attrs_100_unknown@in (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a000f4240021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d81859019d83581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3b8640341000441000541000641000741000841000941000a41000b41000c41000d41000e41000f41001041001141001241001341001441001541001641001741001818410018194100181a4100181b4100181c4100181d4100181e4100181f410018204100182141001822410018234100182441001825410018264100182741001828410018294100182a4100182b4100182c4100182d4100182e4100182f410018304100183141001832410018334100183441001835410018364100183741001838410018394100183a4100183b4100183c4100183d4100183e4100183f410018404100184141001842410018434100184441001845410018464100184741001848410018494100184a4100184b4100184c4100184d4100184e4100184f410018504100185141001852410018534100185441001855410018564100185741001858410018594100185a4100185b4100185c4100185d4100185e4100185f410018604100186141001862410018634100186441001865410018664100001abdc6b028"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "e_type2_magic_out",
+      "description": "materios's F5 skeptic vector e_type2_magic@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli ACCEPT)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582e82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a1024101021a2fb7178c1a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "g_fixture_mainnet_192261940_4_out",
+      "description": "materios's F5 skeptic vector g_fixture_mainnet-192261940_4@out (now=NO_USE A0=NO_USE A1=NO_USE | cli ACCEPT (genuine root, control))",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582b82d818582183581c55372941c5a9681b9a4de39b69c0b3b5e521ebd9daff1da6d43c0618a0001a056615281a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "g_fixture_mainnet_192261940_4_in",
+      "description": "materios's F5 skeptic vector g_fixture_mainnet-192261940_4@in (now=NO_USE A0=NO_USE A1=NO_USE | cli ACCEPT (genuine root, control))",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a000f4240021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c55372941c5a9681b9a4de39b69c0b3b5e521ebd9daff1da6d43c0618a0001a05661528"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "g_mainnet_daedalus_outmap",
+      "description": "materios's F5 skeptic vector g_mainnet_daedalus@outmap (now=NO_USE A0=NO_USE A1=NO_USE | cli ACCEPT (genuine root, control))",
+      "raw_tx_hex": "84a300818258208888888888888888888888888888888888888888888888888888888888888888000181a200584c82d818584283581c74bd7f2d7cabc1e91384e535a88045c6b9039f1267e95ca8f0f0a73aa101581e581cbeab7b5c6b45ef3346a708a8fe63e1310e97f3384079ae5bfd39d018001aa467d54f011a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_attrs_indef_magic_out",
+      "description": "materios's F5 skeptic vector o_attrs_indef_magic@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli REJECT. Recompute at 2d4200b.)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582f82d818582583581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3bf024101ff001aaeed6b8a1a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type1_in",
+      "description": "materios's F5 skeptic vector o_type1@in (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli REJECT. Recompute at 2d4200b.)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d607f8a76c0ebaa4ad20dfdcd51a5de070ab771f4bf377f2c41e6b71c0a1a000f4240021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0011afa1cda1e"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_outer_nonminimal_out",
+      "description": "materios's F5 skeptic vector o_outer_nonminimal@out (now=NO_USE A0=USE_FOUND A1=USE_FOUND | cli REJECT. Recompute at 2d4200b.)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582c9802d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0001a8d1bea881a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_root27_out",
+      "description": "materios's F5 skeptic vector o_root27@out (now=NO_USE A0=NO_USE A1=INCOMPLETE | cli REJECT. Recompute at 2d4200b.)",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582a82d818582083581b35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a0001a5454542a1a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_root_vkh_crc_broken_out",
+      "description": "the target's root in an output address whose CRC is wrong",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582a82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a102410100001a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_root_vkh_crc_broken_in",
+      "description": "the target's root in a consumed input's address whose CRC is wrong",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f271a000f4240021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a10241010000"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_root_vkh_type3_out",
+      "description": "the target's root in an output address of type 3",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182582b82d818582183581c35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3a0031a1412bb321a001e8480021a00030d40a0f5f6",
+      "target_vkh": "35dedd2982a03cf39e7dce03c839994ffdec2ec6b04f1cf2d40e61a3",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "60977efb35ab621d39dbeb7274ec7795a34708ff4d25a01a1df04c1f27"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    }
+  ]
+}

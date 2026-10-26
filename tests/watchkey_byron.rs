@@ -1,9 +1,9 @@
-//! The U1 Byron vectors: spent inputs resolved to Byron and other credential-free
-//! addresses, the witness rows that can carry the watched key, and stray breaks. A
-//! well-formed Byron address closes its input, since the key behind it spends only
-//! through a bootstrap witness; any other credential-free address leaves the input
-//! open, a witness row is read only in its CDDL shape, and a break where an item is
-//! due in the body or the witness set leaves the transaction open. The oracle is
+//! The U1 Byron vectors: spent inputs resolved to Byron addresses and to addresses
+//! with no payment credential, the witness rows that can carry the watched key, and
+//! stray breaks. A well-formed Byron address carries its root as the input's payment
+//! credential, every root here genuine; any other address with no payment credential
+//! leaves the input open, a witness row is read only in its CDDL shape, and a break
+//! where an item is due in the body or the witness set leaves the transaction open. The oracle is
 //! r57-live's `scripts/u1_byron_vectors.json`, written by gen_u1_byron_vectors.py.
 
 #[macro_use]
@@ -13,7 +13,7 @@ const ORACLE: &str = include_str!("vectors/u1_byron_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "26fbbf879098488698f6aa3c8c0ceafa23ce49087275dd15fd7da6fb0eff39f4";
+    "bb67363e00ce5f39b5746c2c89612a672fef819bc3d933c26c3ffc8426008340";
     byron_icarus_unwatched,
     byron_daedalus_unwatched,
     byron_watched_bootstrap,
