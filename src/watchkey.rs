@@ -177,15 +177,17 @@ pub fn input_use<'a>(
 
 /// The address of the output `outpoint` names in `creating_body`, the body of the
 /// transaction that created it, or `None` when that body binds no single address. The
-/// body must hash (BLAKE2b-256) to the outpoint's tx_id and decode in full. With n
-/// outputs (key 1), an index below n names that output, index n names the collateral
-/// return (key 16), and any other index names none. A body that repeats either key, a
-/// named output that repeats any key, and an address that is neither a Shelley payment
-/// address nor a well-formed Byron address bind none.
+/// body must hash (BLAKE2b-256) to the outpoint's tx_id and decode in full, a break
+/// where an item is due refused at any depth. With n outputs (key 1), an index below n
+/// names that output, index n names the collateral return (key 16), and any other index
+/// names none. A body that repeats either key, a named output the read path refuses, and
+/// an address with no payment credential bind none.
 ///
 /// This names a candidate from content alone. Whether the output existed is decided by
 /// the creating transaction's phase-2 outcome and the canonical UTxO membership, which
-/// the caller establishes.
+/// the caller establishes: for instance through a UTxO set built from
+/// `extract_block_effects` over canonically verified blocks, which reads each block's
+/// `invalid_transactions`.
 pub fn bound_output_address(outpoint: &OutPoint, creating_body: &[u8]) -> Option<Vec<u8>> {
     if blake2b256(creating_body) != outpoint.tx_id {
         return None;
@@ -203,7 +205,7 @@ pub fn bound_output_address(outpoint: &OutPoint, creating_body: &[u8]) -> Option
                 let mut i = 0u64;
                 while seq_has_next(d, len, i).map_err(|_| ())? {
                     let at = d.position();
-                    d.skip().map_err(|_| ())?;
+                    skip_item(d).map_err(|_| ())?;
                     if i == index {
                         named = Some(&creating_body[at..d.position()]);
                     }
@@ -212,12 +214,12 @@ pub fn bound_output_address(outpoint: &OutPoint, creating_body: &[u8]) -> Option
                 repeated |= outputs.replace(i).is_some();
             }
             16 => {
-                d.skip().map_err(|_| ())?;
+                skip_item(d).map_err(|_| ())?;
                 repeated |= collateral_return
                     .replace(&creating_body[start..d.position()])
                     .is_some();
             }
-            _ => d.skip().map_err(|_| ())?,
+            _ => skip_item(d).map_err(|_| ())?,
         }
         Ok(())
     });
