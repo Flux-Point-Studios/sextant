@@ -64,10 +64,12 @@ pub struct OutPoint {
     pub index: u16,
 }
 
-/// The set of outpoints a transaction consumes: its inputs (body key 0) together
-/// with its collateral inputs (body key 13, drawn on only if the script phase
-/// fails, but a spend either way). Reference inputs (key 18) are read, not
-/// consumed, and are NOT members. A set, so a duplicated input collapses to one.
+/// The set of outpoints a transaction may consume: its inputs (body key 0), which a
+/// phase-2-valid transaction consumes, together with its collateral inputs (body key 13),
+/// which a phase-2-invalid one consumes. The union over-reads what the ledger consumed:
+/// a watcher reading it refuses on every real spend, and may also refuse on an input the
+/// ledger left unspent. Reference inputs (key 18) are read, not consumed, and are NOT
+/// members. A set, so a duplicated input collapses to one.
 pub type SpendSet = BTreeSet<OutPoint>;
 
 /// The Cardano-transactions commitment a certificate certifies: the Merkle root of
@@ -271,10 +273,11 @@ pub fn verify_utxo_read(
     Err(UtxoError::ValidityNotEstablished)
 }
 
-/// Decode the set of outpoints a Conway transaction consumes — its inputs
+/// Decode the set of outpoints a Conway transaction may consume — its inputs
 /// (body key 0) and collateral inputs (key 13) — from the raw transaction-body
-/// CBOR. This is the forward spend-scan signal: an outpoint's presence here, in a
-/// body-committed block, is the on-chain evidence that it was spent.
+/// CBOR: the forward spend-scan signal. An outpoint absent from every body of a
+/// body-committed window was consumed by no transaction there; one present is only
+/// listed, since a transaction consumes one of the two sets by its phase-2 outcome.
 ///
 /// A CBOR `set` is encoded either as a bare array or wrapped in tag 258
 /// (`#6.258`); both forms are accepted and decode identically. Every deviation —
@@ -288,7 +291,7 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
     let mut i = 0;
     while seq_has_next(&mut d, len, i)? {
         match d.u64().map_err(|_| UtxoError::MalformedTx)? {
-            // key 0 = inputs, key 13 = collateral inputs — both are spends.
+            // key 0 = inputs, key 13 = collateral inputs: one of the two is consumed.
             0 | 13 => decode_input_set(&mut d, &mut spends)?,
             // key 18 = reference inputs (read, not consumed) and every other
             // field are skipped.

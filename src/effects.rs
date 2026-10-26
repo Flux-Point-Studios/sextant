@@ -361,17 +361,21 @@ mod tests {
         }
     }
 
-    /// Mainnet 13,591,743 under a forged phase-2 record its header re-commits to: `[7, 7]`
-    /// and `[8, 7]` are no set of its transactions' indices, so the block's effects are
-    /// unknown and nothing applies; its own record extracts.
+    /// Mainnet 13,591,743 under a forged phase-2 record its header re-commits to, one the
+    /// ledger refuses: `[7, 7]` and `[8, 7]` do not ascend, and a tag-258 `[7]` is no list.
+    /// The block's effects are unknown and nothing applies; its own record extracts.
     #[test]
-    fn a_phase_2_record_that_reads_as_no_set_refuses_the_block() {
+    fn a_phase_2_record_the_ledger_refuses_refuses_the_block() {
         let hex = include_str!("../tests/vectors/invalid-mainnet-13591743.block");
         let block = crate::inclusion::decode_hex(hex.trim().as_bytes()).unwrap();
         assert!(extract_block_effects(&block).is_ok());
         let (_, spans) = HeaderView::decode_block(&block).unwrap();
-        for record in [[0x82, 0x07, 0x07], [0x82, 0x08, 0x07]] {
-            let forged = recommitted(&block, spans.invalid_transactions.clone(), &record);
+        for record in [
+            &[0x82, 0x07, 0x07][..],
+            &[0x82, 0x08, 0x07],
+            &[0xd9, 0x01, 0x02, 0x81, 0x07],
+        ] {
+            let forged = recommitted(&block, spans.invalid_transactions.clone(), record);
             assert_eq!(
                 extract_block_effects(&forged).map(|_| ()),
                 Err(ExtractError::Decode),

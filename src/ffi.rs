@@ -926,8 +926,9 @@ pub unsafe extern "C" fn sextant_verify_created_output(
 /// `SextantWatchVerdict.kind`: NO spend of the watched outpoint was observed across the
 /// verified window (the honest windowed verdict — read [`SextantWatchVerdict`]'s scope).
 pub const SEXTANT_WATCH_NO_SPEND_OBSERVED: u8 = 1;
-/// `SextantWatchVerdict.kind`: a verified, body-committed block in the window carries a
-/// spend of the watched outpoint — a definite refuse. Authoritative against the verified
+/// `SextantWatchVerdict.kind`: a verified, body-committed block in the window lists the
+/// watched outpoint among a transaction's inputs or collateral inputs — a definite refuse,
+/// whichever of the two its phase-2 outcome consumed. Authoritative against the verified
 /// window regardless of freshness; whether that authority is Mithril-quorum-backed or
 /// merely header-vouched is carried in `spend_region` (`SEXTANT_WATCH_REGION_*`). A
 /// `HEADER_VOUCHED` spend rests on the same `mithril_quorum` assumption a no-spend answer

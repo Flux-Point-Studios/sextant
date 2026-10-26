@@ -116,18 +116,13 @@ pub(crate) fn recommitted(block: &[u8], range: Range<usize>, replacement: &[u8])
 
 /// The phase-2 outcome of each of a block's `tx_count` transactions, read from its
 /// `invalid_transactions` element (block index 4): `true` where the transaction is
-/// phase-2-valid. The element lists the invalid transactions' indices, as a bare or
-/// tag-258 array in either length form. The ledger aligns that list with the
-/// transactions by position, which reads it as the set it names only while the indices
-/// strictly ascend, so a repeated or descending index, one past the last transaction, or
-/// a non-uint entry is refused.
+/// phase-2-valid. The element lists the invalid transactions' indices as a bare array in
+/// either length form. The ledger's list decoder takes no tag, and its flag alignment
+/// throws on a repeated or descending index (`Data.Sequence.replicate` of a negative gap),
+/// so a tag, a repeated or descending index, one past the last transaction, or a non-uint
+/// entry is refused.
 pub(crate) fn phase2_valid_flags(region: &[u8], tx_count: usize) -> Result<Vec<bool>, ()> {
     let mut d = Decoder::new(region);
-    if d.datatype().map_err(|_| ())? == minicbor::data::Type::Tag
-        && d.tag().map_err(|_| ())?.as_u64() != 258
-    {
-        return Err(());
-    }
     let len = d.array().map_err(|_| ())?;
     let mut valid = alloc::vec![true; tx_count];
     let mut lowest = 0;
@@ -375,10 +370,11 @@ pub enum WatchVerdict {
         /// The trust basis, carrying the surfaced assumptions.
         basis: WatchBasis,
     },
-    /// A verified, body-committed block in the window spends the watched outpoint — a
-    /// definite refuse. Authoritative against the verified window regardless of
-    /// freshness; whether that authority is Mithril-quorum-backed or merely
-    /// header-vouched is carried in `region` (see [`SpendRegion`]). A `HeaderVouched`
+    /// A verified, body-committed block in the window lists the watched outpoint among a
+    /// transaction's inputs or collateral inputs — a definite refuse, whichever of the two
+    /// the transaction's phase-2 outcome consumed. Authoritative against the verified
+    /// window regardless of freshness; whether that authority is Mithril-quorum-backed or
+    /// merely header-vouched is carried in `region` (see [`SpendRegion`]). A `HeaderVouched`
     /// spend rests on the same `mithril_quorum` assumption a no-spend verdict does; only
     /// a `MithrilCertified` spend is authoritative independent of that assumption.
     SpentObserved {
@@ -730,30 +726,27 @@ mod tests {
     }
 
     #[test]
-    fn the_phase_2_record_reads_as_the_ledger_aligns_it() {
+    fn the_phase_2_record_reads_as_the_ledger_decodes_it() {
         let flags =
-            |valid: &[usize]| -> Vec<bool> { (0..4).map(|i| !valid.contains(&i)).collect() };
-        // [], [1, 3] bare, tag-258 wrapped, and indefinite: the set they name.
+            |invalid: &[usize]| -> Vec<bool> { (0..4).map(|i| !invalid.contains(&i)).collect() };
+        // [], and [1, 3] definite and indefinite: the set they name.
         assert_eq!(phase2_valid_flags(&[0x80], 4), Ok(vec![true; 4]));
-        for region in [
-            &[0x82, 0x01, 0x03][..],
-            &[0xd9, 0x01, 0x02, 0x82, 0x01, 0x03],
-            &[0x9f, 0x01, 0x03, 0xff],
-        ] {
+        for region in [&[0x82, 0x01, 0x03][..], &[0x9f, 0x01, 0x03, 0xff]] {
             assert_eq!(
                 phase2_valid_flags(region, 4),
                 Ok(flags(&[1, 3])),
                 "{region:02x?}"
             );
         }
-        // The ledger aligns the list by position: [3, 1] marks 3 and 4, [1, 1] marks 1 and
-        // 2. Neither reads as a set, so both are refused, as is an index past the last
-        // transaction, a non-uint, another tag, a non-array, and a trailing byte.
+        // Refused as the ledger refuses them: a descending or repeated index, one past the
+        // last transaction, a negative one, a tag-258 set or any other tag where the ledger
+        // reads a list, a map, and a byte after the list.
         for region in [
             &[0x82, 0x03, 0x01][..],
             &[0x82, 0x01, 0x01],
             &[0x81, 0x04],
             &[0x81, 0x20],
+            &[0xd9, 0x01, 0x02, 0x82, 0x01, 0x03],
             &[0xd8, 0x18, 0x81, 0x01],
             &[0xa0],
             &[0x81, 0x01, 0x00],
@@ -762,11 +755,67 @@ mod tests {
         }
     }
 
-    /// The scan reads mainnet 13,591,743's phase-2 record, under which transaction 7
-    /// created only its collateral return, and stops on a record the ledger would align
-    /// differently: the block re-committed with `[7, 7]` or `[8, 7]` is a malformed body.
+    /// `alignedValidFlags` as cardano-ledger f649f975 writes it (blob d5e45aca,
+    /// Alonzo/BlockBody/Internal.hs:283-290), with `Data.Sequence.replicate`'s error on a
+    /// negative count (containers 0.6.7, Data/Sequence/Internal.hs:1699-1702) as `None`,
+    /// behind the decoder's range check (:241-246) and cut to the transactions by its zip
+    /// (:250).
+    fn ledger_flags(n: i64, indices: &[i64]) -> Option<Vec<bool>> {
+        fn replicate(count: i64) -> Option<Vec<bool>> {
+            Some(vec![true; usize::try_from(count).ok()?])
+        }
+        fn aligned(prev: i64, n: i64, indices: &[i64]) -> Option<Vec<bool>> {
+            let Some((&x, rest)) = indices.split_first() else {
+                return replicate(n);
+            };
+            let mut flags = replicate(x - prev - 1)?;
+            flags.push(false);
+            flags.extend(aligned(x, n - (x - prev), rest)?);
+            Some(flags)
+        }
+        if indices.iter().any(|x| !(0..n).contains(x)) {
+            return None;
+        }
+        let mut flags = aligned(-1, n, indices)?;
+        flags.truncate(usize::try_from(n).ok()?);
+        Some(flags)
+    }
+
+    /// Every record of up to four indices drawn from -1..=n, definite and indefinite,
+    /// reads as [`ledger_flags`] reads it, for each transaction count up to 4.
     #[test]
-    fn a_scan_stops_on_a_phase_2_record_that_reads_as_no_set() {
+    fn the_phase_2_record_reads_as_the_ledgers_aligned_valid_flags() {
+        for n in 0..=4i64 {
+            let base = n + 2;
+            for len in 0..=4u32 {
+                for code in 0..base.pow(len) {
+                    let indices: Vec<i64> =
+                        (0..len).map(|k| code / base.pow(k) % base - 1).collect();
+                    let entries: Vec<u8> = indices
+                        .iter()
+                        .map(|&x| if x < 0 { 0x20 } else { x as u8 })
+                        .collect();
+                    let expected = ledger_flags(n, &indices);
+                    for region in [
+                        [&[0x80 | len as u8][..], &entries].concat(),
+                        [&[0x9f][..], &entries, &[0xff]].concat(),
+                    ] {
+                        assert_eq!(
+                            phase2_valid_flags(&region, n as usize).ok(),
+                            expected,
+                            "{n} {indices:?} {region:02x?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The scan reads mainnet 13,591,743's phase-2 record, under which transaction 7
+    /// created only its collateral return, and stops on a record the ledger refuses: the
+    /// block re-committed with `[7, 7]`, `[8, 7]` or a tag-258 `[7]` is a malformed body.
+    #[test]
+    fn a_scan_stops_on_a_phase_2_record_the_ledger_refuses() {
         let hex_txt = std::fs::read_to_string("tests/vectors/invalid-mainnet-13591743.block")
             .expect("the phase-2 fixture");
         let block = hex::decode(hex_txt.trim()).expect("hex");
@@ -778,8 +827,12 @@ mod tests {
         };
         assert!(matches!(created(&block, 3), Ok(true)));
         assert!(matches!(created(&block, 0), Ok(false)));
-        for record in [[0x82, 0x07, 0x07], [0x82, 0x08, 0x07]] {
-            let forged = recommitted(&block, spans.invalid_transactions.clone(), &record);
+        for record in [
+            &[0x82, 0x07, 0x07][..],
+            &[0x82, 0x08, 0x07],
+            &[0xd9, 0x01, 0x02, 0x81, 0x07],
+        ] {
+            let forged = recommitted(&block, spans.invalid_transactions.clone(), record);
             for index in [0, 3] {
                 assert!(
                     matches!(created(&forged, index), Err(ScanFailure::MalformedBody)),

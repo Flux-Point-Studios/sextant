@@ -165,18 +165,21 @@ fn a_forged_block_with_a_recomputed_commitment_refuses_under_the_trusted_hash() 
     assert_ne!(forged[spans[0].clone()], block[spans[0].clone()]);
 }
 
-/// The ledger aligns `invalid_transactions` with the transactions by position, so only a
-/// strictly ascending, in-range list reads as the set it names: a repeat, a descent, an
-/// index past the 21 transactions, and a non-array all refuse.
+/// The ledger reads `invalid_transactions` only as a list, with no tag, of strictly
+/// ascending indices below the transaction count: a repeat, a descent, an index past the 21
+/// transactions, a negative or non-uint entry, a map, and a tag-258 set all refuse.
 #[test]
-fn a_validity_set_out_of_strict_ascending_order_refuses() {
+fn a_validity_record_the_ledger_refuses_refuses() {
     let block = block();
     for invalid in [
         &[0x82, 0x07, 0x07][..],
         &[0x82, 0x08, 0x07],
         &[0x81, 0x15],
         &[0x81, 0x18, 0x40],
+        &[0x81, 0x20],
+        &[0x81, 0x41, 0x00],
         &[0xa0],
+        &[0xd9, 0x01, 0x02, 0x81, 0x07],
     ] {
         let forged = forged(&block, 4, invalid);
         let (view, _) = sextant::header::HeaderView::decode_block(&forged).expect("block");
@@ -651,6 +654,7 @@ mod ffi {
                 .block_hash
         };
         let repeated = forged(&block, 4, &[0x82, 0x07, 0x07]);
+        let tagged = forged(&block, 4, &[0xd9, 0x01, 0x02, 0x81, 0x07]);
         let twice = with_the_first_transaction_twice(&block);
         // {1: [h'00']}: an output no read could return.
         let bad_body = [0xa1, 0x01, 0x81, 0x41, 0x00];
@@ -697,6 +701,15 @@ mod ffi {
                 "repeated index",
                 &repeated,
                 &own_hash(&repeated),
+                &tx0,
+                0,
+                S::CreatedMalformedValidity,
+                0,
+            ),
+            (
+                "tagged record",
+                &tagged,
+                &own_hash(&tagged),
                 &tx0,
                 0,
                 S::CreatedMalformedValidity,
