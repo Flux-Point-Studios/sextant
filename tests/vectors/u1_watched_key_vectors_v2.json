@@ -1,5 +1,5 @@
 {
-  "note": "Expected values are hand-labelled from the Conway CDDL and the U1 contract -- the independent oracle for both the Python reference (r57_first_use.py) and the Sextant watched-key predicate (D:/fluxPoint/sextant). Per-implementation incomplete reason strings are not part of this contract; only target_found, complete and verdict are. This is the parity spec, not a second origin-consensus engine (U1 contract C7).",
+  "note": "Expected values are hand-labelled from the Conway CDDL and the U1 contract -- the independent oracle for both the Python reference (r57_first_use.py) and the Sextant watched-key predicate (D:/fluxPoint/sextant). Per-implementation incomplete reason strings are not part of this contract; only target_found, complete and verdict are. This is the parity spec, not a second origin-consensus engine (U1 contract C7). v2: every semantic correction to v1 is recorded on its vector under `correction`; v1 stays archived unchanged.",
   "vectors": [
     {
       "name": "supported_era_no_use",
@@ -244,13 +244,19 @@
       "expected": {
         "use_surfaces": {
           "target_found": true,
-          "complete": true
+          "complete": false
         },
         "resolved_input": {
           "target_found": false,
           "complete": true
         },
         "verdict": "USE_FOUND"
+      },
+      "correction": {
+        "field": "use_surfaces.complete",
+        "v1": true,
+        "v2": false,
+        "reason": "A Conway proposal_procedure is [deposit, reward_account, gov_action, anchor]. This 2-element fixture is no modelled shape, so coverage is incomplete. The reward account it carries still counts, so the verdict stays USE_FOUND."
       }
     },
     {
@@ -262,13 +268,19 @@
       "expected": {
         "use_surfaces": {
           "target_found": true,
-          "complete": true
+          "complete": false
         },
         "resolved_input": {
           "target_found": false,
           "complete": true
         },
         "verdict": "USE_FOUND"
+      },
+      "correction": {
+        "field": "use_surfaces.complete",
+        "v1": true,
+        "v2": false,
+        "reason": "A Conway proposal_procedure is [deposit, reward_account, gov_action, anchor]. This 2-element fixture is no modelled shape, so coverage is incomplete. The reward account it carries still counts, so the verdict stays USE_FOUND."
       }
     },
     {

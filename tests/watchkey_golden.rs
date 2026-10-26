@@ -1,15 +1,16 @@
-//! The 21 golden U1 watched-key vectors. The oracle is r57-live's
-//! `scripts/u1_watched_key_vectors.json`, git blob a32cf41a; its CRLF Windows
-//! working copy hashes to d0c1ea33.
+//! The 21 golden U1 watched-key vectors, v2. The oracle is r57-live's
+//! `scripts/u1_watched_key_vectors_v2.json`, written by gen_u1_vectors_v2.py: the
+//! archived v1 (SHA-256 3b4bc95e) with each reviewed semantic correction recorded
+//! on its vector.
 
 #[macro_use]
 mod common;
 
-const ORACLE: &str = include_str!("vectors/u1_watched_key_vectors.json");
+const ORACLE: &str = include_str!("vectors/u1_watched_key_vectors_v2.json");
 
 oracle_tests!(
     ORACLE,
-    "3b4bc95ec13a600a5dde8c552c4600bf5d67634894a9abde709929e9ee5eee39";
+    "0041b40773dde90e4912f12f049ffef61e25f8e14fff8d519c53dae714dc5df6";
     supported_era_no_use,
     output_payment,
     output_stake,

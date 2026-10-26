@@ -215,7 +215,9 @@ pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 }
 
 /// One output: its address credentials through the crate's own decode_single_output,
-/// then the reference script at map key 3, which that read-path decoder skips.
+/// then the reference script at map key 3, which that read-path decoder skips. A
+/// map key outside 0-3 (address, value, datum_option, script_ref) is an unmodelled
+/// field and leaves coverage incomplete.
 fn output_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
@@ -235,17 +237,18 @@ fn output_watched(
         let key = output.u64().map_err(|_| ())?;
         let value = output.position();
         output.skip().map_err(|_| ())?;
-        if key == 3
-            && reference_script_watched(
+        let closed = match key {
+            0..=2 => true,
+            3 => reference_script_watched(
                 &output.input()[value..output.position()],
                 watched,
                 budget,
                 scan,
             )
-            .is_err()
-        {
-            scan.complete = false;
-        }
+            .is_ok(),
+            _ => false,
+        };
+        scan.complete &= closed;
         i += 1;
     }
     Ok(())
@@ -253,9 +256,10 @@ fn output_watched(
 
 /// A reference script: a tag-24 wrapper over CBOR `[script_type, script]`. A
 /// native script (type 0) carries its sig clauses in clear and is deep-walked on
-/// the caller's budget; Plutus scripts (types 1-3) are bytecode with no credential
-/// in clear. A wrapper that does not unwrap, an unknown type or trailing bytes
-/// return `Err`, which leaves coverage incomplete.
+/// the caller's budget; Plutus scripts (types 1-3) are byte strings with no
+/// credential in clear. A wrapper that does not unwrap, a Plutus script that is no
+/// byte string, an unknown type or trailing bytes return `Err`, which leaves
+/// coverage incomplete.
 fn reference_script_watched(
     wrapped: &[u8],
     watched: &BTreeSet<[u8; 28]>,
@@ -272,7 +276,9 @@ fn reference_script_watched(
     }
     match script.u64().map_err(|_| ())? {
         0 => collect_watched(&mut script, watched, budget, scan)?,
-        1..=3 => return Ok(()),
+        1..=3 => {
+            script.bytes().map_err(|_| ())?;
+        }
         _ => return Err(()),
     }
     if script.position() == script.input().len() {
@@ -372,7 +378,8 @@ pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 /// Does a watched key appear in a proposal -- body key 20, a set of `[deposit,
 /// reward_account, gov_action, anchor]` -- as its deposit-return reward account
 /// (bytes [1..29] of element 1) or at a typed credential position of its
-/// gov_action.
+/// gov_action. A proposal of another arity leaves coverage incomplete; the
+/// positions it does carry still count.
 pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 20 {
@@ -411,8 +418,8 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     }
                     k += 1;
                 }
-                if k < 2 {
-                    return Err(());
+                if k != 4 {
+                    scan.complete = false;
                 }
                 j += 1;
             }
@@ -811,12 +818,16 @@ const KNOWN_BODY_KEYS: [u64; 21] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
 
+/// Witness-set keys the ledger defines: vkeys, native scripts, bootstrap, Plutus
+/// V1, Plutus data, redeemers, Plutus V2 and Plutus V3.
+const KNOWN_WITNESS_KEYS: core::ops::RangeInclusive<u64> = 0..=7;
+
 /// The watched-key scan of one transaction: its body and witness surfaces folded
 /// into one scan, beside the inputs it consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionScan {
-    /// Every body and witness surface, plus the check that the body holds no key
-    /// outside the ledger's.
+    /// Every body and witness surface, plus the checks that the body and the
+    /// witness set hold no key outside the ledger's.
     pub surfaces: Scan,
     /// The creating outputs of the inputs the transaction consumes.
     pub inputs: Scan,
@@ -860,6 +871,10 @@ pub fn transaction_use<'a>(
     let scans = [
         scan_map(body, |key, d, scan| {
             scan.complete &= KNOWN_BODY_KEYS.contains(&key);
+            d.skip().map_err(|_| ())
+        }),
+        scan_map(witnesses, |key, d, scan| {
+            scan.complete &= KNOWN_WITNESS_KEYS.contains(&key);
             d.skip().map_err(|_| ())
         }),
         required_signer_use(body, watched),
