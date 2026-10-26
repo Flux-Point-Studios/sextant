@@ -13,7 +13,7 @@ const ORACLE: &str = include_str!("vectors/u1_byron_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "bb67363e00ce5f39b5746c2c89612a672fef819bc3d933c26c3ffc8426008340";
+    "5894d70db1d110acfbf9ace9752d7a408e2f81a029611fee59b7988a15fd4fea";
     byron_icarus_unwatched,
     byron_daedalus_unwatched,
     byron_watched_bootstrap,

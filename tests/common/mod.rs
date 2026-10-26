@@ -5,7 +5,7 @@
 
 use minicbor::Decoder;
 use serde_json::Value;
-use sextant::utxo::OutPoint;
+use sextant::utxo::{OutPoint, item_end};
 use sextant::watchkey::{Scan, Verdict, transaction_use};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,11 +33,16 @@ fn hex_bytes(value: &Value) -> Vec<u8> {
     hex::decode(value.as_str().expect("hex string")).expect("valid hex")
 }
 
-/// Body span, witness-set span and validity flag of a Conway
-/// `[body, witness_set, is_valid, auxiliary_data]`; `None` when it does not decode.
+/// Body span, witness-set span and validity flag of an Alonzo-onward
+/// `[body, witness_set, is_valid, auxiliary_data]`, or of a Shelley-to-Mary
+/// `[body, witness_set, auxiliary_data]`, valid by construction. The auxiliary data
+/// must be one well-formed item ending the input, as the reference frames it; the body
+/// and the witness set are delimited here, and `transaction_use` judges them. `None`
+/// for any other framing.
 fn envelope(tx: &[u8]) -> Option<(&[u8], &[u8], bool)> {
     let mut d = Decoder::new(tx);
-    if d.array().ok()? != Some(4) {
+    let count = d.array().ok()??;
+    if count != 3 && count != 4 {
         return None;
     }
     let body = d.position();
@@ -45,12 +50,12 @@ fn envelope(tx: &[u8]) -> Option<(&[u8], &[u8], bool)> {
     let witnesses = d.position();
     d.skip().ok()?;
     let end = d.position();
-    let is_valid = d.bool().ok()?;
-    d.skip().ok()?;
-    if d.position() != tx.len() {
-        return None;
-    }
-    Some((&tx[body..witnesses], &tx[witnesses..end], is_valid))
+    let is_valid = count == 3 || d.bool().ok()?;
+    (item_end(tx, d.position()) == Some(tx.len())).then_some((
+        &tx[body..witnesses],
+        &tx[witnesses..end],
+        is_valid,
+    ))
 }
 
 fn resolutions(vector: &Value) -> BTreeMap<OutPoint, Vec<u8>> {

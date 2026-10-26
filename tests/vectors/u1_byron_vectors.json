@@ -1349,13 +1349,28 @@
       "expected": {
         "use_surfaces": {
           "target_found": false,
-          "complete": true
+          "complete": false
         },
         "resolved_input": {
           "target_found": false,
-          "complete": true
+          "complete": false
         },
-        "verdict": "NO_USE"
+        "verdict": "INCOMPLETE"
+      },
+      "correction": {
+        "previous_expected": {
+          "use_surfaces": {
+            "target_found": false,
+            "complete": true
+          },
+          "resolved_input": {
+            "target_found": false,
+            "complete": true
+          },
+          "verdict": "NO_USE"
+        },
+        "previous_fixture_sha256": "bb67363e00ce5f39b5746c2c89612a672fef819bc3d933c26c3ffc8426008340",
+        "reason": "The CLEAN label read only the body and the witness set. Root found round 5's split reading a transaction whose fourth item was missing or cut short as clean, and Codex ruled the envelope framed strictly: exactly its items, each well-formed, the last ending the input. A break where the auxiliary data is due fails that framing, so nothing reads the transaction. cardano-cli 11.0.0.0 agrees, decode only: around a minimal valid body it refuses that break in the Alonzo, Babbage and Conway views (materios's envelope oracle, manifest sha256 287dfbcd...)."
       }
     },
     {

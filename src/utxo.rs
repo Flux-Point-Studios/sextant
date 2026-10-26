@@ -464,6 +464,14 @@ pub(crate) fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
     }
 }
 
+/// The end of the one CBOR item at `at` in `data`, read strictly: `None` when the item is
+/// cut short or malformed, or holds a break where an item is due at any depth.
+pub fn item_end(data: &[u8], at: usize) -> Option<usize> {
+    let mut d = Decoder::new(data);
+    d.set_position(at);
+    skip_item(&mut d).ok().map(|()| d.position())
+}
+
 /// An open container in [`walk_item`]: the items still due in a definite one, or `None`
 /// for an indefinite one, which ends at a break (a map's only between pairs).
 struct Open {
@@ -949,6 +957,15 @@ mod tests {
         // {1: [o], 1: [o]}: the outputs key repeated.
         let repeated = [&[0xa2, 0x01, 0x81][..], &o, &[0x01, 0x81], &o].concat();
         assert_eq!(output_count(&repeated), Err(UtxoError::MalformedTx));
+    }
+
+    #[test]
+    fn item_end_reads_one_item_strictly() {
+        // A byte before [1, 2], then the item: its end, read from its own offset.
+        assert_eq!(item_end(&[0x01, 0x82, 0x01, 0x02, 0x00], 1), Some(4));
+        // A break where the second element is due, and an item cut short.
+        assert_eq!(item_end(&[0x82, 0x01, 0xff], 0), None);
+        assert_eq!(item_end(&[0x82, 0x01], 0), None);
     }
 
     #[test]
