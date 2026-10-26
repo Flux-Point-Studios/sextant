@@ -1,0 +1,43 @@
+== UNMUTATED
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	USE_FOUND
+    min_treasury_e1	USE_FOUND
+    min_second_proposal	USE_FOUND
+    min_removed_2nd	USE_FOUND
+    min_added_2nd	USE_FOUND
+== M22_removal_first_only  (diff:  1 file changed, 1 insertion(+), 1 deletion(-))
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	USE_FOUND
+    min_treasury_e1	USE_FOUND
+    min_second_proposal	USE_FOUND
+    min_removed_2nd	NO_USE
+    min_added_2nd	USE_FOUND
+== M23_add_map_first_only  (diff:  1 file changed, 1 insertion(+), 1 deletion(-))
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	USE_FOUND
+    min_treasury_e1	USE_FOUND
+    min_second_proposal	USE_FOUND
+    min_removed_2nd	USE_FOUND
+    min_added_2nd	NO_USE
+== M24_treasury_first_only  (diff:  1 file changed, 1 insertion(+), 1 deletion(-))
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	NO_USE
+    min_treasury_e1	USE_FOUND
+    min_second_proposal	USE_FOUND
+    min_removed_2nd	USE_FOUND
+    min_added_2nd	USE_FOUND
+== M25_proposals_first_only  (diff:  1 file changed, 1 insertion(+), 1 deletion(-))
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	USE_FOUND
+    min_treasury_e1	USE_FOUND
+    min_second_proposal	NO_USE
+    min_removed_2nd	USE_FOUND
+    min_added_2nd	USE_FOUND
+== M26_treasury_header_e0_only  (diff:  1 file changed, 1 insertion(+), 1 deletion(-))
+gov_exit=0 test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s 
+    min_treasury_2nd	USE_FOUND
+    min_treasury_e1	NO_USE
+    min_second_proposal	USE_FOUND
+    min_removed_2nd	USE_FOUND
+    min_added_2nd	USE_FOUND
+?? tests/skeptic_min.rs

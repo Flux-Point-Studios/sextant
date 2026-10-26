@@ -1,0 +1,230 @@
+   Compiling sextant v0.1.0 (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/sextant-gov)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running unittests src/lib.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/sextant-ea4b7f5fde4b9a23)
+
+running 102 tests
+test ancillary::tests::malformed_inputs_fail_closed ... ok
+test effects::tests::decodes_invalid_transaction_indices_bare_and_tagged ... ok
+test effects::tests::empty_invalid_transactions_is_an_empty_set ... ok
+test effects::tests::indefinite_invalid_transactions_array_decodes ... ok
+test effects::tests::invalid_tx_dedups_duplicate_collateral ... ok
+test ffi::tests::guard_passes_through_the_ok_code ... ok
+test ffi::tests::guard_converts_panic_to_err_panic ... ok
+test ffi::tests::project_header_genesis_has_no_prev_hash ... ok
+test ffi::tests::project_watch_verdict_maps_the_spend_region ... ok
+test ffi::tests::refusal_code_agrees_with_the_batch_equivalence_map ... ok
+test ancillary::tests::the_real_preprod_manifest_verifies_under_the_pinned_key ... ok
+test ancillary::tests::a_tampered_digest_fails_the_signature ... ok
+test ffi::tests::spend_status_projects_into_distinct_abi_bands ... ok
+test ffi::tests::status_message_is_defined_for_every_code_and_unknowns ... ok
+test follow::tests::slot_schedule_maps_slots_to_epochs ... ok
+test ancillary::tests::the_real_manifest_is_rejected_under_the_mainnet_key ... ok
+test inclusion::tests::a_mutated_ckb_proof_item_diverges_from_the_true_root ... ok
+test utxo::tests::collateral_key13_is_a_spend ... ok
+test utxo::tests::decodes_a_legacy_output_with_a_datum_hash ... ok
+test follow::tests::re_anchor_with_a_matching_proof_certifies_the_spend_region ... ok
+test utxo::tests::decodes_a_map_output_with_a_datum_hash_option ... ok
+test utxo::tests::malformed_input_body_is_malformed_tx ... ok
+test utxo::tests::overwide_index_is_malformed_tx ... ok
+test utxo::tests::reference_input_key18_is_not_a_spend ... ok
+test utxo::tests::rejects_a_body_with_no_outputs_field ... ok
+test utxo::tests::rejects_a_map_output_missing_its_address ... ok
+test utxo::tests::rejects_a_non_map_transaction_body ... ok
+test utxo::tests::rejects_an_out_of_range_index ... ok
+test utxo::tests::rejects_an_output_that_is_neither_map_nor_array ... ok
+test utxo::tests::tag258_and_bare_array_decode_to_the_same_outpoint ... ok
+test utxo::tests::spend_status_tiers_are_exhaustively_wired ... ok
+test utxoset::tests::anchor_basis_classes_are_distinct_and_ride_the_snapshot ... ok
+test utxoset::tests::apply_at_max_block_number_fails_closed_not_overflow ... ok
+test utxoset::tests::apply_creates_and_spends_membership ... ok
+test utxoset::tests::apply_is_atomic_under_a_store_failure ... ok
+test utxoset::tests::certified_spend_status_fails_closed_without_a_bound_anchor ... ok
+test utxoset::tests::certified_spend_status_grades_membership_with_the_bound_basis_and_recency ... ok
+test utxoset::tests::duplicate_output_fails_closed ... ok
+test utxoset::tests::in_block_chain_creates_then_spends_to_net_absent ... ok
+test utxoset::tests::non_contiguous_block_is_refused ... ok
+test utxoset::tests::from_snapshot_seeds_membership_and_extends ... ok
+test utxoset::tests::fingerprint_is_the_ordered_sha256_over_outpoint_keys ... ok
+test utxoset::tests::rollback_beyond_retained_history_is_unreachable ... ok
+test utxoset::tests::rollback_across_multiple_blocks_to_a_retained_ancestor ... ok
+test utxoset::tests::rollback_is_atomic_under_a_store_failure ... ok
+test utxoset::tests::rollback_reverses_an_in_block_chain ... ok
+test utxoset::tests::rollback_reverses_a_block_exactly ... ok
+test utxoset::tests::spend_of_unknown_output_fails_closed ... ok
+test watchkey::tests::byron_address_yields_nothing ... ok
+test watchkey::tests::absent_required_signer_is_not_found_but_complete ... ok
+test watchkey::tests::base_address_has_payment_and_stake ... ok
+test watchkey::tests::enterprise_address_has_payment_only ... ok
+test watchkey::tests::malformed_body_is_incomplete_never_a_clean_no_use ... ok
+test watchkey::tests::malformed_collateral_return_is_incomplete ... ok
+test watchkey::tests::malformed_certificates_is_incomplete ... ok
+test watchkey::tests::malformed_output_is_incomplete ... ok
+test watchkey::tests::malformed_proposal_is_incomplete ... ok
+test watchkey::tests::malformed_voter_is_incomplete ... ok
+test watchkey::tests::malformed_withdrawal_is_incomplete ... ok
+test watchkey::tests::reward_address_has_no_payment_but_a_reward_credential ... ok
+test watchkey::tests::malformed_witness_is_incomplete ... ok
+test watchkey::tests::short_slices_never_panic_and_yield_none ... ok
+test watchkey::tests::unknown_certificate_kind_is_incomplete ... ok
+test watchkey::tests::unwatched_certificate_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_native_script_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_proposal_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_output_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_update_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_voter_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_vkey_witness_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_withdrawal_is_not_found_but_complete ... ok
+test watchkey::tests::watched_bootstrap_witness_is_found ... ok
+test watchkey::tests::watched_certificate_credential_is_found ... ok
+test watchkey::tests::watched_collateral_return_credential_is_found ... ok
+test watchkey::tests::watched_native_script_sig_is_found ... ok
+test watchkey::tests::watched_output_stake_credential_is_found ... ok
+test watchkey::tests::watched_output_payment_credential_is_found ... ok
+test watchkey::tests::watched_proposal_reward_account_is_found ... ok
+test watchkey::tests::watched_required_signer_is_found_bare_and_tagged ... ok
+test watchkey::tests::watched_update_genesis_hash_is_found ... ok
+test watchkey::tests::watched_voter_credential_is_found ... ok
+test watchkey::tests::watched_vkey_witness_is_found ... ok
+test watchkey::tests::watched_withdrawal_credential_is_found ... ok
+test window::tests::tx_body_spans_rejects_a_non_array_region ... ok
+test window::tests::tx_body_spans_rejects_an_indefinite_array_without_a_closing_break ... ok
+test window::tests::tx_body_spans_rejects_bytes_after_an_indefinite_break ... ok
+test window::tests::tx_body_spans_rejects_trailing_bytes_in_the_region ... ok
+test window::tests::tx_body_spans_splits_a_definite_array_into_element_spans ... ok
+test window::tests::tx_body_spans_splits_an_indefinite_array ... ok
+test inclusion::tests::calculate_root_matches_ckb_across_shapes ... ok
+test effects::tests::extracts_a_block_with_indefinite_length_tx_bodies ... ok
+test window::tests::indefinite_tx_bodies_split_is_byte_exact_vs_pallas ... ok
+test setfollow::tests::a_non_contiguous_block_fails_closed_at_apply ... ok
+test follow::tests::rollback_below_the_turn_re_appends_without_re_staging ... ok
+test follow::tests::tip_at_u64_max_refuses_the_next_append_without_panicking ... ok
+test follow::tests::number_skipping_block_is_refused_not_contiguous ... ok
+test setfollow::tests::a_wrong_epoch_nonce_fails_closed_at_the_header ... ok
+test setfollow::tests::rollback_restores_the_tip_and_membership ... ok
+test setfollow::tests::an_omitted_pre_s_outpoint_is_caught_by_the_follow ... ok
+test setfollow::tests::a_phantom_outpoint_is_caught_when_the_window_re_creates_it ... ok
+test setfollow::tests::follows_a_real_preprod_run_advancing_the_set ... ok
+test follow::tests::eviction_finalizes_a_spend_that_survives_the_ring_cap ... ok
+
+test result: ok. 102 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+LIB_EXIT=0
+   Compiling sextant v0.1.0 (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/sextant-gov)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
+     Running tests/watchkey_coverage.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/watchkey_coverage-c43640ec00d043ec)
+
+running 7 tests
+test certificate_match_survives_a_later_malformed_child ... ok
+test native_script_match_survives_a_later_malformed_child ... ok
+test update_match_survives_a_later_malformed_child ... ok
+test proposal_without_reward_account_is_incomplete ... ok
+test voter_without_credential_is_incomplete ... ok
+test withdrawal_without_reward_account_is_incomplete ... ok
+test witness_without_verification_key_is_incomplete ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_golden.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/watchkey_golden-9cfe8716135db373)
+
+running 23 tests
+test oracle_is_the_pinned_hand_labelled_file ... ok
+test every_oracle_vector_has_a_test ... ok
+test native_script_sig ... ok
+test native_script_deep70 ... ok
+test collateral_return_refscript ... ok
+test output_stake ... ok
+test phase2_collateral_input ... ok
+test proposal_reward_tagged_set ... ok
+test output_payment ... ok
+test proposal_reward_array ... ok
+test pool_owner_tagged_set ... ok
+test required_signer_tagged_set ... ok
+test required_signer_array ... ok
+test undecodable ... ok
+test unknown_cert_kind ... ok
+test pool_reward_account ... ok
+test unresolved_spent_input ... ok
+test supported_era_no_use ... ok
+test reference_script_native ... ok
+test withdrawal ... ok
+test vkey_witness_c_control ... ok
+test spent_input_payment ... ok
+test unsupported_era_body_key ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_governance.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/watchkey_governance-4499d5d47f0bc9a1)
+
+running 19 tests
+test every_oracle_vector_has_a_test ... ok
+test gov_committee_removed ... ok
+test gov_committee_added ... ok
+test gov_committee_removed_tagged_sets ... ok
+test gov_constitution_script ... FAILED
+test gov_control_info ... ok
+test gov_control_hard_fork ... ok
+test gov_control_parameter_change ... ok
+test gov_control_treasury ... ok
+test gov_control_no_confidence ... ok
+test gov_control_new_constitution ... ok
+test gov_parameter_change_policy ... ok
+test gov_control_update_committee ... ok
+test gov_treasury_recipient ... ok
+test gov_unknown_action_kind ... ok
+test gov_treasury_policy ... ok
+test oracle_is_the_pinned_hand_labelled_file ... ok
+test gov_unexpected_set_tag ... ok
+test gov_wrong_arity ... ok
+
+failures:
+
+---- gov_constitution_script stdout ----
+
+thread 'gov_constitution_script' (4124595) panicked at tests/common/mod.rs:102:5:
+assertion `left == right` failed: gov_constitution_script: use_surfaces
+  left: Scan { found: false, complete: true }
+ right: Scan { found: true, complete: true }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gov_constitution_script
+
+test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test watchkey_governance`
+     Running tests/watchkey_inputs.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/watchkey_inputs-f8ebe89990231866)
+
+running 14 tests
+test absent_input_set_is_complete_and_does_not_resolve ... ok
+test indefinite_input_set_resolves_its_payment_credential ... ok
+test invalid_transaction_resolves_only_collateral_inputs ... ok
+test malformed_input_set_is_incomplete ... ok
+test proven_input_match_survives_a_later_malformed_input ... ok
+test resolver_error_leaves_a_gap_beside_a_proven_match ... ok
+test reward_address_cannot_prove_a_spent_payment_credential ... ok
+test short_resolved_address_is_incomplete ... ok
+test spent_input_does_not_count_the_stake_credential ... ok
+test tagged_input_set_resolves_its_payment_credential ... ok
+test unresolved_input_leaves_a_gap_beside_a_proven_match ... ok
+test unwatched_spent_payment_is_complete ... ok
+test valid_transaction_resolves_only_regular_inputs ... ok
+test watched_spent_payment_is_found ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_scripts.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/target/debug/deps/watchkey_scripts-87b177b0b67abe45)
+
+running 6 tests
+test chunked_key_hash_counts_as_its_joined_bytes ... ok
+test reference_script_without_its_tag_24_wrapper_is_incomplete ... ok
+test plutus_reference_script_bytes_are_not_credentials ... ok
+test unknown_reference_script_type_is_incomplete ... ok
+test deep_native_script_is_walked_without_a_depth_cap ... ok
+test reference_scripts_share_one_walk_budget ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: 1 target failed:
+    `--test watchkey_governance`
+INT_EXIT=101

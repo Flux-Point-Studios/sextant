@@ -1,0 +1,121 @@
+== gov_treasury_recipient
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [2, {h'e0d1d1d1..'(29B=e0+WATCHED): 1000000}, null], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][1]{key#0}', 29, 1)]  raw-offset hits: [51]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_treasury_policy
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [2, {h'e0d2d2d2..'(29B=e0+OTHER): 1000000}, h'd1d1d1d1..'(28B=WATCHED)], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][2]', 28, 0)]  raw-offset hits: [86]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_committee_added
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [4, null, [], {[0, h'd1d1d1d1..'(28B=WATCHED)]: 500}, 30([2, 3])], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][3]{key#0}[1]', 28, 0)]  raw-offset hits: [54]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_committee_removed
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [4, null, [[0, h'd1d1d1d1..'(28B=WATCHED)]], {}, 30([2, 3])], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][2][0][1]', 28, 0)]  raw-offset hits: [53]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_committee_removed_tagged_sets
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: 258([[100000000000, h'e0c1c1c1..'(29B=RETURN), [4, null, 258([[0, h'd1d1d1d1..'(28B=WATCHED)]]), {}, 30([2, 3])], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]])
+   WATCHED paths: [('$[0]{val#0}<tag258>[0][2][2]<tag258>[0][1]', 28, 0)]  raw-offset hits: [59]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_parameter_change_policy
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [0, null, {0: 44}, h'd1d1d1d1..'(28B=WATCHED)], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][3]', 28, 0)]  raw-offset hits: [54]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_constitution_script
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [5, null, [['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)], h'd1d1d1d1..'(28B=WATCHED)]], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: [('$[0]{val#0}[0][2][2][1]', 28, 0)]  raw-offset hits: [125]
+   model(non-strict)=(True, True, 'USE_FOUND') notes=[]  model(strict)=(True, True, 'USE_FOUND')
+   oracle=(True, True, 'USE_FOUND') resolved_input_expected_clean=True  AGREE=True
+== gov_control_parameter_change
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [0, [h'aaaaaaaa..'(32B=PRIOR_TXID), 0], {0: 44}, null], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_hard_fork
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [1, null, [10, 0]], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_treasury
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [2, {h'e0d2d2d2..'(29B=e0+OTHER): 1000000}, null], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_no_confidence
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [3, [h'aaaaaaaa..'(32B=PRIOR_TXID), 0]], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_update_committee
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [4, null, [[0, h'd2d2d2d2..'(28B=OTHER)]], {[1, h'd3d3d3d3..'(28B=OTHER_SCRIPT)]: 400}, 30([1, 2])], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_new_constitution
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [5, null, [['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)], null]], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_control_info
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [6], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, True, 'NO_USE') notes=[]  model(strict)=(False, True, 'NO_USE')
+   oracle=(False, True, 'NO_USE') resolved_input_expected_clean=True  AGREE=True
+== gov_unknown_action_kind
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [7, null], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, False, 'INCOMPLETE') notes=["gov_action: unknown kind ('u', 7)"]  model(strict)=(False, False, 'INCOMPLETE')
+   oracle=(False, False, 'INCOMPLETE') resolved_input_expected_clean=True  AGREE=True
+== gov_wrong_arity
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [2, {h'e0d2d2d2..'(29B=e0+OTHER): 1000000}], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, False, 'INCOMPLETE') notes=['gov_action: kind 2 arity 2']  model(strict)=(False, False, 'INCOMPLETE')
+   oracle=(False, False, 'INCOMPLETE') resolved_input_expected_clean=True  AGREE=True
+== gov_unexpected_set_tag
+   envelope: array4=True body_keys=[20] wits={} valid=true aux=null
+   proposals: [[100000000000, h'e0c1c1c1..'(29B=RETURN), [4, null, 259([[0, h'd2d2d2d2..'(28B=OTHER)]]), {}, 30([1, 2])], ['https://example.invalid/proposal.json', h'0b0b0b0b..'(32B=ANCHOR_HASH)]]]
+   WATCHED paths: []  raw-offset hits: []
+   model(non-strict)=(False, False, 'INCOMPLETE') notes=['gov_action: set under tag 259']  model(strict)=(False, False, 'INCOMPLETE')
+   oracle=(False, False, 'INCOMPLETE') resolved_input_expected_clean=True  AGREE=True
+
+SUMMARY
+gov_treasury_recipient               derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_treasury_policy                  derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_committee_added                  derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_committee_removed                derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_committee_removed_tagged_sets    derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_parameter_change_policy          derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_constitution_script              derived=USE_FOUND  oracle=USE_FOUND  found/complete d=(True, True) o=(True, True) agree=True strict=USE_FOUND
+gov_control_parameter_change         derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_hard_fork                derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_treasury                 derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_no_confidence            derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_update_committee         derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_new_constitution         derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_control_info                     derived=NO_USE     oracle=NO_USE     found/complete d=(False, True) o=(False, True) agree=True strict=NO_USE
+gov_unknown_action_kind              derived=INCOMPLETE oracle=INCOMPLETE found/complete d=(False, False) o=(False, False) agree=True strict=INCOMPLETE
+gov_wrong_arity                      derived=INCOMPLETE oracle=INCOMPLETE found/complete d=(False, False) o=(False, False) agree=True strict=INCOMPLETE
+gov_unexpected_set_tag               derived=INCOMPLETE oracle=INCOMPLETE found/complete d=(False, False) o=(False, False) agree=True strict=INCOMPLETE

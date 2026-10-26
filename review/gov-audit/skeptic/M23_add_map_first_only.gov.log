@@ -1,0 +1,27 @@
+   Compiling sextant v0.1.0 (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/skeptic/sextant)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running tests/watchkey_governance.rs (/tmp/claude-1000/-home-deci/93582ed9-742f-45d3-9e79-74b6bf1ef9fa/scratchpad/u1gov-rt-1792984405-3988372/skeptic/target/debug/deps/watchkey_governance-4499d5d47f0bc9a1)
+
+running 19 tests
+test every_oracle_vector_has_a_test ... ok
+test gov_committee_added ... ok
+test gov_committee_removed_tagged_sets ... ok
+test gov_constitution_script ... ok
+test gov_control_hard_fork ... ok
+test gov_control_info ... ok
+test gov_committee_removed ... ok
+test gov_control_new_constitution ... ok
+test gov_control_no_confidence ... ok
+test gov_control_parameter_change ... ok
+test gov_control_treasury ... ok
+test gov_parameter_change_policy ... ok
+test gov_control_update_committee ... ok
+test gov_treasury_recipient ... ok
+test gov_treasury_policy ... ok
+test gov_unknown_action_kind ... ok
+test oracle_is_the_pinned_hand_labelled_file ... ok
+test gov_unexpected_set_tag ... ok
+test gov_wrong_arity ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

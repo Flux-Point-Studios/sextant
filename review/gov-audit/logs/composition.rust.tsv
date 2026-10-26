@@ -1,0 +1,6 @@
+CP1_use_beside_other_surface_gap	true	false	USE_FOUND	true	true	ok	false	true
+CP2_indef_constitution_then_use	false	false	INCOMPLETE	false	false	ok	false	true
+CP2b_indef_action_then_use	true	false	USE_FOUND	true	false	ok	false	true
+CP3_deposit_W_then_bad_action	true	false	USE_FOUND	true	false	ok	false	true
+CP7_phase2_invalid_mention	true	true	USE_FOUND	true	true	ok	false	true
+CP8_indef_cred_then_use	false	false	INCOMPLETE	false	false	ok	false	true
