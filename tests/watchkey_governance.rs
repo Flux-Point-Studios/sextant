@@ -10,7 +10,7 @@ const ORACLE: &str = include_str!("vectors/u1_governance_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "81a5aa256dbb5ff94503e2f24b9a5ddea8e15630f11b58d8bdbd0b57f679ce2f";
+    "98639ca625ff1baad1606e302f4678c091ef61448f741267a8283b13a1a24cea";
     gov_treasury_recipient,
     gov_treasury_policy,
     gov_committee_added,

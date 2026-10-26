@@ -1,0 +1,465 @@
+{
+  "note": "Imported from materios's independent governance audit with ids and verdicts unchanged; the scan fields follow the rule in gen_u1_governance_audit_vectors.py. Only target_found, complete and verdict are contract.",
+  "vectors": [
+    {
+      "name": "a01_treasury_2nd_of_3",
+      "description": "independent audit A01_treasury_2nd_of_3 (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a3581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d201581de0d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d102581de0d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d403f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A01_treasury_2nd_of_3",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a02_treasury_script_hdr_f0",
+      "description": "independent audit A02_treasury_script_hdr_f0 (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581df0d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d101f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A02_treasury_script_hdr_f0",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a03_treasury_mainnet_e1",
+      "description": "independent audit A03_treasury_mainnet_e1 (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d101f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A03_treasury_mainnet_e1",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a04_treasury_mainnet_f1",
+      "description": "independent audit A04_treasury_mainnet_f1 (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581df1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d101f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A04_treasury_mainnet_f1",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a05_committee_removed_and_added",
+      "description": "independent audit A05_committee_removed_and_added (ledger: rule)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1a18200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d11901f4d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A05_committee_removed_and_added",
+        "label": "USE_FOUND",
+        "ledger": "rule"
+      }
+    },
+    {
+      "name": "a06_removed_3rd_of_3_tagged",
+      "description": "independent audit A06_removed_3rd_of_3_tagged (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6d90102838200581cd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d28201581cd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d48200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A06_removed_3rd_of_3_tagged",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a09_added_indef_map_2nd",
+      "description": "independent audit A09_added_indef_map_2nd (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f680bf8200581cd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2058200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d106ffd81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A09_added_indef_map_2nd",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a10_added_script_cred",
+      "description": "independent audit A10_added_script_cred (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f680a18201581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d107d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A10_added_script_cred",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a11_removed_script_cred",
+      "description": "independent audit A11_removed_script_cred (ledger: valid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818201581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A11_removed_script_cred",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a12_two_props_w_in_2nd",
+      "description": "independent audit A12_two_props_W_in_2nd (ledger: valid)",
+      "raw_tx_hex": "84a11482841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d201f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d101f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A12_two_props_W_in_2nd",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a13_tagged_info_then_add",
+      "description": "independent audit A13_tagged_info_then_add (ledger: valid)",
+      "raw_tx_hex": "84a114d9010282841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1810682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f680a18200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d109d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A13_tagged_info_then_add",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "a14_three_props_constitution_3rd",
+      "description": "independent audit A14_three_props_constitution_3rd (ledger: valid)",
+      "raw_tx_hex": "84a11483841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18301f6820a0082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18203825820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18305f68282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d182782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      },
+      "audit": {
+        "id": "A14_three_props_constitution_3rd",
+        "label": "USE_FOUND",
+        "ledger": "valid"
+      }
+    },
+    {
+      "name": "c08_gov_action_empty",
+      "description": "independent audit C08_gov_action_empty (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C08_gov_action_empty",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c16_cred_kind2",
+      "description": "independent audit C16_cred_kind2 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818202581cd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C16_cred_kind2",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c17_cred_hash27",
+      "description": "independent audit C17_cred_hash27 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818200581bd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C17_cred_hash27",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c20_policy_27",
+      "description": "independent audit C20_policy_27 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18400f6a100182c581bd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C20_policy_27",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c21_policy_29",
+      "description": "independent audit C21_policy_29 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d201581dd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d20082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C21_policy_29",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c22_constitution_hash32",
+      "description": "independent audit C22_constitution_hash32 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18305f68282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b5820d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d20000000082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C22_constitution_hash32",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c25_constitution_arity3",
+      "description": "independent audit C25_constitution_arity3 (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18305f68382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0bf6f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C25_constitution_arity3",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    },
+    {
+      "name": "c27_treasury_key_int",
+      "description": "independent audit C27_treasury_key_int (ledger: invalid)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a10501f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "audit": {
+        "id": "C27_treasury_key_int",
+        "label": "INCOMPLETE",
+        "ledger": "invalid"
+      }
+    }
+  ]
+}
