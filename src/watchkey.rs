@@ -460,13 +460,14 @@ fn gov_action_watched(
     watched: &BTreeSet<[u8; 28]>,
     scan: &mut Scan,
 ) -> Result<(), ()> {
+    let count = array_count(d)?;
     let len = d.array().map_err(|_| ())?;
     if !seq_has_next(d, len, 0).map_err(|_| ())? {
         scan.complete = false;
         return Ok(());
     }
     let kind = d.u64().map_err(|_| ())?;
-    let typed = gov_action_arity(kind).is_some_and(|arity| len == Some(arity));
+    let typed = gov_action_arity(kind) == Some(count);
     if !typed {
         scan.complete = false;
     }
@@ -501,11 +502,18 @@ fn gov_action_watched(
             }
             (true, 0, 3) | (true, 2, 2) => scan.found |= script_hash_watched(d, watched)?,
             (true, 5, 2) => {
-                if d.array().map_err(|_| ())? != Some(2) {
+                let len = d.array().map_err(|_| ())?;
+                let mut i = 0u64;
+                while seq_has_next(d, len, i).map_err(|_| ())? {
+                    match i {
+                        1 => scan.found |= script_hash_watched(d, watched)?,
+                        _ => d.skip().map_err(|_| ())?,
+                    }
+                    i += 1;
+                }
+                if i != 2 {
                     return Err(());
                 }
-                d.skip().map_err(|_| ())?;
-                scan.found |= script_hash_watched(d, watched)?;
             }
             _ => d.skip().map_err(|_| ())?,
         }
@@ -531,12 +539,39 @@ fn script_hash_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Res
     hash28_watched(d, watched)
 }
 
-/// A committee cold credential, `[0, addr_keyhash]` or `[1, script_hash]`.
+/// A committee cold credential, `[0, addr_keyhash]` or `[1, script_hash]`, in
+/// either array encoding.
 fn cold_credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
-    if d.array().map_err(|_| ())? != Some(2) || d.u64().map_err(|_| ())? > 1 {
-        return Err(());
+    let len = d.array().map_err(|_| ())?;
+    let mut found = false;
+    let mut i = 0u64;
+    while seq_has_next(d, len, i).map_err(|_| ())? {
+        match i {
+            0 => {
+                if d.u64().map_err(|_| ())? > 1 {
+                    return Err(());
+                }
+            }
+            1 => found = hash28_watched(d, watched)?,
+            _ => return Err(()),
+        }
+        i += 1;
     }
-    hash28_watched(d, watched)
+    if i == 2 { Ok(found) } else { Err(()) }
+}
+
+/// Element count of the array at `d`, definite or indefinite; `d` does not move.
+/// The ledger accepts both encodings, so an arity check must not depend on one.
+fn array_count(d: &mut Decoder<'_>) -> Result<u64, ()> {
+    let start = d.position();
+    let len = d.array().map_err(|_| ())?;
+    let mut count = 0u64;
+    while seq_has_next(d, len, count).map_err(|_| ())? {
+        d.skip().map_err(|_| ())?;
+        count += 1;
+    }
+    d.set_position(start);
+    Ok(count)
 }
 
 /// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and

@@ -400,6 +400,126 @@
         },
         "verdict": "INCOMPLETE"
       }
+    },
+    {
+      "name": "proposals_foreign_tag",
+      "description": "a proposal set under tag 259 in place of 258, naming the VKH inside: the set is unmodelled and nothing in it is read",
+      "raw_tx_hex": "84a2008182582066666666666666666666666666666666666666666666666666666666666666660014d9010381841b000000174876e800581de0f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f28302a1581de0f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f101f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "proposals_tag24",
+      "description": "a proposal set wrapped as tag-24 bytes, the VKH inside the bytes",
+      "raw_tx_hex": "84a2008182582066666666666666666666666666666666666666666666666666666666666666660014d818587681841b000000174876e800581de0f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1810682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "certificates_foreign_tag",
+      "description": "a certificate set under tag 259",
+      "raw_tx_hex": "84a2008182582066666666666666666666666666666666666666666666666666666666666666660004d901038182008200581cf2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2a0f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "native_scripts_foreign_tag",
+      "description": "a witness native-script set under tag 259",
+      "raw_tx_hex": "84a10081825820666666666666666666666666666666666666666666666666666666666666666600a101d90103818200581cf2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "inputs_foreign_tag",
+      "description": "the spent-input set under tag 259: no input is resolved",
+      "raw_tx_hex": "84a100d9010381825820666666666666666666666666666666666666666666666666666666666666666600a0f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "inputs_not_a_set",
+      "description": "the spent-input field holds a number",
+      "raw_tx_hex": "84a10005a0f5f6",
+      "target_vkh": "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1",
+      "resolve": {
+        "6666666666666666666666666666666666666666666666666666666666666666#0": "60f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
     }
   ]
 }

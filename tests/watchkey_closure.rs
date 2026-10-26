@@ -11,7 +11,7 @@ const ORACLE: &str = include_str!("vectors/u1_closure_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "57d4a1199282097acc9bf35f3516335c9859e1ba6dd895bc31c3b23fa6db1298";
+    "6ba3e6b0cf7e6bf854efaf05a5fa7472e1948b6292499e67f1d6eea91eb5ed1d";
     witness_unknown_key,
     witness_known_keys,
     output_unknown_key,
@@ -32,4 +32,10 @@ oracle_tests!(
     body_key_12,
     certificate_wrong_arity,
     blob_after_empty_map,
+    proposals_foreign_tag,
+    proposals_tag24,
+    certificates_foreign_tag,
+    native_scripts_foreign_tag,
+    inputs_foreign_tag,
+    inputs_not_a_set,
 );
