@@ -4,7 +4,7 @@
 //! a clean NO_USE.
 
 use sextant::watchkey::{
-    Scan, native_script_use, output_use, proposal_use, transaction_use, update_use,
+    Scan, input_use, native_script_use, output_use, proposal_use, transaction_use, update_use,
 };
 use std::collections::BTreeSet;
 
@@ -287,4 +287,163 @@ fn a_definite_map_value_is_walked() {
             complete: true
         }
     );
+}
+
+#[test]
+fn an_indefinite_input_is_resolved() {
+    // {0: [[_ h'33 x 32', 0]]}, the input paying the watched key.
+    let body = [
+        vec![0xa1, 0x00, 0x81, 0x9f, 0x58, 0x20],
+        vec![0x33; 32],
+        vec![0x00, 0xff],
+    ]
+    .concat();
+    let paid = [vec![0x60], WATCHED.to_vec()].concat();
+    assert_eq!(
+        input_use(&body, true, &watched(), |_| Ok(Some(paid.as_slice()))),
+        FOUND
+    );
+}
+
+/// `tag24([0, [0, h'credential']])`: a native script reference with one `sig` clause.
+fn native_script_ref(credential: &[u8; 28]) -> Vec<u8> {
+    [
+        vec![0xd8, 0x18, 0x58, 0x22, 0x82, 0x00, 0x82, 0x00, 0x58, 0x1c],
+        credential.to_vec(),
+    ]
+    .concat()
+}
+
+#[test]
+fn an_indefinite_output_map_is_read_in_full() {
+    // {1: [{_ 0: other, 1: 1, 3: native_script_ref(watched)}]}
+    let body = [
+        vec![0xa1, 0x01, 0x81, 0xbf, 0x00],
+        address(&OTHER),
+        vec![0x01, 0x01, 0x03],
+        native_script_ref(&WATCHED),
+        vec![0xff],
+    ]
+    .concat();
+    assert_eq!(output_use(&body, &watched()), FOUND);
+}
+
+#[test]
+fn the_output_after_an_indefinite_map_is_read() {
+    // {1: [{_ 0: other, 1: 1}, {0: watched, 1: 1}]}
+    let body = [
+        vec![0xa1, 0x01, 0x82, 0xbf, 0x00],
+        address(&OTHER),
+        vec![0x01, 0x01, 0xff, 0xa2, 0x00],
+        address(&WATCHED),
+        vec![0x01, 0x01],
+    ]
+    .concat();
+    assert_eq!(output_use(&body, &watched()), FOUND);
+}
+
+#[test]
+fn an_indefinite_output_map_keeps_the_output_closure() {
+    // {1: [{_ 0: other, 1: 1, 4: 0}]} and {1: [{_ 0: other, 1: 1, 0: other}]}: an unknown
+    // key and a repeated address stay incomplete in either length form.
+    for tail in [vec![0x04, 0x00], [vec![0x00], address(&OTHER)].concat()] {
+        let body = [
+            vec![0xa1, 0x01, 0x81, 0xbf, 0x00],
+            address(&OTHER),
+            vec![0x01, 0x01],
+            tail,
+            vec![0xff],
+        ]
+        .concat();
+        assert_eq!(
+            output_use(&body, &watched()),
+            Scan {
+                found: false,
+                complete: false
+            },
+            "{body:02x?}"
+        );
+    }
+}
+
+#[test]
+fn a_repeated_output_field_is_incomplete_without_a_use() {
+    // {1: [{0: other, 1: 1, k: v, k: v}]} for the coin, a datum hash and an unwatched script.
+    for repeated in [
+        vec![0x01, 0x02],
+        [vec![0x02, 0x82, 0x00, 0x58, 0x20], vec![0x22; 32]].concat(),
+        [vec![0x03], native_script_ref(&OTHER)].concat(),
+    ] {
+        let body = [
+            vec![0xa1, 0x01, 0x81, 0xa4, 0x00],
+            address(&OTHER),
+            vec![0x01, 0x01],
+            repeated.clone(),
+            repeated,
+        ]
+        .concat();
+        assert_eq!(
+            output_use(&body, &watched()),
+            Scan {
+                found: false,
+                complete: false
+            },
+            "{body:02x?}"
+        );
+    }
+}
+
+#[test]
+fn an_output_takes_no_address_from_the_field_after_it() {
+    // {1: [{0: other, 1: 1, <a third entry declared>}], 0: h'60 watched'}: the short output
+    // map would read the body's next entry as its own second address.
+    let body = [
+        vec![0xa2, 0x01, 0x81, 0xa3, 0x00],
+        address(&OTHER),
+        vec![0x01, 0x01, 0x00],
+        address(&WATCHED),
+    ]
+    .concat();
+    assert_eq!(
+        output_use(&body, &watched()),
+        Scan {
+            found: false,
+            complete: false
+        }
+    );
+}
+
+#[test]
+fn a_break_for_an_output_value_proves_no_use() {
+    // {1: [{0: watched, 1: 1, 3: break}]}: a stray break leaves the output's end
+    // unprovable, so even the address read before it proves no use.
+    let body = [
+        vec![0xa1, 0x01, 0x81, 0xa3, 0x00],
+        address(&WATCHED),
+        vec![0x01, 0x01, 0x03, 0xff],
+    ]
+    .concat();
+    assert_eq!(
+        output_use(&body, &watched()),
+        Scan {
+            found: false,
+            complete: false
+        }
+    );
+}
+
+#[test]
+fn an_output_the_read_path_refuses_is_incomplete() {
+    // {1: [{0: other}]} carries no coin; {1: [{0: other, 1: h''}]} a coin that is no number.
+    for (entries, tail) in [(0xa1, vec![]), (0xa2, vec![0x01, 0x40])] {
+        let body = [vec![0xa1, 0x01, 0x81, entries, 0x00], address(&OTHER), tail].concat();
+        assert_eq!(
+            output_use(&body, &watched()),
+            Scan {
+                found: false,
+                complete: false
+            },
+            "{body:02x?}"
+        );
+    }
 }

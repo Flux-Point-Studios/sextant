@@ -293,7 +293,7 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
             0 | 13 => decode_input_set(&mut d, &mut spends)?,
             // key 18 = reference inputs (read, not consumed) and every other
             // field are skipped.
-            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
+            _ => skip_item(&mut d)?,
         }
         i += 1;
     }
@@ -337,7 +337,7 @@ pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> 
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return decode_input_vec(&mut d);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Ok(Vec::new())
@@ -382,40 +382,48 @@ pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return Ok(true);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Ok(false)
 }
 
 /// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
-/// the count of created outpoints `(tx_id, 0..n)`. Accepts both a definite and an indefinite
-/// outputs array (a real preprod block encodes outputs indefinitely). A body with no outputs key
-/// is malformed.
+/// the count of created outpoints `(tx_id, 0..n)`. The outputs are walked in either length
+/// form (a real preprod block encodes them indefinitely) and each must be an output, a map or
+/// a legacy array, so a header can never count an item that is not there or is no output. The
+/// body is walked to its end; one with no outputs key, or with two, is malformed.
 pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut count = None;
     let mut i = 0;
     while seq_has_next(&mut d, len, i)? {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == 1 {
-            let arr = d.array().map_err(|_| UtxoError::MalformedTx)?;
-            return match arr {
-                Some(count) => usize::try_from(count).map_err(|_| UtxoError::MalformedTx),
-                None => {
-                    // Indefinite outputs array: count elements until the closing break.
-                    let mut count = 0usize;
-                    while seq_has_next(&mut d, None, 0)? {
-                        d.skip().map_err(|_| UtxoError::MalformedTx)?;
-                        count += 1;
-                    }
-                    Ok(count)
+            let outputs = d.array().map_err(|_| UtxoError::MalformedTx)?;
+            let mut n = 0;
+            while seq_has_next(&mut d, outputs, n)? {
+                if !matches!(
+                    d.datatype().map_err(|_| UtxoError::MalformedTx)?,
+                    Type::Map | Type::MapIndef | Type::Array | Type::ArrayIndef
+                ) {
+                    return Err(UtxoError::MalformedTx);
                 }
-            };
+                d.skip().map_err(|_| UtxoError::MalformedTx)?;
+                n += 1;
+            }
+            if count.replace(n).is_some() {
+                return Err(UtxoError::MalformedTx);
+            }
+        } else {
+            skip_item(&mut d)?;
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
         i += 1;
     }
-    Err(UtxoError::MalformedTx)
+    if d.position() != tx_bytes.len() {
+        return Err(UtxoError::MalformedTx);
+    }
+    usize::try_from(count.ok_or(UtxoError::MalformedTx)?).map_err(|_| UtxoError::MalformedTx)
 }
 
 /// Decode a `set<transaction_input>` (bare array or tag-258 wrapped, definite or indefinite) into
@@ -430,19 +438,44 @@ fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), Ut
     Ok(())
 }
 
-/// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
-/// index : uint .size 2 ]`. An index wider than `u16` is out of protocol range.
-pub(crate) fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
-    if d.array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?
-        != 2
-    {
+/// Read the header of an array that must hold exactly `arity` items. A definite header of
+/// another length is malformed; an indefinite one is held to `arity` by [`expect_end`].
+fn array_of(d: &mut Decoder<'_>, arity: u64) -> Result<Option<u64>, UtxoError> {
+    let len = d.array().map_err(|_| UtxoError::MalformedTx)?;
+    if len.is_some_and(|n| n != arity) {
         return Err(UtxoError::MalformedTx);
     }
+    Ok(len)
+}
+
+/// Require a sequence of header length `len` to end after `read` items. An indefinite one
+/// must close with its break, which is consumed so the enclosing cursor sits past it.
+fn expect_end(d: &mut Decoder<'_>, len: Option<u64>, read: u64) -> Result<(), UtxoError> {
+    if seq_has_next(d, len, read)? {
+        return Err(UtxoError::MalformedTx);
+    }
+    Ok(())
+}
+
+/// Skip one item where the shape requires one. minicbor's `skip` reads a break as an item,
+/// which would let a container short of an item end on the break of the container around
+/// it and read on into that container.
+pub(crate) fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
+    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Break {
+        return Err(UtxoError::MalformedTx);
+    }
+    d.skip().map_err(|_| UtxoError::MalformedTx)
+}
+
+/// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
+/// index : uint .size 2 ]`, in either length form. An index wider than `u16` is out of
+/// protocol range.
+pub(crate) fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
+    let len = array_of(d, 2)?;
     let tx_id = read_hash32(d)?;
     let index = u16::try_from(d.u64().map_err(|_| UtxoError::MalformedTx)?)
         .map_err(|_| UtxoError::MalformedTx)?;
+    expect_end(d, len, 2)?;
     Ok(OutPoint { tx_id, index })
 }
 
@@ -461,8 +494,8 @@ pub fn output_exists(tx_bytes: &[u8], out_index: usize) -> Result<bool, UtxoErro
 }
 
 /// Decode output `out_index` from a Conway transaction-body CBOR map (key 1 =
-/// outputs). Untrusted CBOR, so a definite-map shape is required and every
-/// deviation fails closed.
+/// outputs). Every container is read in either length form, as the ledger reads it,
+/// and the output's fields as [`decode_single_output`] reads them.
 fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
@@ -472,7 +505,7 @@ fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError>
         if key == 1 {
             return decode_output_at(&mut d, out_index);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Err(UtxoError::MalformedTx)
@@ -491,7 +524,7 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
         if i as usize == out_index {
             return decode_single_output(d);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(d)?;
         i += 1;
     }
     Err(UtxoError::OutputIndexOutOfRange)
@@ -499,31 +532,38 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
 
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
 /// 3?: script_ref}`) or a legacy array (`[address, value]` or
-/// `[address, value, datum_hash]`).
+/// `[address, value, datum_hash]`). The address, coin and datum must decode, and a
+/// repeated map key is refused; a key outside 0-2 is skipped unread. This reads the
+/// output's read-path fields and validates nothing else in it.
 pub(crate) fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
-        Type::Map => decode_map_output(d),
-        Type::Array => decode_legacy_output(d),
+        Type::Map | Type::MapIndef => decode_map_output(d),
+        Type::Array | Type::ArrayIndef => decode_legacy_output(d),
         _ => Err(UtxoError::MalformedTx),
     }
 }
 
 fn decode_map_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
-    let entries = d
-        .map()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
+    let entries = d.map().map_err(|_| UtxoError::MalformedTx)?;
     let mut address: Option<Vec<u8>> = None;
     let mut lovelace: Option<u64> = None;
     let mut datum: Option<Datum> = None;
-    for _ in 0..entries {
-        match d.u64().map_err(|_| UtxoError::MalformedTx)? {
+    let mut keys = BTreeSet::new();
+    let mut i = 0;
+    while seq_has_next(d, entries, i)? {
+        let key = d.u64().map_err(|_| UtxoError::MalformedTx)?;
+        // The ledger refuses a repeated key, which a last-wins read would hide.
+        if !keys.insert(key) {
+            return Err(UtxoError::MalformedTx);
+        }
+        match key {
             0 => address = Some(read_bytes(d)?),
             1 => lovelace = Some(decode_value(d)?),
             2 => datum = Some(decode_datum_option(d)?),
             // 3 = script_ref (not part of the read-path verdict), or a future key.
-            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
+            _ => skip_item(d)?,
         }
+        i += 1;
     }
     Ok((
         address.ok_or(UtxoError::MalformedTx)?,
@@ -533,36 +573,32 @@ fn decode_map_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
 }
 
 fn decode_legacy_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
-    let len = d
-        .array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?;
-    if len != 2 && len != 3 {
+    let len = d.array().map_err(|_| UtxoError::MalformedTx)?;
+    if len.is_some_and(|n| n != 2 && n != 3) {
         return Err(UtxoError::MalformedTx);
     }
     let address = read_bytes(d)?;
     let lovelace = decode_value(d)?;
-    let datum = if len == 3 {
-        Some(Datum::Hash(read_hash32(d)?))
+    let datum = if seq_has_next(d, len, 2)? {
+        let hash = read_hash32(d)?;
+        expect_end(d, len, 3)?;
+        Some(Datum::Hash(hash))
     } else {
         None
     };
     Ok((address, lovelace, datum))
 }
 
-/// A Cardano value is a bare `coin` uint, or `[coin, multiasset]`. Only the coin is
-/// part of the read-path verdict; the multi-asset bundle is skipped.
+/// A Cardano value is a bare `coin` uint, or `[coin, multiasset]` as a definite array:
+/// the ledger refuses the indefinite pair. Only the coin is part of the read-path
+/// verdict; the multi-asset bundle is skipped.
 fn decode_value(d: &mut Decoder<'_>) -> Result<u64, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Array {
-        let len = d
-            .array()
-            .map_err(|_| UtxoError::MalformedTx)?
-            .ok_or(UtxoError::MalformedTx)?;
-        if len != 2 {
+        if d.array().map_err(|_| UtxoError::MalformedTx)? != Some(2) {
             return Err(UtxoError::MalformedTx);
         }
         let coin = d.u64().map_err(|_| UtxoError::MalformedTx)?;
-        d.skip().map_err(|_| UtxoError::MalformedTx)?; // multiasset map
+        skip_item(d)?; // multiasset map
         Ok(coin)
     } else {
         d.u64().map_err(|_| UtxoError::MalformedTx)
@@ -572,25 +608,21 @@ fn decode_value(d: &mut Decoder<'_>) -> Result<u64, UtxoError> {
 /// A Conway `datum_option`: `[0, $hash32]` (a datum hash) or
 /// `[1, #6.24(bytes .cbor plutus_data)]` (an inline datum).
 fn decode_datum_option(d: &mut Decoder<'_>) -> Result<Datum, UtxoError> {
-    if d.array()
-        .map_err(|_| UtxoError::MalformedTx)?
-        .ok_or(UtxoError::MalformedTx)?
-        != 2
-    {
-        return Err(UtxoError::MalformedTx);
-    }
-    match d.u64().map_err(|_| UtxoError::MalformedTx)? {
-        0 => Ok(Datum::Hash(read_hash32(d)?)),
+    let len = array_of(d, 2)?;
+    let datum = match d.u64().map_err(|_| UtxoError::MalformedTx)? {
+        0 => Datum::Hash(read_hash32(d)?),
         1 => {
             // The inline datum is a `#6.24` (encoded-CBOR) tag wrapping the plutus
             // data bytes; require the exact tag and return the wrapped bytes.
             if d.tag().map_err(|_| UtxoError::MalformedTx)?.as_u64() != 24 {
                 return Err(UtxoError::MalformedTx);
             }
-            Ok(Datum::Inline(read_bytes(d)?))
+            Datum::Inline(read_bytes(d)?)
         }
-        _ => Err(UtxoError::MalformedTx),
-    }
+        _ => return Err(UtxoError::MalformedTx),
+    };
+    expect_end(d, len, 2)?;
+    Ok(datum)
 }
 
 /// Read a definite byte string.
@@ -724,6 +756,248 @@ mod tests {
         );
     }
 
+    #[test]
+    fn indefinite_output_containers_decode_like_their_definite_twins() {
+        let hash = [0x22u8; 32];
+        // {0: h'00', 1: [7, {}], 2: [0, hash]}, every container definite.
+        let definite = [
+            &[
+                0xa3, 0x00, 0x41, 0x00, 0x01, 0x82, 0x07, 0xa0, 0x02, 0x82, 0x00, 0x58, 0x20,
+            ][..],
+            &hash,
+        ]
+        .concat();
+        // The same output with the map and the datum_option indefinite: the map ends only
+        // past the datum's break.
+        let indefinite = [
+            &[
+                0xbf, 0x00, 0x41, 0x00, 0x01, 0x82, 0x07, 0xa0, 0x02, 0x9f, 0x00, 0x58, 0x20,
+            ][..],
+            &hash,
+            &[0xff, 0xff],
+        ]
+        .concat();
+        // [h'00', 7, hash], a legacy output, definite and indefinite.
+        let legacy = [&[0x83, 0x41, 0x00, 0x07, 0x58, 0x20][..], &hash].concat();
+        let legacy_indefinite =
+            [&[0x9f, 0x41, 0x00, 0x07, 0x58, 0x20][..], &hash, &[0xff]].concat();
+        for output in [definite, indefinite, legacy, legacy_indefinite] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Ok((vec![0x00], 7, Some(Datum::Hash(hash)))),
+                "{output:02x?}"
+            );
+        }
+        // [h'00', 7] and [_ h'00', 7]: a legacy output of two elements carries no datum.
+        for output in [
+            &[0x82, 0x41, 0x00, 0x07][..],
+            &[0x9f, 0x41, 0x00, 0x07, 0xff],
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(output), 0),
+                Ok((vec![0x00], 7, None)),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn definite_containers_keep_their_exact_arity() {
+        // Each container is one element short, and the item after it would complete the
+        // shape for a decoder that ignored the header's count.
+        let short_input = [&[0x81, 0x58, 0x20][..], &txid(0x34), &[0x05]].concat();
+        assert_eq!(
+            decode_outpoint(&mut Decoder::new(&short_input)),
+            Err(UtxoError::MalformedTx)
+        );
+        assert_eq!(
+            decode_single_output(&mut Decoder::new(&[0x81, 0x41, 0x00, 0x07])),
+            Err(UtxoError::MalformedTx)
+        );
+        assert_eq!(
+            decode_value(&mut Decoder::new(&[0x81, 0x07, 0xa0])),
+            Err(UtxoError::MalformedTx)
+        );
+        let short_datum = [&[0x81, 0x00, 0x58, 0x20][..], &[0x22; 32]].concat();
+        assert_eq!(
+            decode_datum_option(&mut Decoder::new(&short_datum)),
+            Err(UtxoError::MalformedTx)
+        );
+    }
+
+    #[test]
+    fn an_indefinite_value_is_refused_as_the_ledger_refuses_it() {
+        // [_ 7, {}]: cardano-cli 11.0 refuses the indefinite [coin, multiasset] pair
+        // ("Excess terms"), in a map output and in a legacy one alike.
+        for output in [
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xa0, 0xff],
+            vec![0x82, 0x41, 0x00, 0x9f, 0x07, 0xa0, 0xff],
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_count_walks_the_outputs_it_counts() {
+        // o = [h'00', 7], a legacy output.
+        let o = [0x82, 0x41, 0x00, 0x07];
+        let count =
+            |outputs: &[&[u8]]| output_count(&[&[0xa1, 0x01][..], &outputs.concat()].concat());
+        assert_eq!(count(&[&[0x82], &o, &o]), Ok(2));
+        assert_eq!(count(&[&[0x9f], &o, &o, &[0xff]]), Ok(2));
+        for outputs in [
+            // Declared two, one present.
+            &[&[0x82][..], &o][..],
+            // Declared one, two present.
+            &[&[0x81], &o, &o],
+            // A break, and a number, where the second output is due.
+            &[&[0x82], &o, &[0xff]],
+            &[&[0x82], &o, &[0x05]],
+            // The second output cut short.
+            &[&[0x82], &o, &o[..3]],
+        ] {
+            assert_eq!(
+                count(outputs),
+                Err(UtxoError::MalformedTx),
+                "{outputs:02x?}"
+            );
+        }
+        // {1: [o], 1: [o]}: the outputs key repeated.
+        let repeated = [&[0xa2, 0x01, 0x81][..], &o, &[0x01, 0x81], &o].concat();
+        assert_eq!(output_count(&repeated), Err(UtxoError::MalformedTx));
+    }
+
+    #[test]
+    fn indefinite_output_containers_keep_their_arity() {
+        let hash = [0x22u8; 32];
+        for output in [
+            // A map output the body ends inside, before its break.
+            vec![0xbf, 0x00, 0x41, 0x00, 0x01, 0x07],
+            // A map output without its address.
+            vec![0xbf, 0x01, 0x07, 0xff],
+            // A legacy output of one element, and of four.
+            vec![0x9f, 0x41, 0x00, 0xff],
+            [
+                &[0x9f, 0x41, 0x00, 0x07, 0x58, 0x20][..],
+                &hash,
+                &[0x00, 0xff],
+            ]
+            .concat(),
+            // A value of one element, and of three.
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xff],
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xa0, 0x00, 0xff],
+            // A datum_option of three elements.
+            [
+                &[
+                    0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x02, 0x9f, 0x00, 0x58, 0x20,
+                ][..],
+                &hash,
+                &[0x00, 0xff],
+            ]
+            .concat(),
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_item_cannot_borrow_the_enclosing_break() {
+        // Each output lacks a required item and sits in an indefinite outputs array. A decoder
+        // that read a break as the item would close the output on the next break up or, in
+        // the first case, read on into the array and take h'bb' as the address.
+        for outputs in [
+            // [_ {_ 0: h'aa', 1: 7, 3: }, 0, h'bb']: key 3 without its value.
+            vec![
+                0x9f, 0xbf, 0x00, 0x41, 0xaa, 0x01, 0x07, 0x03, 0xff, 0x00, 0x41, 0xbb, 0xff,
+            ],
+            vec![0x9f, 0xbf, 0x00, 0x41, 0x00, 0x01, 0x07, 0x03, 0xff, 0xff],
+            // [_ {_ 0: h'00', 1: [_ 7]}]: a value without its multiasset.
+            vec![
+                0x9f, 0xbf, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xff, 0xff, 0xff,
+            ],
+        ] {
+            let body = [&[0xa1, 0x01][..], &outputs].concat();
+            assert_eq!(
+                decode_output(&body, 0),
+                Err(UtxoError::MalformedTx),
+                "{body:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_output_key_is_refused() {
+        // The ledger refuses a repeated output-map key in either length form; a last-wins
+        // read would bind one of several values.
+        let hash = [0x22u8; 32];
+        for output in [
+            // {0: h'00', 0: h'01', 1: 7}
+            vec![0xa3, 0x00, 0x41, 0x00, 0x00, 0x41, 0x01, 0x01, 0x07],
+            // {0: h'00', 1: 7, 1: 8}
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x01, 0x08],
+            // {_ 0: h'00', 1: 7, 9: 0, 9: 0}
+            vec![
+                0xbf, 0x00, 0x41, 0x00, 0x01, 0x07, 0x09, 0x00, 0x09, 0x00, 0xff,
+            ],
+            // {0: h'00', 1: 7, 2: [0, hash], 2: [0, hash]}
+            [
+                &[
+                    0xa4, 0x00, 0x41, 0x00, 0x01, 0x07, 0x02, 0x82, 0x00, 0x58, 0x20,
+                ][..],
+                &hash,
+                &[0x02, 0x82, 0x00, 0x58, 0x20],
+                &hash,
+            ]
+            .concat(),
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_break_is_no_item_where_one_is_due() {
+        // {5: break}: a definite body map whose value is a stray break.
+        let stray = [0xa1, 0x05, 0xff];
+        assert_eq!(decode_spends(&stray), Err(UtxoError::MalformedTx));
+        assert_eq!(inputs_at(&stray, 0), Err(UtxoError::MalformedTx));
+        assert_eq!(has_body_key(&stray, 16), Err(UtxoError::MalformedTx));
+        // {5: break, 1: [[h'00', 7]]}
+        let before_outputs = [0xa2, 0x05, 0xff, 0x01, 0x81, 0x82, 0x41, 0x00, 0x07];
+        assert_eq!(output_count(&before_outputs), Err(UtxoError::MalformedTx));
+        assert_eq!(
+            decode_output(&before_outputs, 0),
+            Err(UtxoError::MalformedTx)
+        );
+        // {1: [break, [h'00', 7]]}: a stray break before the output read.
+        assert_eq!(
+            decode_output(&[0xa1, 0x01, 0x82, 0xff, 0x82, 0x41, 0x00, 0x07], 1),
+            Err(UtxoError::MalformedTx)
+        );
+        // {0: h'00', 1: 7, 3: break} and {0: h'00', 1: [7, break]}
+        for output in [
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x03, 0xff],
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x82, 0x07, 0xff],
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
     // ---- decode_spends (the tx-INPUT decoder) ----
 
     /// A 32-byte transaction id filled with `b`.
@@ -849,5 +1123,77 @@ mod tests {
         .into_iter()
         .collect();
         assert_eq!(decode_spends(&max).unwrap(), expected);
+    }
+
+    /// `[_ $hash32, index ]`: a `transaction_input` as an indefinite array.
+    fn indefinite_input_cbor(id: &[u8; 32], index_cbor: &[u8]) -> Vec<u8> {
+        let mut v = input_cbor(id, index_cbor);
+        v[0] = 0x9f;
+        v.push(0xff);
+        v
+    }
+
+    #[test]
+    fn an_indefinite_input_decodes_like_its_definite_twin() {
+        let (first, second) = (txid(0x31), txid(0x32));
+        // The definite input after the indefinite one decodes only past its break.
+        let indefinite = bare_set(&[
+            indefinite_input_cbor(&first, &[0x02]),
+            input_cbor(&second, &[0x00]),
+        ]);
+        let definite = bare_set(&[input_cbor(&first, &[0x02]), input_cbor(&second, &[0x00])]);
+        let outpoints = vec![
+            OutPoint {
+                tx_id: first,
+                index: 2,
+            },
+            OutPoint {
+                tx_id: second,
+                index: 0,
+            },
+        ];
+        for key in [0x00, 0x0d] {
+            assert_eq!(
+                decode_spends(&body1(key, &indefinite)),
+                Ok(outpoints.iter().copied().collect())
+            );
+            assert_eq!(
+                inputs_at(&body1(key, &indefinite), u64::from(key)),
+                inputs_at(&body1(key, &definite), u64::from(key))
+            );
+        }
+        assert_eq!(inputs_at(&body1(0x00, &indefinite), 0), Ok(outpoints));
+    }
+
+    #[test]
+    fn an_indefinite_input_keeps_its_arity_and_index_bound() {
+        let id = txid(0x33);
+        let mut unterminated = indefinite_input_cbor(&id, &[0x02]);
+        unterminated.pop();
+        for input in [
+            unterminated,
+            indefinite_input_cbor(&id, &[0x02, 0x00]),
+            indefinite_input_cbor(&id, &[]),
+            indefinite_input_cbor(&id, &[0x1a, 0x00, 0x01, 0x00, 0x00]),
+        ] {
+            assert_eq!(
+                decode_spends(&body1(0x00, &bare_set(std::slice::from_ref(&input)))),
+                Err(UtxoError::MalformedTx),
+                "{input:02x?}"
+            );
+        }
+        let max = body1(
+            0x00,
+            &bare_set(&[indefinite_input_cbor(&id, &[0x19, 0xff, 0xff])]),
+        );
+        assert_eq!(
+            decode_spends(&max),
+            Ok([OutPoint {
+                tx_id: id,
+                index: u16::MAX,
+            }]
+            .into_iter()
+            .collect())
+        );
     }
 }
