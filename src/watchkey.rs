@@ -369,9 +369,10 @@ pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     })
 }
 
-/// Does a watched key appear as a proposal's deposit-return reward account -- body
-/// key 20, a set of `[deposit, reward_account, gov_action, anchor]`; the 28-byte
-/// credential is bytes [1..29] of element 1.
+/// Does a watched key appear in a proposal -- body key 20, a set of `[deposit,
+/// reward_account, gov_action, anchor]` -- as its deposit-return reward account
+/// (bytes [1..29] of element 1) or at a typed credential position of its
+/// gov_action.
 pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 20 {
@@ -403,6 +404,8 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                             Ok(false) => {}
                             Err(_) => return Err(()),
                         }
+                    } else if k == 2 {
+                        gov_action_watched(d, watched, scan)?;
                     } else if d.skip().is_err() {
                         return Err(());
                     }
@@ -418,6 +421,108 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
         }
         Ok(())
     })
+}
+
+/// Element count of each Conway gov_action, its kind included.
+fn gov_action_arity(kind: u64) -> Option<u64> {
+    match kind {
+        0 => Some(4),
+        1 | 2 | 5 => Some(3),
+        3 => Some(2),
+        4 => Some(5),
+        6 => Some(1),
+        _ => None,
+    }
+}
+
+/// Reads one gov_action and the credential positions its Conway shape types:
+/// treasury recipients (kind 2), committee members removed and added (kind 4) and
+/// the guardrail or constitution script hash (kinds 0, 2, 5). Action ids, anchors,
+/// coins, epochs, protocol versions and parameter values are untyped data and are
+/// skipped. An unknown kind or a wrong arity is read no further and leaves
+/// coverage incomplete; a malformed typed position is an error.
+fn gov_action_watched(
+    d: &mut Decoder<'_>,
+    watched: &BTreeSet<[u8; 28]>,
+    scan: &mut Scan,
+) -> Result<(), ()> {
+    let len = d.array().map_err(|_| ())?;
+    if !seq_has_next(d, len, 0).map_err(|_| ())? {
+        scan.complete = false;
+        return Ok(());
+    }
+    let kind = d.u64().map_err(|_| ())?;
+    let typed = gov_action_arity(kind).is_some_and(|arity| len == Some(arity));
+    if !typed {
+        scan.complete = false;
+    }
+    let mut k = 1u64;
+    while seq_has_next(d, len, k).map_err(|_| ())? {
+        match (typed, kind, k) {
+            (true, 2, 1) => {
+                let entries = d.map().map_err(|_| ())?;
+                let mut i = 0u64;
+                while seq_has_next(d, entries, i).map_err(|_| ())? {
+                    scan.found |= reward_account_watched(d, watched)?;
+                    d.skip().map_err(|_| ())?;
+                    i += 1;
+                }
+            }
+            (true, 4, 2) => {
+                let members = input_set_len(d).map_err(|_| ())?;
+                let mut i = 0u64;
+                while seq_has_next(d, members, i).map_err(|_| ())? {
+                    scan.found |= cold_credential_watched(d, watched)?;
+                    i += 1;
+                }
+            }
+            (true, 4, 3) => {
+                let entries = d.map().map_err(|_| ())?;
+                let mut i = 0u64;
+                while seq_has_next(d, entries, i).map_err(|_| ())? {
+                    scan.found |= cold_credential_watched(d, watched)?;
+                    d.skip().map_err(|_| ())?;
+                    i += 1;
+                }
+            }
+            (true, 0, 3) | (true, 2, 2) => scan.found |= script_hash_watched(d, watched)?,
+            (true, 5, 2) => {
+                if d.array().map_err(|_| ())? != Some(2) {
+                    return Err(());
+                }
+                d.skip().map_err(|_| ())?;
+                scan.found |= script_hash_watched(d, watched)?;
+            }
+            _ => d.skip().map_err(|_| ())?,
+        }
+        k += 1;
+    }
+    Ok(())
+}
+
+/// A 28-byte hash at a typed credential position; any other length is no such
+/// credential.
+fn hash28_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    let bytes = read_bytes(d).map_err(|_| ())?;
+    let hash: [u8; 28] = bytes.as_slice().try_into().map_err(|_| ())?;
+    Ok(watched.contains(&hash))
+}
+
+/// A `policy_hash / nil` or `script_hash / nil` position.
+fn script_hash_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    if d.datatype().map_err(|_| ())? == Type::Null {
+        d.skip().map_err(|_| ())?;
+        return Ok(false);
+    }
+    hash28_watched(d, watched)
+}
+
+/// A committee cold credential, `[0, addr_keyhash]` or `[1, script_hash]`.
+fn cold_credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
+    if d.array().map_err(|_| ())? != Some(2) || d.u64().map_err(|_| ())? > 1 {
+        return Err(());
+    }
+    hash28_watched(d, watched)
 }
 
 /// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and
@@ -958,11 +1063,12 @@ mod tests {
         b
     }
 
-    /// `{20: [[0, <reward_account>, 0, null]]}` = a1 14 81 84 00 <account> 00 f6.
+    /// `{20: [[0, <reward_account>, [6], null]]}` = a1 14 81 84 00 <account> 81 06
+    /// f6: a proposal whose gov_action is the info action, which names no credential.
     fn body_one_proposal(account: &[u8]) -> Vec<u8> {
         let mut b = vec![0xa1, 0x14, 0x81, 0x84, 0x00];
         b.extend_from_slice(account);
-        b.extend_from_slice(&[0x00, 0xf6]);
+        b.extend_from_slice(&[0x81, 0x06, 0xf6]);
         b
     }
 

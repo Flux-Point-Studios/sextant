@@ -1,0 +1,311 @@
+{
+  "note": "Hand-labelled from the Conway CDDL gov_action shapes and the U1 contract line 'typed credential positions count; untyped data does not', independently of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract. The 21 golden vectors stay pinned in u1_watched_key_vectors.json.",
+  "vectors": [
+    {
+      "name": "gov_treasury_recipient",
+      "description": "the watched key is a treasury withdrawal recipient (reward_account key)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d11a000f4240f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_treasury_policy",
+      "description": "the watched hash is the treasury withdrawal's guardrail policy_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d21a000f4240581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d182782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_committee_added",
+      "description": "the watched key is a committee member added (credential map key)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f680a18200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d11901f4d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_committee_removed",
+      "description": "the watched key is a committee member removed (credential set)",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_committee_removed_tagged_sets",
+      "description": "proposal_procedures and the removal set both as tag-258 sets",
+      "raw_tx_hex": "84a114d9010281841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6d90102818200581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1a0d81e82020382782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_parameter_change_policy",
+      "description": "the watched hash is the parameter change's guardrail policy_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18400f6a100182c581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d182782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_constitution_script",
+      "description": "the watched hash is the new constitution's script_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18305f68282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b581cd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d182782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "gov_control_parameter_change",
+      "description": "parameter change with a prior action id and no policy_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18400825820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00a100182cf682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_hard_fork",
+      "description": "hard fork initiation: a gov_action_id and a protocol version",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18301f6820a0082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_treasury",
+      "description": "treasury withdrawal to an unwatched account with no policy_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18302a1581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d21a000f4240f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_no_confidence",
+      "description": "no confidence naming a prior gov_action_id",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18203825820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_update_committee",
+      "description": "committee update removing a key member, adding a script member",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6818200581cd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2a18201581cd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3190190d81e82010282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_new_constitution",
+      "description": "new constitution with no script_hash",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18305f68282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0bf682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_control_info",
+      "description": "info action, arity 1",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1810682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "gov_unknown_action_kind",
+      "description": "an action kind outside 0-6 has no defined shape",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18207f682782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "gov_wrong_arity",
+      "description": "treasury withdrawal missing its policy_hash / nil element",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18202a1581de0d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d21a000f424082782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "gov_unexpected_set_tag",
+      "description": "committee removal set under tag 259, which no CDDL set uses",
+      "raw_tx_hex": "84a11481841b000000174876e800581de0c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c18504f6d90103818200581cd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2a0d81e82010282782568747470733a2f2f6578616d706c652e696e76616c69642f70726f706f73616c2e6a736f6e58200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0ba0f5f6",
+      "target_vkh": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    }
+  ]
+}
