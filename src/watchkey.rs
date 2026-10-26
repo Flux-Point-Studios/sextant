@@ -135,10 +135,7 @@ fn address_watched(address: &[u8], watched: &BTreeSet<[u8; 28]>) -> bool {
         || stake_credential(address).is_some_and(|c| watched.contains(&c))
 }
 
-/// Reads one CBOR item as a possible 28-byte credential and reports whether it is
-/// watched. A non-28-byte or non-bytes item is skipped and reported unwatched, not
-/// an error -- it is simply not a credential, which the reference treats the same
-/// way. `Err` is reserved for a malformed stream.
+/// Reads the byte string at a credential-bearing position.
 fn credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
     match d.datatype().map_err(|_| ())? {
         Type::Bytes => {
@@ -147,26 +144,18 @@ fn credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Resu
                 .map(|h| watched.contains(&h))
                 .unwrap_or(false))
         }
-        _ => {
-            d.skip().map_err(|_| ())?;
-            Ok(false)
-        }
+        _ => Err(()),
     }
 }
 
-/// Reads one CBOR item as a possible reward account and reports whether its 28-byte
-/// credential (bytes [1..29]) is watched. A non-bytes item is skipped and reported
-/// unwatched; `Err` is reserved for a malformed stream.
+/// Reads the byte string at a reward-account position.
 fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
     match d.datatype().map_err(|_| ())? {
         Type::Bytes => {
             let account = read_bytes(d).map_err(|_| ())?;
             Ok(reward_credential(&account).is_some_and(|c| watched.contains(&c)))
         }
-        _ => {
-            d.skip().map_err(|_| ())?;
-            Ok(false)
-        }
+        _ => Err(()),
     }
 }
 
@@ -286,6 +275,9 @@ pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     }
                     k += 1;
                 }
+                if k < 2 {
+                    return Err(());
+                }
                 if d.skip().is_err() {
                     return Err(());
                 }
@@ -337,6 +329,9 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     }
                     k += 1;
                 }
+                if k < 2 {
+                    return Err(());
+                }
                 j += 1;
             }
         } else if d.skip().is_err() {
@@ -348,8 +343,7 @@ pub fn proposal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 
 /// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and
 /// reports whether BLAKE2b-224 of its 32-byte vkey is watched. Elements after the
-/// vkey are skipped; a first element that is not 32 bytes is not a vkey and is
-/// skipped. `Err` is reserved for a malformed stream.
+/// vkey are skipped; a non-bytes vkey leaves coverage incomplete.
 fn witness_vkey_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
     let len = d.array().map_err(|_| ())?;
     let mut hit = false;
@@ -360,7 +354,10 @@ fn witness_vkey_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Re
             Ok(false) => break,
             Err(_) => return Err(()),
         }
-        if k == 0 && d.datatype().map_err(|_| ())? == Type::Bytes {
+        if k == 0 {
+            if d.datatype().map_err(|_| ())? != Type::Bytes {
+                return Err(());
+            }
             let vkey = read_bytes(d).map_err(|_| ())?;
             if vkey.len() == 32 && watched.contains(&blake2b224(&vkey)) {
                 hit = true;
@@ -426,23 +423,18 @@ fn certificate_arity(kind: u64) -> Option<u64> {
     }
 }
 
-/// Deep-walks one CBOR item, reporting (found, complete). `found` is true when any
-/// 28-byte byte string is a watched credential or any 29-byte one a watched reward
-/// account (bytes [1..29]). `complete` is false when the node budget or the depth
-/// limit was reached before the subtree was fully walked. Every coin/slot/epoch
-/// field in these surfaces is a uint or a nested container, so a bare 28/29-byte
-/// string is always a credential and this leaf test has no value-field false
-/// positives. Mirrors the reference `_collect_hashes`; consumes exactly one item;
-/// `Err` only on a malformed stream.
+/// Records matches as leaves decode so a later malformed child cannot erase them.
 fn collect_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
     budget: &mut u32,
     depth: u32,
-) -> Result<(bool, bool), ()> {
+    scan: &mut Scan,
+) -> Result<(), ()> {
     if depth == 0 || *budget == 0 {
+        scan.complete = false;
         d.skip().map_err(|_| ())?;
-        return Ok((false, false));
+        return Ok(());
     }
     *budget -= 1;
     match d.datatype().map_err(|_| ())? {
@@ -455,12 +447,11 @@ fn collect_watched(
                 29 => reward_credential(&bytes).is_some_and(|c| watched.contains(&c)),
                 _ => false,
             };
-            Ok((hit, true))
+            scan.found |= hit;
+            Ok(())
         }
         Type::Array | Type::ArrayIndef => {
             let len = d.array().map_err(|_| ())?;
-            let mut found = false;
-            let mut complete = true;
             let mut i = 0u64;
             loop {
                 match seq_has_next(d, len, i) {
@@ -468,17 +459,13 @@ fn collect_watched(
                     Ok(false) => break,
                     Err(_) => return Err(()),
                 }
-                let (f, c) = collect_watched(d, watched, budget, depth - 1)?;
-                found |= f;
-                complete &= c;
+                collect_watched(d, watched, budget, depth - 1, scan)?;
                 i += 1;
             }
-            Ok((found, complete))
+            Ok(())
         }
         Type::Map | Type::MapIndef => {
             let len = d.map().map_err(|_| ())?;
-            let mut found = false;
-            let mut complete = true;
             let mut i = 0u64;
             loop {
                 match seq_has_next(d, len, i) {
@@ -486,21 +473,19 @@ fn collect_watched(
                     Ok(false) => break,
                     Err(_) => return Err(()),
                 }
-                let (fk, ck) = collect_watched(d, watched, budget, depth - 1)?;
-                let (fv, cv) = collect_watched(d, watched, budget, depth - 1)?;
-                found |= fk || fv;
-                complete &= ck && cv;
+                collect_watched(d, watched, budget, depth - 1, scan)?;
+                collect_watched(d, watched, budget, depth - 1, scan)?;
                 i += 1;
             }
-            Ok((found, complete))
+            Ok(())
         }
         Type::Tag => {
             d.tag().map_err(|_| ())?;
-            collect_watched(d, watched, budget, depth - 1)
+            collect_watched(d, watched, budget, depth - 1, scan)
         }
         _ => {
             d.skip().map_err(|_| ())?;
-            Ok((false, true))
+            Ok(())
         }
     }
 }
@@ -548,13 +533,7 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                             Err(_) => return Err(()),
                         };
                     } else {
-                        match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
-                            Ok((f, c)) => {
-                                scan.found |= f;
-                                scan.complete &= c;
-                            }
-                            Err(_) => return Err(()),
-                        }
+                        collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
                     }
                     k += 1;
                 }
@@ -577,7 +556,7 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 
 /// Does a watched key appear in a native script of the witness set -- witness-set
 /// key 1, a set of native scripts whose `sig` clauses carry 28-byte key hashes in
-/// clear. Each script is deep-walked; the only incompleteness is budget exhaustion.
+/// clear. Malformed CBOR or an exhausted walk budget leaves coverage incomplete.
 pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(witnesses, |key, d, scan| {
         if key == 1 {
@@ -593,13 +572,7 @@ pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan
                     Ok(false) => break,
                     Err(_) => return Err(()),
                 }
-                match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
-                    Ok((f, c)) => {
-                        scan.found |= f;
-                        scan.complete &= c;
-                    }
-                    Err(_) => return Err(()),
-                }
+                collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
                 j += 1;
             }
         } else if d.skip().is_err() {
@@ -611,18 +584,12 @@ pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan
 
 /// Does a watched key appear in the protocol-parameter update -- body key 6, whose
 /// genesis-delegate key hashes are 28-byte leaves. The update value is deep-walked;
-/// the only incompleteness is budget exhaustion.
+/// malformed CBOR or an exhausted walk budget leaves coverage incomplete.
 pub fn update_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 6 {
             let mut budget = WALK_BUDGET;
-            match collect_watched(d, watched, &mut budget, WALK_DEPTH) {
-                Ok((f, c)) => {
-                    scan.found |= f;
-                    scan.complete &= c;
-                }
-                Err(_) => return Err(()),
-            }
+            collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
         } else if d.skip().is_err() {
             return Err(());
         }
