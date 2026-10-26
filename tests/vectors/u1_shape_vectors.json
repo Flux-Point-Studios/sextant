@@ -1,5 +1,5 @@
 {
-  "note": "Hand-labelled from the U1 contract and U1RT-03: a certificate is read by its arity in either length form, nesting has no limit short of the transaction size, deep auxiliary and Plutus data are mentions, a break a repeated key would hide leaves the transaction open, and only an exactly framed envelope is a transaction. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "note": "Hand-labelled from the U1 contract and U1RT-03: a certificate is read by its arity in either length form, a voter is [kind 0-4, hash] in either length form, nesting has no limit short of the transaction size, deep auxiliary and Plutus data are mentions, a break a repeated key would hide leaves the transaction open, and only an exactly framed envelope is a transaction. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
   "vectors": [
     {
       "name": "cert_indefinite_vote_deleg",
@@ -266,6 +266,306 @@
       "description": "[_ 9, [0, other]] one element short, then [9, [0, stake], [2]]",
       "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4004829f098200581ca2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2ff83098200581cc5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c58102a0f5f6",
       "target_vkh": "c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_definite_control",
+      "description": "[2, h], a DRep key-hash voter",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18202581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "voter_indefinite_control",
+      "description": "[_ 2, h], materios's recorded indefinite twin",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a19f02581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffa18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "voter_definite_watched",
+      "description": "[2, h], the hash watched",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18202581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_indefinite_watched",
+      "description": "[_ 2, h], the hash watched",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a19f02581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524ffa18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_definite_three",
+      "description": "[2, h, 0], one element long",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18302581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee00a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_indefinite_three",
+      "description": "[_ 2, h, 0], one element long",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a19f02581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee00ffa18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_indefinite_kind_only",
+      "description": "[_ 2], the hash missing",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a19f02ffa18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_definite_kind_only",
+      "description": "[2], the hash missing",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18102a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_not_an_array_then_watched",
+      "description": "a bare uint where a voter is due, then [2, h] watched",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a202a18258207777777777777777777777777777777777777777777777777777777777777777008201f68202581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_unknown_kind",
+      "description": "[5, h], a kind no era defines",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18205581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_bool_kind",
+      "description": "[true, h], the kind a bool",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a182f5581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_hash_short",
+      "description": "[2, h], the hash 27 bytes",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18202581beeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeea18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "voter_hash_not_bytes_then_watched",
+      "description": "[2, 0], the hash a uint, then [2, h] watched",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a2820200a18258207777777777777777777777777777777777777777777777777777777777777777008201f68202581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_three_watched",
+      "description": "[2, h, 0] one element long, its hash watched: the hash still counts",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a18302581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b52400a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "voter_three_then_watched",
+      "description": "[2, h, 0] one element long, then [2, h] watched: the second still counts",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d4013a28302581ceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee00a18258207777777777777777777777777777777777777777777777777777777777777777008201f68202581ce47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524a18258207777777777777777777777777777777777777777777777777777777777777777008201f6a0f5f6",
+      "target_vkh": "e47bb1c6309ebd06695ae459e69fcf3d585e5f41e3d3d8ce7152b524",
       "resolve": {
         "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
       },

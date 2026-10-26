@@ -255,19 +255,6 @@ fn output_address(address: &[u8], watched: &BTreeSet<[u8; 28]>, scan: &mut Scan)
     payment.is_some()
 }
 
-/// Reads the byte string at a credential-bearing position.
-fn credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
-    match d.datatype().map_err(|_| ())? {
-        Type::Bytes => {
-            let bytes = read_bytes(d).map_err(|_| ())?;
-            Ok(<[u8; 28]>::try_from(bytes.as_slice())
-                .map(|h| watched.contains(&h))
-                .unwrap_or(false))
-        }
-        _ => Err(()),
-    }
-}
-
 /// Reads the byte string at a reward-account position.
 fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
     match d.datatype().map_err(|_| ())? {
@@ -429,49 +416,43 @@ pub fn withdrawal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 }
 
 /// Does a watched key appear as a voter -- body key 19, a map whose keys are
-/// `[voter_type, 28-byte key hash]`. The key hash is element 1 of each voter.
+/// `[voter_type, 28-byte key hash]` with voter types 0-4. The key hash is element 1
+/// of each voter. A voter of any other shape leaves coverage incomplete, a hash it
+/// still carries counts, and the voters after it are still read.
 pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 19 {
-            let v_len = match d.map() {
-                Ok(v_len) => v_len,
-                Err(_) => return Err(()),
-            };
+            let v_len = d.map().map_err(|_| ())?;
             let mut j = 0u64;
-            loop {
-                match seq_has_next(d, v_len, j) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
-                }
-                let voter_len = match d.array() {
-                    Ok(voter_len) => voter_len,
-                    Err(_) => return Err(()),
-                };
-                let mut k = 0u64;
-                loop {
-                    match seq_has_next(d, voter_len, k) {
-                        Ok(true) => {}
-                        Ok(false) => break,
-                        Err(_) => return Err(()),
-                    }
-                    if k == 1 {
-                        match credential_watched(d, watched) {
-                            Ok(true) => scan.found = true,
-                            Ok(false) => {}
-                            Err(_) => return Err(()),
+            while seq_has_next(d, v_len, j).map_err(|_| ())? {
+                if matches!(
+                    d.datatype().map_err(|_| ())?,
+                    Type::Array | Type::ArrayIndef
+                ) {
+                    let voter_len = d.array().map_err(|_| ())?;
+                    let (mut kind, mut hash, mut k) = (None, None, 0u64);
+                    while seq_has_next(d, voter_len, k).map_err(|_| ())? {
+                        match (k, d.datatype().map_err(|_| ())?) {
+                            (0, Type::U8 | Type::U16 | Type::U32 | Type::U64) => {
+                                kind = Some(d.u64().map_err(|_| ())?);
+                            }
+                            (1, Type::Bytes) => {
+                                let bytes = read_bytes(d).map_err(|_| ())?;
+                                hash = <[u8; 28]>::try_from(bytes.as_slice()).ok();
+                            }
+                            _ => d.skip().map_err(|_| ())?,
                         }
-                    } else if d.skip().is_err() {
-                        return Err(());
+                        k += 1;
                     }
-                    k += 1;
+                    scan.found |= hash.is_some_and(|hash| watched.contains(&hash));
+                    // The ledger reads a voter in either length form, so its arity is
+                    // checked against the elements read.
+                    scan.complete &= k == 2 && hash.is_some() && kind.is_some_and(|kind| kind <= 4);
+                } else {
+                    scan.complete = false;
+                    d.skip().map_err(|_| ())?;
                 }
-                if k < 2 {
-                    return Err(());
-                }
-                if d.skip().is_err() {
-                    return Err(());
-                }
+                d.skip().map_err(|_| ())?;
                 j += 1;
             }
         } else if d.skip().is_err() {

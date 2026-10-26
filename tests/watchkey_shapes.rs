@@ -1,9 +1,9 @@
 //! The U1 shape vectors: shapes the scan must read, and framings it must refuse. A
-//! certificate is read by its arity in either length form, nesting has no limit short of
-//! the transaction size, deep auxiliary and Plutus data are mentions, a break a repeated
-//! key would hide leaves the transaction open, and only an exactly framed envelope is a
-//! transaction. The oracle is r57-live's `scripts/u1_shape_vectors.json`, written by
-//! gen_u1_shape_vectors.py.
+//! certificate is read by its arity in either length form, as is a voter, `[kind 0-4,
+//! 28-byte hash]`. Nesting has no limit short of the transaction size, deep auxiliary and
+//! Plutus data are mentions, a break a repeated key would hide leaves the transaction
+//! open, and only an exactly framed envelope is a transaction. The oracle is r57-live's
+//! `scripts/u1_shape_vectors.json`, written by gen_u1_shape_vectors.py.
 
 #[macro_use]
 mod common;
@@ -12,7 +12,7 @@ const ORACLE: &str = include_str!("vectors/u1_shape_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "dded5723a0e30041cacf1f13e1e79a9a641908bec0b2782adcbf9c45235de311";
+    "09a2bf7e48c82ba930e10cbe07b070f8adbe9e2602621b3a82f4ee1643321958";
     cert_indefinite_vote_deleg,
     cert_indefinite_vote_deleg_watched,
     cert_definite_vote_deleg,
@@ -27,6 +27,21 @@ oracle_tests!(
     cert_indefinite_kind_only,
     cert_definite_break_for_an_element,
     cert_short_then_watched,
+    voter_definite_control,
+    voter_indefinite_control,
+    voter_definite_watched,
+    voter_indefinite_watched,
+    voter_definite_three,
+    voter_indefinite_three,
+    voter_indefinite_kind_only,
+    voter_definite_kind_only,
+    voter_not_an_array_then_watched,
+    voter_unknown_kind,
+    voter_bool_kind,
+    voter_hash_short,
+    voter_hash_not_bytes_then_watched,
+    voter_three_watched,
+    voter_three_then_watched,
     deep_aux_398,
     deep_aux_deepest,
     deep_aux_beside_a_watched_vkey,
