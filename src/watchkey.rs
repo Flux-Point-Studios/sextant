@@ -824,9 +824,11 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     }
                     k += 1;
                 }
+                // The ledger reads a certificate in either length form, so the arity
+                // is checked against the elements read.
                 match kind.map(certificate_arity) {
                     Some(Some(arity)) => {
-                        if cert_len != Some(arity) {
+                        if k != arity {
                             scan.complete = false;
                         }
                     }
