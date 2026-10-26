@@ -432,7 +432,7 @@ fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), Ut
 
 /// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
 /// index : uint .size 2 ]`. An index wider than `u16` is out of protocol range.
-fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
+pub(crate) fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
     if d.array()
         .map_err(|_| UtxoError::MalformedTx)?
         .ok_or(UtxoError::MalformedTx)?

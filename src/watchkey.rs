@@ -5,7 +5,9 @@ use minicbor::Decoder;
 use minicbor::data::Type;
 
 use crate::hash::blake2b224;
-use crate::utxo::{decode_single_output, input_set_len, read_bytes, seq_has_next};
+use crate::utxo::{
+    OutPoint, decode_outpoint, decode_single_output, input_set_len, read_bytes, seq_has_next,
+};
 
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
 /// address carries no payment credential. Addresses whose header nibble is
@@ -60,6 +62,36 @@ pub struct Scan {
     pub found: bool,
     /// Every credential-bearing field of this surface decoded; nothing skipped.
     pub complete: bool,
+}
+
+/// Payment credentials of regular inputs for valid transactions, collateral otherwise.
+/// Unresolved or unsupported addresses and resolver errors leave coverage incomplete.
+pub fn input_use<'a>(
+    body: &[u8],
+    is_valid: bool,
+    watched: &BTreeSet<[u8; 28]>,
+    mut resolve: impl FnMut(&OutPoint) -> Result<Option<&'a [u8]>, ()>,
+) -> Scan {
+    let consumed = if is_valid { 0 } else { 13 };
+    scan_map(body, |key, d, scan| {
+        if key != consumed {
+            return d.skip().map_err(|_| ());
+        }
+        let len = input_set_len(d).map_err(|_| ())?;
+        let mut i = 0;
+        while seq_has_next(d, len, i).map_err(|_| ())? {
+            let input = decode_outpoint(d).map_err(|_| ())?;
+            match resolve(&input) {
+                Ok(Some(address)) => match payment_credential(address) {
+                    Some(credential) => scan.found |= watched.contains(&credential),
+                    None => scan.complete = false,
+                },
+                Ok(None) | Err(()) => scan.complete = false,
+            }
+            i += 1;
+        }
+        Ok(())
+    })
 }
 
 fn scan_map(
@@ -698,8 +730,6 @@ mod tests {
         assert!(!s.complete);
     }
 
-    // --- output surface (body key 1): RED snapshot; production walk held ---
-
     /// `{1: [output]}` = a1 01 81 <output>.
     fn body_one_output(output: &[u8]) -> Vec<u8> {
         let mut b = vec![0xa1, 0x01, 0x81];
@@ -757,8 +787,6 @@ mod tests {
         let s = output_use(&[0xa1, 0x01, 0x81, 0x05], &watched_set(&[PAY]));
         assert!(!s.complete);
     }
-
-    // --- withdrawal / voting / proposal surfaces: RED snapshots; production walks held ---
 
     /// Reward account byte string: 58 1d (bytes len 29) e0 (stake-key header) + 28-byte cred.
     fn reward_account(cred: &[u8; 28]) -> Vec<u8> {
@@ -850,8 +878,6 @@ mod tests {
         assert!(!proposal_use(&[0xa1, 0x14, 0x05], &watched_set(&[STK])).complete);
     }
 
-    // --- witness surface (vkey / bootstrap, BLAKE2b-224): RED snapshot; production walk + hash held ---
-
     /// `{slot: [[vkey(32), sig(64)]]}` = a1 <slot> 81 82 58 20 <vkey> 58 40 <sig>.
     fn witness_map(slot: u8) -> Vec<u8> {
         let mut w = vec![0xa1, slot, 0x81, 0x82, 0x58, 0x20];
@@ -882,8 +908,6 @@ mod tests {
         // {0: 5} -- vkey witnesses not an array.
         assert!(!witness_use(&[0xa1, 0x00, 0x05], &watched_set(&[VK_HASH])).complete);
     }
-
-    // --- certificate surface (body key 4, deep walk): RED snapshot; production walk held ---
 
     /// `{4: [[0, [0, <28-byte cred>]]]}` -- a stake-registration cert (kind 0) whose
     /// stake credential is `[0, addr_keyhash]`. = a1 04 81 82 00 82 00 58 1c <cred>.
