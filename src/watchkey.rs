@@ -8,20 +8,20 @@ use minicbor::data::Type;
 use crate::hash::{blake2b224, blake2b256};
 use crate::utxo::{
     OutPoint, decode_outpoint, decode_single_output, input_set_len, read_bytes, seq_has_next,
+    skip_item, walk_item,
 };
 
-/// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
-/// address carries no payment credential. Addresses whose header nibble is
-/// 0..=7 carry one at bytes `[1..29]`; a reward address (nibble 14/15), a Byron
-/// address (nibble 8), and any slice shorter than 29 bytes yield `None`.
+/// Payment credential (28 bytes) of an address, or `None` when it carries none. A
+/// Shelley address whose header nibble is 0..=7 carries one at bytes `[1..29]`. A
+/// well-formed Byron address carries its root, which the ledger types as a payment
+/// key hash: a crafted root equal to a VKH is spent through that VKH's own vkey
+/// witness. A reward address (nibble 14/15), any other address, and any slice
+/// shorter than 29 bytes yield `None`.
 pub fn payment_credential(address: &[u8]) -> Option<[u8; 28]> {
-    if address.len() < 29 {
-        return None;
-    }
-    if address[0] >> 4 <= 7 {
+    if address.len() >= 29 && address[0] >> 4 <= 7 {
         address[1..29].try_into().ok()
     } else {
-        None
+        byron_root(address)
     }
 }
 
@@ -65,42 +65,73 @@ pub struct Scan {
     pub complete: bool,
 }
 
-/// Whether `address` is a well-formed Byron address: exactly the CBOR item
-/// `[#6.24(bytes payload), crc]`, the array definite, the payload a definite byte
-/// string, `crc` its CRC-32, and the payload exactly `[bytes .size 28, attributes,
-/// uint]` with that array definite and the attributes the ledger's
-/// `Map Word8 ByteString`. A Byron address carries no VKH: the key behind it can
-/// spend only through a bootstrap witness, which [`witness_use`] hashes.
-fn byron_address(address: &[u8]) -> bool {
-    let mut d = Decoder::new(address);
-    let payload = (|| {
-        if d.array().ok()? != Some(2) || d.tag().ok()?.as_u64() != 24 {
-            return None;
-        }
-        let payload = d.bytes().ok()?;
-        (d.u64().ok()? == u64::from(crc32(payload))).then_some(payload)
-    })();
-    payload.is_some_and(|payload| d.position() == address.len() && byron_payload(payload))
+/// The root of a well-formed Byron address, the payment key hash the ledger reads it
+/// as. Well-formed is exactly the CBOR item `[#6.24(bytes payload), crc]` opening
+/// with the byte 0x82, on which the ledger dispatches, the payload a definite byte
+/// string that [`byron_payload`] accepts and `crc` its CRC-32. Heads elsewhere may be
+/// non-minimal, as the shipped ledger reads them.
+fn byron_root(address: &[u8]) -> Option<[u8; 28]> {
+    let Some((&0x82, pair)) = address.split_first() else {
+        return None;
+    };
+    let mut d = Decoder::new(pair);
+    if d.tag().ok()?.as_u64() != 24 {
+        return None;
+    }
+    let payload = d.bytes().ok()?;
+    if d.u64().ok()? != u64::from(crc32(payload)) || d.position() != pair.len() {
+        return None;
+    }
+    byron_payload(payload)
 }
 
-/// Whether a Byron address payload is exactly `[bytes .size 28, attributes, uint]`, the
-/// attributes a map in either length form from uints below 256 to definite byte strings.
-fn byron_payload(payload: &[u8]) -> bool {
+/// The root of a Byron address payload that is exactly `[bytes .size 28, attributes,
+/// type]` as the ledger reads it: the attributes a definite `Map Word8 ByteString`
+/// with strictly ascending keys, the derivation path (key 1) one canonical byte
+/// string and the network magic (key 2) one canonical uint below 2^32, other keys
+/// opaque; the type 0 (a key) or 2 (a redeem key) in the one byte the ledger decodes
+/// it from.
+fn byron_payload(payload: &[u8]) -> Option<[u8; 28]> {
     let mut d = Decoder::new(payload);
-    let read = (|| {
-        if d.array().ok()? != Some(3) || d.bytes().ok()?.len() != 28 {
+    if d.array().ok()? != Some(3) {
+        return None;
+    }
+    let root = d.bytes().ok()?.try_into().ok()?;
+    let mut previous = None;
+    for _ in 0..d.map().ok()?? {
+        let key = d.u8().ok()?;
+        let value = d.bytes().ok()?;
+        let typed = match key {
+            1 => canonical_bytes(value),
+            2 => canonical_magic(value),
+            _ => true,
+        };
+        if !typed || previous.is_some_and(|previous| key <= previous) {
             return None;
         }
-        let attributes = d.map().ok()?;
-        let mut i = 0;
-        while seq_has_next(&mut d, attributes, i).ok()? {
-            d.u8().ok()?;
-            d.bytes().ok()?;
-            i += 1;
-        }
-        d.u64().ok()
-    })();
-    read.is_some() && d.position() == payload.len()
+        previous = Some(key);
+    }
+    matches!(&payload[d.position()..], [0x00] | [0x02]).then_some(root)
+}
+
+/// Whether `content` is exactly one byte string in its canonical encoding, the form
+/// the ledger decodes a Byron derivation path in.
+fn canonical_bytes(content: &[u8]) -> bool {
+    let mut canonical = Vec::new();
+    Decoder::new(content)
+        .bytes()
+        .is_ok_and(|bytes| minicbor::Encoder::new(&mut canonical).bytes(bytes).is_ok())
+        && canonical == content
+}
+
+/// Whether `content` is exactly one uint below 2^32 in its canonical encoding, the
+/// form the ledger decodes a Byron network magic in.
+fn canonical_magic(content: &[u8]) -> bool {
+    let mut canonical = Vec::new();
+    Decoder::new(content)
+        .u32()
+        .is_ok_and(|magic| minicbor::Encoder::new(&mut canonical).u32(magic).is_ok())
+        && canonical == content
 }
 
 /// CRC-32 with the IEEE polynomial, the checksum a Byron address carries.
@@ -114,7 +145,8 @@ fn crc32(data: &[u8]) -> u32 {
 
 /// Payment credentials of regular inputs for valid transactions, collateral otherwise.
 /// Unresolved inputs, resolver errors, and resolved addresses without a payment
-/// credential leave coverage incomplete, except a well-formed Byron address.
+/// credential leave coverage incomplete; a well-formed Byron address carries its root
+/// as one.
 pub fn input_use<'a>(
     body: &[u8],
     is_valid: bool,
@@ -133,7 +165,7 @@ pub fn input_use<'a>(
             match resolve(&input) {
                 Ok(Some(address)) => match payment_credential(address) {
                     Some(credential) => scan.found |= watched.contains(&credential),
-                    None => scan.complete &= byron_address(address),
+                    None => scan.complete = false,
                 },
                 Ok(None) | Err(()) => scan.complete = false,
             }
@@ -200,27 +232,8 @@ pub fn bound_output_address(outpoint: &OutPoint, creating_body: &[u8]) -> Option
     } else {
         return None;
     };
-    let address = output_address(output)?;
-    (payment_credential(&address).is_some() || byron_address(&address)).then_some(address)
-}
-
-/// The address of one output, or `None` when the output does not decode or, as a map,
-/// repeats a key.
-fn output_address(output: &[u8]) -> Option<Vec<u8>> {
     let (address, _, _) = decode_single_output(&mut Decoder::new(output)).ok()?;
-    let mut map = Decoder::new(output);
-    if let Ok(len) = map.map() {
-        let mut keys = BTreeSet::new();
-        let mut i = 0u64;
-        while seq_has_next(&mut map, len, i).ok()? {
-            if !keys.insert(map.u64().ok()?) {
-                return None;
-            }
-            map.skip().ok()?;
-            i += 1;
-        }
-    }
-    Some(address)
+    payment_credential(&address).is_some().then_some(address)
 }
 
 /// Hands each key of the CBOR map `data` to `field`. A malformed entry, or bytes
@@ -291,24 +304,16 @@ pub fn required_signer_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     })
 }
 
-/// Whether a raw address's payment OR stake credential is watched, via the
-/// credential parsers above (Byron and reward addresses yield neither).
-fn address_watched(address: &[u8], watched: &BTreeSet<[u8; 28]>) -> bool {
-    payment_credential(address).is_some_and(|c| watched.contains(&c))
-        || stake_credential(address).is_some_and(|c| watched.contains(&c))
-}
-
-/// Reads the byte string at a credential-bearing position.
-fn credential_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
-    match d.datatype().map_err(|_| ())? {
-        Type::Bytes => {
-            let bytes = read_bytes(d).map_err(|_| ())?;
-            Ok(<[u8; 28]>::try_from(bytes.as_slice())
-                .map(|h| watched.contains(&h))
-                .unwrap_or(false))
-        }
-        _ => Err(()),
-    }
+/// Records an output address's watched payment or stake credential in `scan`, and
+/// answers whether the address yields a payment credential at all. A reward address
+/// yields none.
+fn output_address(address: &[u8], watched: &BTreeSet<[u8; 28]>, scan: &mut Scan) -> bool {
+    let payment = payment_credential(address);
+    scan.found |= payment
+        .into_iter()
+        .chain(stake_credential(address))
+        .any(|credential| watched.contains(&credential));
+    payment.is_some()
 }
 
 /// Reads the byte string at a reward-account position.
@@ -326,29 +331,41 @@ fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> 
 /// body-16 collateral return -- as the output's payment or stake credential or in
 /// a native reference script it carries. Body-1 is a list of transaction_outputs;
 /// the body-16 collateral return is a single one. Every output's reference script
-/// draws on one walk budget.
+/// draws on one walk budget. An address counts only once the whole body has
+/// decoded: an output that ends short reads its last entries from the field after
+/// it, and only the failure that follows shows it.
 pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     let mut budget = WALK_BUDGET;
-    scan_map(body, |key, d, scan| match key {
+    let mut outputs = Scan {
+        found: false,
+        complete: true,
+    };
+    let walk = scan_map(body, |key, d, _| match key {
         1 => {
             let len = d.array().map_err(|_| ())?;
             let mut i = 0u64;
             while seq_has_next(d, len, i).map_err(|_| ())? {
-                output_watched(d, watched, &mut budget, scan)?;
+                output_watched(d, watched, &mut budget, &mut outputs)?;
                 i += 1;
             }
             Ok(())
         }
-        16 => output_watched(d, watched, &mut budget, scan),
+        16 => output_watched(d, watched, &mut budget, &mut outputs),
         _ => d.skip().map_err(|_| ()),
-    })
+    });
+    Scan {
+        found: outputs.found && walk.complete,
+        complete: outputs.complete && walk.complete,
+    }
 }
 
-/// One output: its address credentials through the crate's own decode_single_output,
-/// then the reference script at map key 3, which that read-path decoder skips. A
-/// map key outside 0-3 (address, value, datum_option, script_ref), or a repeated
-/// key, leaves coverage incomplete. decode_single_output keeps only the last
-/// address, so every address a repeated key 0 carries is read here too.
+/// One output, read in place so its boundary is exact. A map's entries are walked
+/// with skip_item, which takes no break for an item, reading every address a key 0
+/// carries and every native reference script at key 3; a legacy array goes through
+/// the crate's own decode_single_output. A map key outside 0-3 (address, value,
+/// datum_option, script_ref), a repeated key, an address with no payment credential,
+/// or a map that decoder refuses leaves coverage incomplete, and every address read
+/// still counts.
 fn output_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
@@ -356,27 +373,24 @@ fn output_watched(
     scan: &mut Scan,
 ) -> Result<(), ()> {
     let start = d.position();
-    let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
-    scan.found |= address_watched(&address, watched);
-    let mut output = Decoder::new(&d.input()[start..d.position()]);
-    if output.datatype().map_err(|_| ())? != Type::Map {
+    if !matches!(d.datatype().map_err(|_| ())?, Type::Map | Type::MapIndef) {
+        let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
+        let read = output_address(&address, watched, scan);
+        scan.complete &= read;
         return Ok(());
     }
-    let len = output.map().map_err(|_| ())?;
+    let len = d.map().map_err(|_| ())?;
     let mut seen = [false; 4];
     let mut i = 0u64;
-    while seq_has_next(&mut output, len, i).map_err(|_| ())? {
-        let key = output.u64().map_err(|_| ())?;
-        let value = output.position();
-        output.skip().map_err(|_| ())?;
-        let item = &output.input()[value..output.position()];
+    while seq_has_next(d, len, i).map_err(|_| ())? {
+        let key = d.u64().map_err(|_| ())?;
+        let value = d.position();
+        skip_item(d).map_err(|_| ())?;
+        let item = &d.input()[value..d.position()];
         let repeated = key <= 3 && core::mem::replace(&mut seen[key as usize], true);
         let read = match key {
             0 => match Decoder::new(item).bytes() {
-                Ok(address) => {
-                    scan.found |= address_watched(address, watched);
-                    true
-                }
+                Ok(address) => output_address(address, watched, scan),
                 Err(_) => false,
             },
             1 | 2 => true,
@@ -386,6 +400,8 @@ fn output_watched(
         scan.complete &= read && !repeated;
         i += 1;
     }
+    let output = &d.input()[start..d.position()];
+    scan.complete &= decode_single_output(&mut Decoder::new(output)).is_ok();
     Ok(())
 }
 
@@ -461,49 +477,43 @@ pub fn withdrawal_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 }
 
 /// Does a watched key appear as a voter -- body key 19, a map whose keys are
-/// `[voter_type, 28-byte key hash]`. The key hash is element 1 of each voter.
+/// `[voter_type, 28-byte key hash]` with voter types 0-4. The key hash is element 1
+/// of each voter. A voter of any other shape leaves coverage incomplete, a hash it
+/// still carries counts, and the voters after it are still read.
 pub fn voting_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 19 {
-            let v_len = match d.map() {
-                Ok(v_len) => v_len,
-                Err(_) => return Err(()),
-            };
+            let v_len = d.map().map_err(|_| ())?;
             let mut j = 0u64;
-            loop {
-                match seq_has_next(d, v_len, j) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
-                }
-                let voter_len = match d.array() {
-                    Ok(voter_len) => voter_len,
-                    Err(_) => return Err(()),
-                };
-                let mut k = 0u64;
-                loop {
-                    match seq_has_next(d, voter_len, k) {
-                        Ok(true) => {}
-                        Ok(false) => break,
-                        Err(_) => return Err(()),
-                    }
-                    if k == 1 {
-                        match credential_watched(d, watched) {
-                            Ok(true) => scan.found = true,
-                            Ok(false) => {}
-                            Err(_) => return Err(()),
+            while seq_has_next(d, v_len, j).map_err(|_| ())? {
+                if matches!(
+                    d.datatype().map_err(|_| ())?,
+                    Type::Array | Type::ArrayIndef
+                ) {
+                    let voter_len = d.array().map_err(|_| ())?;
+                    let (mut kind, mut hash, mut k) = (None, None, 0u64);
+                    while seq_has_next(d, voter_len, k).map_err(|_| ())? {
+                        match (k, d.datatype().map_err(|_| ())?) {
+                            (0, Type::U8 | Type::U16 | Type::U32 | Type::U64) => {
+                                kind = Some(d.u64().map_err(|_| ())?);
+                            }
+                            (1, Type::Bytes) => {
+                                let bytes = read_bytes(d).map_err(|_| ())?;
+                                hash = <[u8; 28]>::try_from(bytes.as_slice()).ok();
+                            }
+                            _ => d.skip().map_err(|_| ())?,
                         }
-                    } else if d.skip().is_err() {
-                        return Err(());
+                        k += 1;
                     }
-                    k += 1;
+                    scan.found |= hash.is_some_and(|hash| watched.contains(&hash));
+                    // The ledger reads a voter in either length form, so its arity is
+                    // checked against the elements read.
+                    scan.complete &= k == 2 && hash.is_some() && kind.is_some_and(|kind| kind <= 4);
+                } else {
+                    scan.complete = false;
+                    d.skip().map_err(|_| ())?;
                 }
-                if k < 2 {
-                    return Err(());
-                }
-                if d.skip().is_err() {
-                    return Err(());
-                }
+                d.skip().map_err(|_| ())?;
                 j += 1;
             }
         } else if d.skip().is_err() {
@@ -785,95 +795,28 @@ fn certificate_arity(kind: u64) -> Option<u64> {
     }
 }
 
-/// An open container in the deep walk: the items still due in a definite one, or
-/// `None` for an indefinite one, which ends at a break (a map's only between pairs).
-struct Open {
-    left: Option<u64>,
-    map: bool,
-    owes_value: bool,
-}
-
-/// Walks one CBOR item without recursion and records matches as leaves decode, so
-/// a later malformed child cannot erase them. An indefinite byte string counts as
-/// its joined chunks.
+/// Walks one CBOR item and records matches as leaves decode, so a later malformed
+/// child cannot erase them. An indefinite byte string counts as its joined chunks.
 fn collect_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
     budget: &mut u32,
     scan: &mut Scan,
 ) -> Result<(), ()> {
-    let mut open: Vec<Open> = Vec::new();
-    let mut started = false;
-    loop {
-        match open.last_mut() {
-            None if started => return Ok(()),
-            None => started = true,
-            Some(top) => match top.left.as_mut() {
-                Some(0) => {
-                    open.pop();
-                    continue;
-                }
-                Some(left) => *left -= 1,
-                None => {
-                    if !top.owes_value && d.datatype().map_err(|_| ())? == Type::Break {
-                        d.skip().map_err(|_| ())?;
-                        open.pop();
-                        continue;
-                    }
-                    top.owes_value = top.map && !top.owes_value;
-                }
-            },
+    let within = walk_item(d, budget, |d| {
+        let mut leaf = Vec::new();
+        for chunk in d.bytes_iter().map_err(|_| ())? {
+            leaf.extend_from_slice(chunk.map_err(|_| ())?);
         }
-        if *budget == 0 {
-            scan.complete = false;
-            d.skip().map_err(|_| ())?;
-            continue;
-        }
-        *budget -= 1;
-        match d.datatype().map_err(|_| ())? {
-            Type::Bytes | Type::BytesIndef => {
-                let mut leaf = Vec::new();
-                for chunk in d.bytes_iter().map_err(|_| ())? {
-                    leaf.extend_from_slice(chunk.map_err(|_| ())?);
-                }
-                scan.found |= match leaf.len() {
-                    28 => <[u8; 28]>::try_from(leaf.as_slice())
-                        .is_ok_and(|hash| watched.contains(&hash)),
-                    29 => reward_credential(&leaf).is_some_and(|c| watched.contains(&c)),
-                    _ => false,
-                };
-            }
-            Type::Array | Type::ArrayIndef => {
-                let left = d.array().map_err(|_| ())?;
-                open.push(Open {
-                    left,
-                    map: false,
-                    owes_value: false,
-                });
-            }
-            Type::Map | Type::MapIndef => {
-                let left = match d.map().map_err(|_| ())? {
-                    Some(pairs) => Some(pairs.checked_mul(2).ok_or(())?),
-                    None => None,
-                };
-                open.push(Open {
-                    left,
-                    map: true,
-                    owes_value: false,
-                });
-            }
-            Type::Tag => {
-                d.tag().map_err(|_| ())?;
-                open.push(Open {
-                    left: Some(1),
-                    map: false,
-                    owes_value: false,
-                });
-            }
-            Type::Break => return Err(()),
-            _ => d.skip().map_err(|_| ())?,
-        }
-    }
+        scan.found |= match leaf.len() {
+            28 => <[u8; 28]>::try_from(leaf.as_slice()).is_ok_and(|hash| watched.contains(&hash)),
+            29 => reward_credential(&leaf).is_some_and(|c| watched.contains(&c)),
+            _ => false,
+        };
+        Ok(())
+    })?;
+    scan.complete &= within;
+    Ok(())
 }
 
 /// Does a watched key appear in a certificate -- body key 4, a set of certs. Each
@@ -923,9 +866,11 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                     }
                     k += 1;
                 }
+                // The ledger reads a certificate in either length form, so the arity
+                // is checked against the elements read.
                 match kind.map(certificate_arity) {
                     Some(Some(arity)) => {
-                        if cert_len != Some(arity) {
+                        if k != arity {
                             scan.complete = false;
                         }
                     }
@@ -993,12 +938,24 @@ const KNOWN_BODY_KEYS: [u64; 21] = [
 /// V1, Plutus data, redeemers, Plutus V2 and Plutus V3.
 const KNOWN_WITNESS_KEYS: core::ops::RangeInclusive<u64> = 0..=7;
 
+/// Whether every key of the map `data` is one `known` admits and every value is
+/// well-formed: unlike minicbor's `skip`, the walk refuses a break wherever an item
+/// is due, at any depth.
+fn known_shape(data: &[u8], known: impl Fn(u64) -> bool) -> Scan {
+    let mut budget = WALK_BUDGET;
+    scan_map(data, |key, d, scan| {
+        let within = walk_item(d, &mut budget, |d| d.skip().map_err(|_| ()))?;
+        scan.complete &= known(key) && within;
+        Ok(())
+    })
+}
+
 /// The watched-key scan of one transaction: its body and witness surfaces folded
 /// into one scan, beside the inputs it consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionScan {
     /// Every body and witness surface, plus the checks that the body and the
-    /// witness set hold no key outside the ledger's.
+    /// witness set hold no key outside the ledger's and no stray break.
     pub surfaces: Scan,
     /// The creating outputs of the inputs the transaction consumes.
     pub inputs: Scan,
@@ -1031,9 +988,13 @@ impl TransactionScan {
 
 /// Scans one transaction from the spans a block lays out -- its body, its witness
 /// set and its phase-2 validity -- resolving each consumed input's creating output
-/// through `resolve`. The spans must come from a hash-verified block: some CBOR no
-/// ledger accepts (a stray break, a mistyped known field, an odd-length credential)
-/// can still read complete.
+/// through `resolve`. The spans must hold ledger-valid bytes of a canonically verified
+/// block. A body commitment authenticates bytes; it proves neither their ledger
+/// acceptance nor the block's place on the chain, and both stay the caller's to prove.
+/// On bytes no ledger accepts, some shapes (a mistyped known field, an odd-length
+/// credential) still read complete, and a stray break can let a surface take a use
+/// from outside its field while the surfaces read incomplete. A found on an incomplete
+/// scan proves no use.
 pub fn transaction_use<'a>(
     body: &[u8],
     witnesses: &[u8],
@@ -1042,14 +1003,8 @@ pub fn transaction_use<'a>(
     resolve: impl FnMut(&OutPoint) -> Result<Option<&'a [u8]>, ()>,
 ) -> TransactionScan {
     let scans = [
-        scan_map(body, |key, d, scan| {
-            scan.complete &= KNOWN_BODY_KEYS.contains(&key);
-            d.skip().map_err(|_| ())
-        }),
-        scan_map(witnesses, |key, d, scan| {
-            scan.complete &= KNOWN_WITNESS_KEYS.contains(&key);
-            d.skip().map_err(|_| ())
-        }),
+        known_shape(body, |key| KNOWN_BODY_KEYS.contains(&key)),
+        known_shape(witnesses, |key| KNOWN_WITNESS_KEYS.contains(&key)),
         required_signer_use(body, watched),
         output_use(body, watched),
         withdrawal_use(body, watched),
@@ -1115,9 +1070,24 @@ mod tests {
     }
 
     #[test]
-    fn byron_address_yields_nothing() {
+    fn a_malformed_byron_address_yields_nothing() {
         let addr = with_header(0x82, &[&[0u8; 40]]); // nibble 8
         assert_eq!(payment_credential(&addr), None);
+        assert_eq!(stake_credential(&addr), None);
+    }
+
+    #[test]
+    fn a_byron_root_is_the_payment_credential() {
+        // [#6.24(h'83 581c <PAY> a0 00'), crc]: root PAY, no attributes, type 0.
+        let payload = [&[0x83, 0x58, 0x1c][..], &PAY, &[0xa0, 0x00]].concat();
+        let addr = [
+            &[0x82, 0xd8, 0x18, 0x58, payload.len() as u8][..],
+            &payload,
+            &[0x1a],
+            &crc32(&payload).to_be_bytes(),
+        ]
+        .concat();
+        assert_eq!(payment_credential(&addr), Some(PAY));
         assert_eq!(stake_credential(&addr), None);
     }
 
@@ -1480,5 +1450,18 @@ mod tests {
     fn malformed_collateral_return_is_incomplete() {
         // {16: 5} -- collateral return neither an array nor a map.
         assert!(!output_use(&[0xa1, 0x10, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    #[test]
+    fn a_body_value_past_the_walk_budget_is_incomplete() {
+        // {7: [0, ...]} = a1 07 9a <u32 count> 00...; the array is one node, each 0 one more.
+        let surfaces = |elements: u32| {
+            let mut body = vec![0xa1, 0x07, 0x9a];
+            body.extend_from_slice(&elements.to_be_bytes());
+            body.resize(body.len() + elements as usize, 0x00);
+            transaction_use(&body, &[0xa0], true, &watched_set(&[STK]), |_| Ok(None)).surfaces
+        };
+        assert!(surfaces(WALK_BUDGET - 1).complete);
+        assert!(!surfaces(WALK_BUDGET).complete);
     }
 }
