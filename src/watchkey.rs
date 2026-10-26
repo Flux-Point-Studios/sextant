@@ -231,7 +231,10 @@ fn output_watched(
     let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
     scan.found |= address_watched(&address, watched);
     let mut output = Decoder::new(&d.input()[start..d.position()]);
-    if output.datatype().map_err(|_| ())? != Type::Map {
+    if !matches!(
+        output.datatype().map_err(|_| ())?,
+        Type::Map | Type::MapIndef
+    ) {
         return Ok(());
     }
     let len = output.map().map_err(|_| ())?;

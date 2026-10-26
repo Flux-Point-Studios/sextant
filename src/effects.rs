@@ -244,4 +244,28 @@ mod tests {
             "no collateral return (no key 16)"
         );
     }
+
+    /// The ledger reads `[_ X, 0]`, an indefinite `transaction_input`, as it reads `[X, 0]`.
+    /// A valid tx `{0: [[_ X, 0]], 1: []}` spends X and an invalid one `{13: [[_ X, 0]]}`
+    /// consumes it as collateral; a `MalformedBody` here would wedge the follow at that block.
+    #[test]
+    fn an_indefinite_input_is_consumed() {
+        let x = OutPoint {
+            tx_id: [0xbb_u8; 32],
+            index: 0,
+        };
+        let mut input_x = vec![0x9f, 0x58, 0x20];
+        input_x.extend_from_slice(&x.tx_id);
+        input_x.extend_from_slice(&[0x00, 0xff]);
+        let valid = [&[0xa2, 0x00, 0x81][..], &input_x, &[0x01, 0x80]].concat();
+        let invalid = [&[0xa1, 0x0d, 0x81][..], &input_x].concat();
+        assert_eq!(
+            valid_tx_effect(&valid, [0u8; 32]).map(|effect| effect.spent),
+            Ok(vec![x])
+        );
+        assert_eq!(
+            invalid_tx_effect(&invalid, [0u8; 32], 0).map(|effect| effect.spent),
+            Ok(vec![x])
+        );
+    }
 }
