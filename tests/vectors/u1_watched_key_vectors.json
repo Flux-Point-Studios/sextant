@@ -1,0 +1,387 @@
+{
+  "note": "Expected values are hand-labelled from the Conway CDDL and the U1 contract -- the independent oracle for both the Python reference (r57_first_use.py) and the Sextant watched-key predicate (D:/fluxPoint/sextant). Per-implementation incomplete reason strings are not part of this contract; only target_found, complete and verdict are. This is the parity spec, not a second origin-consensus engine (U1 contract C7).",
+  "vectors": [
+    {
+      "name": "supported_era_no_use",
+      "description": "plain Conway tx, output to a non-target address",
+      "raw_tx_hex": "84a2018182581d60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a11a000f42400200a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "output_payment",
+      "description": "target is an output payment credential",
+      "raw_tx_hex": "84a1018182581d60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a11a000f4240a0f5f6",
+      "target_vkh": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "output_stake",
+      "description": "target is an output stake credential",
+      "raw_tx_hex": "84a1018182583900a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a21a000f4240a0f5f6",
+      "target_vkh": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "required_signer_array",
+      "description": "target is a required signer (plain array)",
+      "raw_tx_hex": "84a10e81581ca3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a0f5f6",
+      "target_vkh": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "required_signer_tagged_set",
+      "description": "required_signers is a CDDL set (tag 258)",
+      "raw_tx_hex": "84a10ed9010281581ca3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a0f5f6",
+      "target_vkh": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "vkey_witness_c_control",
+      "description": "target witnesses the tx (the C-block control)",
+      "raw_tx_hex": "84a0a100818258200000000000000000000000000000000000000000000000000000000000000000584000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f5f6",
+      "target_vkh": "f9dca21a6c826ec8acb4cf395cbc24351937bfe6560b2683ab8b415f",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "withdrawal",
+      "description": "target is a withdrawal reward account credential",
+      "raw_tx_hex": "84a105a1581de0a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a300a0f5f6",
+      "target_vkh": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "pool_owner_tagged_set",
+      "description": "target is a tagged-258 pool-registration owner",
+      "raw_tx_hex": "84a400818258200000000000000000000000000000000000000000000000000000000000000000000180020004818a03581cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc582001010101010101010101010101010101010101010101010101010101010101010000d81e820102581de0bebebebebebebebebebebebebebebebebebebebebebebebebebebebed9010281581cbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd80f6a0f5f6",
+      "target_vkh": "bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "pool_reward_account",
+      "description": "target is the pool-registration reward account",
+      "raw_tx_hex": "84a400818258200000000000000000000000000000000000000000000000000000000000000000000180020004818a03581cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc582001010101010101010101010101010101010101010101010101010101010101010000d81e820102581de0bebebebebebebebebebebebebebebebebebebebebebebebebebebebed9010281581cbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd80f6a0f5f6",
+      "target_vkh": "bebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "native_script_sig",
+      "description": "target in a witness-set native sig clause",
+      "raw_tx_hex": "84a0a101818201818200581ca7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7f5f6",
+      "target_vkh": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "native_script_deep70",
+      "description": "native sig 70 levels deep, past the old cap",
+      "raw_tx_hex": "84a0a101818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818201818200581cd0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0f5f6",
+      "target_vkh": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "reference_script_native",
+      "description": "target in an output native reference script",
+      "raw_tx_hex": "84a10181a300581d60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1010103d818582282008200581ca8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a0f5f6",
+      "target_vkh": "a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "collateral_return_refscript",
+      "description": "target in the collateral return's native ref script",
+      "raw_tx_hex": "84a400818258200000000000000000000000000000000000000000000000000000000000000000000180020010a300581d60bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb010103d818582282008200581cbabababababababababababababababababababababababababababaa0f5f6",
+      "target_vkh": "babababababababababababababababababababababababababababa",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "proposal_reward_array",
+      "description": "target is a proposal deposit-return reward account (array)",
+      "raw_tx_hex": "84a11481821a000f4240581de0a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a0f5f6",
+      "target_vkh": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "proposal_reward_tagged_set",
+      "description": "proposal_procedures is a CDDL set (tag 258)",
+      "raw_tx_hex": "84a114d9010281821a000f4240581de0a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a0f5f6",
+      "target_vkh": "a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "spent_input_payment",
+      "description": "target is the payment credential of a spent input",
+      "raw_tx_hex": "84a10081825820555555555555555555555555555555555555555555555555555555555555555500a0f5f6",
+      "target_vkh": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "resolve": {
+        "5555555555555555555555555555555555555555555555555555555555555555#0": "60a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "phase2_collateral_input",
+      "description": "phase-2 invalid: target is the spent collateral input",
+      "raw_tx_hex": "84a200818258205555555555555555555555555555555555555555555555555555555555555555000d81825820111111111111111111111111111111111111111111111111111111111111111100a0f4f6",
+      "target_vkh": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+      "resolve": {
+        "1111111111111111111111111111111111111111111111111111111111111111#0": "60c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "unsupported_era_body_key",
+      "description": "unknown body key 99 -> incomplete, not read as absence",
+      "raw_tx_hex": "84a400818258200000000000000000000000000000000000000000000000000000000000000000000180020018638200581cbabababababababababababababababababababababababababababaa0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unknown_cert_kind",
+      "description": "unknown certificate kind -> incomplete",
+      "raw_tx_hex": "84a104818218638200581ca4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "undecodable",
+      "description": "truncated CBOR -> decode failure signalled",
+      "raw_tx_hex": "8200",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unresolved_spent_input",
+      "description": "spent input with no creating output -> incomplete",
+      "raw_tx_hex": "84a10081825820555555555555555555555555555555555555555555555555555555555555555500a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {},
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    }
+  ]
+}
