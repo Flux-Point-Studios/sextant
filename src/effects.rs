@@ -268,4 +268,136 @@ mod tests {
             Ok(vec![x])
         );
     }
+
+    /// A committed mainnet block whose transactions all carry definite outputs arrays.
+    fn committed_block() -> Vec<u8> {
+        let hex = include_str!("../tests/vectors/mainnet-collat-overlap-9668317.block");
+        crate::inclusion::decode_hex(hex.trim().as_bytes()).unwrap()
+    }
+
+    /// The span of the value at map key `key` within the CBOR map `map`.
+    fn value_span(map: &[u8], key: u64) -> core::ops::Range<usize> {
+        let mut d = Decoder::new(map);
+        let len = d.map().unwrap();
+        let mut i = 0;
+        while crate::utxo::seq_has_next(&mut d, len, i).unwrap() {
+            let found = d.u64().unwrap() == key;
+            let start = d.position();
+            d.skip().unwrap();
+            if found {
+                return start..d.position();
+            }
+            i += 1;
+        }
+        panic!("no key {key}");
+    }
+
+    /// The spans of the items of the CBOR array `array`.
+    fn item_spans(array: &[u8]) -> Vec<core::ops::Range<usize>> {
+        let mut d = Decoder::new(array);
+        let len = d.array().unwrap();
+        let mut spans = Vec::new();
+        let mut i = 0;
+        while crate::utxo::seq_has_next(&mut d, len, i).unwrap() {
+            let start = d.position();
+            d.skip().unwrap();
+            spans.push(start..d.position());
+            i += 1;
+        }
+        spans
+    }
+
+    /// `block` with transaction `tx`'s outputs (body key 1) replaced by `outputs` and the
+    /// header's body hash recomputed, so the commitment holds and only the outputs differ.
+    fn with_outputs(block: &[u8], tx: usize, outputs: &[u8]) -> Vec<u8> {
+        let (view, spans) = HeaderView::decode_block(block).unwrap();
+        let body = tx_body_spans(block, &spans.tx_bodies).unwrap()[tx].clone();
+        let value = value_span(&block[body.clone()], 1);
+        let mut patched = [
+            &block[..body.start + value.start],
+            outputs,
+            &block[body.start + value.end..],
+        ]
+        .concat();
+        let (_, fresh) = HeaderView::decode_block(&patched).unwrap();
+        let hash = hash_alonzo_seg_wits(&patched, &fresh);
+        let at = patched
+            .windows(32)
+            .position(|window| window == view.block_body_hash)
+            .unwrap();
+        patched[at..at + 32].copy_from_slice(&hash);
+        patched
+    }
+
+    /// The first transaction with two or more outputs, and its outputs' item bytes.
+    fn outputs_of_a_multi_output_tx(block: &[u8]) -> (usize, Vec<Vec<u8>>) {
+        let (_, spans) = HeaderView::decode_block(block).unwrap();
+        tx_body_spans(block, &spans.tx_bodies)
+            .unwrap()
+            .into_iter()
+            .enumerate()
+            .find_map(|(tx, body)| {
+                let body = &block[body];
+                let outputs = &body[value_span(body, 1)];
+                let items: Vec<Vec<u8>> = item_spans(outputs)
+                    .into_iter()
+                    .map(|span| outputs[span].to_vec())
+                    .collect();
+                (items.len() >= 2).then_some((tx, items))
+            })
+            .unwrap()
+    }
+
+    /// `block`'s effects applied to a set seeded with every outpoint it spends from earlier
+    /// blocks, so the apply exercises exactly this block's created outpoints.
+    fn applied(block: &BlockEffects) -> crate::utxoset::UtxoSet {
+        let created: BTreeSet<OutPoint> =
+            block.txs.iter().flat_map(|tx| tx.created.clone()).collect();
+        let spent = block
+            .txs
+            .iter()
+            .flat_map(|tx| tx.spent.clone())
+            .filter(|outpoint| !created.contains(outpoint))
+            .collect();
+        let mut set = crate::utxoset::UtxoSet::new(4);
+        let seed = BlockEffects {
+            number: block.number - 1,
+            hash: block.prev_hash,
+            prev_hash: [0u8; 32],
+            txs: vec![TxEffect {
+                spent: Vec::new(),
+                created: spent,
+            }],
+        };
+        set.apply(&seed).unwrap();
+        set.apply(block).unwrap();
+        set
+    }
+
+    /// The outputs array counts its outputs and nothing else: a re-encoded array creates
+    /// exactly the outpoints it holds, and a number where an output is due refuses the
+    /// block instead of creating a phantom outpoint. A break there never reaches the count:
+    /// the block itself no longer decodes.
+    #[test]
+    fn an_outputs_array_creates_exactly_its_outputs() {
+        let block = committed_block();
+        let (tx, outputs) = outputs_of_a_multi_output_tx(&block);
+        let n = outputs.len();
+        let indefinite = [vec![0x9f], outputs.concat(), vec![0xff]].concat();
+        let effects = extract_block_effects(&with_outputs(&block, tx, &indefinite)).unwrap();
+        assert_eq!(effects.txs[tx].created.len(), n);
+        let set = applied(&effects);
+        let tx_id = effects.txs[tx].created[0].tx_id;
+        for index in 0..n {
+            let index = u16::try_from(index).unwrap();
+            assert!(set.is_unspent(&OutPoint { tx_id, index }).unwrap());
+        }
+        let past = u16::try_from(n).unwrap();
+        assert!(!set.is_unspent(&OutPoint { tx_id, index: past }).unwrap());
+        let number = [vec![0x82], outputs[0].clone(), vec![0x05]].concat();
+        assert_eq!(
+            extract_block_effects(&with_outputs(&block, tx, &number)).map(|_| ()),
+            Err(ExtractError::MalformedBody)
+        );
+    }
 }

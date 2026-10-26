@@ -389,33 +389,41 @@ pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
 }
 
 /// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
-/// the count of created outpoints `(tx_id, 0..n)`. Accepts both a definite and an indefinite
-/// outputs array (a real preprod block encodes outputs indefinitely). A body with no outputs key
-/// is malformed.
+/// the count of created outpoints `(tx_id, 0..n)`. The outputs are walked in either length
+/// form (a real preprod block encodes them indefinitely) and each must be an output, a map or
+/// a legacy array, so a header can never count an item that is not there or is no output. The
+/// body is walked to its end; one with no outputs key, or with two, is malformed.
 pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut count = None;
     let mut i = 0;
     while seq_has_next(&mut d, len, i)? {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == 1 {
-            let arr = d.array().map_err(|_| UtxoError::MalformedTx)?;
-            return match arr {
-                Some(count) => usize::try_from(count).map_err(|_| UtxoError::MalformedTx),
-                None => {
-                    // Indefinite outputs array: count elements until the closing break.
-                    let mut count = 0usize;
-                    while seq_has_next(&mut d, None, 0)? {
-                        d.skip().map_err(|_| UtxoError::MalformedTx)?;
-                        count += 1;
-                    }
-                    Ok(count)
+            let outputs = d.array().map_err(|_| UtxoError::MalformedTx)?;
+            let mut n = 0;
+            while seq_has_next(&mut d, outputs, n)? {
+                if !matches!(
+                    d.datatype().map_err(|_| UtxoError::MalformedTx)?,
+                    Type::Map | Type::MapIndef | Type::Array | Type::ArrayIndef
+                ) {
+                    return Err(UtxoError::MalformedTx);
                 }
-            };
+                d.skip().map_err(|_| UtxoError::MalformedTx)?;
+                n += 1;
+            }
+            if count.replace(n).is_some() {
+                return Err(UtxoError::MalformedTx);
+            }
+        } else {
+            skip_item(&mut d)?;
         }
-        skip_item(&mut d)?;
         i += 1;
     }
-    Err(UtxoError::MalformedTx)
+    if d.position() != tx_bytes.len() {
+        return Err(UtxoError::MalformedTx);
+    }
+    usize::try_from(count.ok_or(UtxoError::MalformedTx)?).map_err(|_| UtxoError::MalformedTx)
 }
 
 /// Decode a `set<transaction_input>` (bare array or tag-258 wrapped, definite or indefinite) into
@@ -825,6 +833,36 @@ mod tests {
                 "{output:02x?}"
             );
         }
+    }
+
+    #[test]
+    fn output_count_walks_the_outputs_it_counts() {
+        // o = [h'00', 7], a legacy output.
+        let o = [0x82, 0x41, 0x00, 0x07];
+        let count =
+            |outputs: &[&[u8]]| output_count(&[&[0xa1, 0x01][..], &outputs.concat()].concat());
+        assert_eq!(count(&[&[0x82], &o, &o]), Ok(2));
+        assert_eq!(count(&[&[0x9f], &o, &o, &[0xff]]), Ok(2));
+        for outputs in [
+            // Declared two, one present.
+            &[&[0x82][..], &o][..],
+            // Declared one, two present.
+            &[&[0x81], &o, &o],
+            // A break, and a number, where the second output is due.
+            &[&[0x82], &o, &[0xff]],
+            &[&[0x82], &o, &[0x05]],
+            // The second output cut short.
+            &[&[0x82], &o, &o[..3]],
+        ] {
+            assert_eq!(
+                count(outputs),
+                Err(UtxoError::MalformedTx),
+                "{outputs:02x?}"
+            );
+        }
+        // {1: [o], 1: [o]}: the outputs key repeated.
+        let repeated = [&[0xa2, 0x01, 0x81][..], &o, &[0x01, 0x81], &o].concat();
+        assert_eq!(output_count(&repeated), Err(UtxoError::MalformedTx));
     }
 
     #[test]
