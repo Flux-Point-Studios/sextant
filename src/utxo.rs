@@ -575,18 +575,19 @@ fn decode_legacy_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     Ok((address, lovelace, datum))
 }
 
-/// A Cardano value is a bare `coin` uint, or `[coin, multiasset]`. Only the coin is
-/// part of the read-path verdict; the multi-asset bundle is skipped.
+/// A Cardano value is a bare `coin` uint, or `[coin, multiasset]` as a definite array:
+/// the ledger refuses the indefinite pair. Only the coin is part of the read-path
+/// verdict; the multi-asset bundle is skipped.
 fn decode_value(d: &mut Decoder<'_>) -> Result<u64, UtxoError> {
-    match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
-        Type::Array | Type::ArrayIndef => {
-            let len = array_of(d, 2)?;
-            let coin = d.u64().map_err(|_| UtxoError::MalformedTx)?;
-            skip_item(d)?; // multiasset map
-            expect_end(d, len, 2)?;
-            Ok(coin)
+    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Array {
+        if d.array().map_err(|_| UtxoError::MalformedTx)? != Some(2) {
+            return Err(UtxoError::MalformedTx);
         }
-        _ => d.u64().map_err(|_| UtxoError::MalformedTx),
+        let coin = d.u64().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(d)?; // multiasset map
+        Ok(coin)
+    } else {
+        d.u64().map_err(|_| UtxoError::MalformedTx)
     }
 }
 
@@ -752,11 +753,11 @@ mod tests {
             &hash,
         ]
         .concat();
-        // The same output with the map, the value and the datum_option indefinite: key 2 is
-        // read only past the value's break, and the map ends only past the datum's.
+        // The same output with the map and the datum_option indefinite: the map ends only
+        // past the datum's break.
         let indefinite = [
             &[
-                0xbf, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xa0, 0xff, 0x02, 0x9f, 0x00, 0x58, 0x20,
+                0xbf, 0x00, 0x41, 0x00, 0x01, 0x82, 0x07, 0xa0, 0x02, 0x9f, 0x00, 0x58, 0x20,
             ][..],
             &hash,
             &[0xff, 0xff],
@@ -808,6 +809,22 @@ mod tests {
             decode_datum_option(&mut Decoder::new(&short_datum)),
             Err(UtxoError::MalformedTx)
         );
+    }
+
+    #[test]
+    fn an_indefinite_value_is_refused_as_the_ledger_refuses_it() {
+        // [_ 7, {}]: cardano-cli 11.0 refuses the indefinite [coin, multiasset] pair
+        // ("Excess terms"), in a map output and in a legacy one alike.
+        for output in [
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xa0, 0xff],
+            vec![0x82, 0x41, 0x00, 0x9f, 0x07, 0xa0, 0xff],
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
     }
 
     #[test]
