@@ -65,8 +65,52 @@ pub struct Scan {
     pub complete: bool,
 }
 
+/// Whether `address` is a well-formed Byron address: exactly the CBOR item
+/// `[#6.24(bytes payload), crc]`, the array definite, the payload a definite byte
+/// string, `crc` its CRC-32, and the payload exactly `[bytes .size 28, attributes
+/// map, uint]` with that array definite. A Byron address carries no VKH: the key
+/// behind it can spend only through a bootstrap witness, which [`witness_use`]
+/// hashes.
+fn byron_address(address: &[u8]) -> bool {
+    let mut d = Decoder::new(address);
+    let payload = (|| {
+        if d.array().ok()? != Some(2) || d.tag().ok()?.as_u64() != 24 {
+            return None;
+        }
+        let payload = d.bytes().ok()?;
+        (d.u64().ok()? == u64::from(crc32(payload))).then_some(payload)
+    })();
+    payload.is_some_and(|payload| d.position() == address.len() && byron_payload(payload))
+}
+
+/// Whether a Byron address payload is exactly `[bytes .size 28, attributes map, uint]`.
+fn byron_payload(payload: &[u8]) -> bool {
+    let mut d = Decoder::new(payload);
+    let read = (|| {
+        if d.array().ok()? != Some(3) || d.bytes().ok()?.len() != 28 {
+            return None;
+        }
+        if !matches!(d.datatype().ok()?, Type::Map | Type::MapIndef) {
+            return None;
+        }
+        d.skip().ok()?;
+        d.u64().ok()
+    })();
+    read.is_some() && d.position() == payload.len()
+}
+
+/// CRC-32 with the IEEE polynomial, the checksum a Byron address carries.
+fn crc32(data: &[u8]) -> u32 {
+    !data.iter().fold(!0u32, |crc, &byte| {
+        (0..8).fold(crc ^ u32::from(byte), |crc, _| {
+            (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg())
+        })
+    })
+}
+
 /// Payment credentials of regular inputs for valid transactions, collateral otherwise.
-/// Unresolved or unsupported addresses and resolver errors leave coverage incomplete.
+/// Unresolved inputs, resolver errors, and resolved addresses without a payment
+/// credential leave coverage incomplete, except a well-formed Byron address.
 pub fn input_use<'a>(
     body: &[u8],
     is_valid: bool,
@@ -85,7 +129,7 @@ pub fn input_use<'a>(
             match resolve(&input) {
                 Ok(Some(address)) => match payment_credential(address) {
                     Some(credential) => scan.found |= watched.contains(&credential),
-                    None => scan.complete = false,
+                    None => scan.complete &= byron_address(address),
                 },
                 Ok(None) | Err(()) => scan.complete = false,
             }
@@ -574,63 +618,46 @@ fn array_count(d: &mut Decoder<'_>) -> Result<u64, ()> {
     Ok(count)
 }
 
-/// Reads one verification-key witness `[vkey (32 bytes), signature, ...]` and
-/// reports whether BLAKE2b-224 of its 32-byte vkey is watched. Elements after the
-/// vkey are skipped; a non-bytes vkey leaves coverage incomplete.
-fn witness_vkey_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> Result<bool, ()> {
-    let len = d.array().map_err(|_| ())?;
-    let mut hit = false;
-    let mut k = 0u64;
-    loop {
-        match seq_has_next(d, len, k) {
-            Ok(true) => {}
-            Ok(false) => break,
-            Err(_) => return Err(()),
+/// The verification key of one witness row, read only in its CDDL shape: an array of
+/// `arity` elements in either length form (2 for a vkeywitness, 4 for a
+/// bootstrap_witness), the first a definite 32-byte byte string. Any other row is
+/// `None`.
+fn witness_vkey(row: &[u8], arity: u64) -> Option<&[u8]> {
+    let mut d = Decoder::new(row);
+    let len = d.array().ok()?;
+    let vkey = d.bytes().ok()?;
+    for k in 1..arity {
+        if !seq_has_next(&mut d, len, k).ok()? {
+            return None;
         }
-        if k == 0 {
-            if d.datatype().map_err(|_| ())? != Type::Bytes {
-                return Err(());
-            }
-            let vkey = read_bytes(d).map_err(|_| ())?;
-            if vkey.len() == 32 && watched.contains(&blake2b224(&vkey)) {
-                hit = true;
-            }
-        } else {
-            d.skip().map_err(|_| ())?;
-        }
-        k += 1;
+        d.skip().ok()?;
     }
-    Ok(hit)
+    (vkey.len() == 32 && !seq_has_next(&mut d, len, arity).ok()?).then_some(vkey)
 }
 
 /// Does a watched key appear as a verification-key witness -- witness-set key 0
-/// (vkey witnesses) or key 2 (bootstrap witnesses), each a set of
-/// `[vkey (32 bytes), signature, ...]`. The 28-byte key hash is BLAKE2b-224 of the
-/// 32-byte vkey (Option A): the one watched-key surface that hashes rather than
-/// reading a credential in clear.
+/// (vkey witnesses) or key 2 (bootstrap witnesses). The 28-byte key hash is
+/// BLAKE2b-224 of the 32-byte vkey (Option A): the one watched-key surface that
+/// hashes rather than reading a credential in clear. Each row is read from its own
+/// span, so a row outside its CDDL shape leaves coverage incomplete while the rows
+/// after it are still read: a proven use dominates a malformed row.
 pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(witnesses, |key, d, scan| {
-        if key == 0 || key == 2 {
-            let set_len = match input_set_len(d) {
-                Ok(set_len) => set_len,
-                Err(_) => return Err(()),
-            };
-            let mut j = 0u64;
-            loop {
-                match seq_has_next(d, set_len, j) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
-                }
-                match witness_vkey_watched(d, watched) {
-                    Ok(true) => scan.found = true,
-                    Ok(false) => {}
-                    Err(_) => return Err(()),
-                }
-                j += 1;
+        let arity = match key {
+            0 => 2,
+            2 => 4,
+            _ => return d.skip().map_err(|_| ()),
+        };
+        let set_len = input_set_len(d).map_err(|_| ())?;
+        let mut j = 0u64;
+        while seq_has_next(d, set_len, j).map_err(|_| ())? {
+            let start = d.position();
+            d.skip().map_err(|_| ())?;
+            match witness_vkey(&d.input()[start..d.position()], arity) {
+                Some(vkey) => scan.found |= watched.contains(&blake2b224(vkey)),
+                None => scan.complete = false,
             }
-        } else if d.skip().is_err() {
-            return Err(());
+            j += 1;
         }
         Ok(())
     })
@@ -1190,13 +1217,47 @@ mod tests {
         assert!(!proposal_use(&[0xa1, 0x14, 0x05], &watched_set(&[STK])).complete);
     }
 
-    /// `{slot: [[vkey(32), sig(64)]]}` = a1 <slot> 81 82 58 20 <vkey> 58 40 <sig>.
+    /// `{slot: [row]}` with the slot's CDDL row: `[vkey(32), sig(64)]` for vkey witnesses
+    /// (slot 0), and for bootstrap witnesses (slot 2) that plus a 32-byte chain code and
+    /// empty attributes.
     fn witness_map(slot: u8) -> Vec<u8> {
-        let mut w = vec![0xa1, slot, 0x81, 0x82, 0x58, 0x20];
+        let bootstrap = slot == 2;
+        let mut w = vec![
+            0xa1,
+            slot,
+            0x81,
+            if bootstrap { 0x84 } else { 0x82 },
+            0x58,
+            0x20,
+        ];
         w.extend_from_slice(&VK);
         w.extend_from_slice(&[0x58, 0x40]);
         w.extend_from_slice(&SIG);
+        if bootstrap {
+            w.extend_from_slice(&[0x58, 0x20]);
+            w.extend_from_slice(&[0u8; 32]);
+            w.push(0x40);
+        }
         w
+    }
+
+    #[test]
+    fn crc32_matches_the_ieee_check_value() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn a_witness_row_holds_its_own_arity() {
+        // [vkey, sig, h''] and one more item after it: a bootstrap row of three elements
+        // stays short of four whatever follows it.
+        let mut row = vec![0x83, 0x58, 0x20];
+        row.extend_from_slice(&VK);
+        row.extend_from_slice(&[0x58, 0x40]);
+        row.extend_from_slice(&SIG);
+        row.extend_from_slice(&[0x40, 0x40]);
+        assert_eq!(witness_vkey(&row, 4), None);
+        row[0] = 0x84;
+        assert_eq!(witness_vkey(&row, 4), Some(&VK[..]));
     }
 
     #[test]

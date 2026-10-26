@@ -1,0 +1,687 @@
+{
+  "note": "Hand-labelled from the Conway CDDL and the U1 contract: a well-formed Byron address closes a spent input with no credential, every other credential-free address leaves it open, and a witness row is read only in its CDDL shape. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "vectors": [
+    {
+      "name": "byron_icarus_unwatched",
+      "description": "a mainnet Icarus-style Byron input spent through an unwatched bootstrap witness",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_daedalus_unwatched",
+      "description": "a mainnet Daedalus-style Byron input spent through an unwatched bootstrap witness",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818584283581c74bd7f2d7cabc1e91384e535a88045c6b9039f1267e95ca8f0f0a73aa101581e581cbeab7b5c6b45ef3346a708a8fe63e1310e97f3384079ae5bfd39d018001aa467d54f"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_watched_bootstrap",
+      "description": "the watched key spends a Byron input through its bootstrap witness",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "byron_watched_vkey_witness",
+      "description": "a Byron input beside a vkey witness of the watched key",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a20081825820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a0281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "byron_tagged_set_control",
+      "description": "the bootstrap witnesses as a tag-258 set",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a102d9010281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_indefinite_row",
+      "description": "a bootstrap witness row as an indefinite array, carrying the watched key",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a102819f5820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0fff5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "byron_and_shelley_watched",
+      "description": "a Byron input and a second input paying the watched key",
+      "raw_tx_hex": "84a10082825820888888888888888888888888888888888888888888888888888888888888888800825820888888888888888888888888888888888888888888888888888888888888888801a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2",
+        "8888888888888888888888888888888888888888888888888888888888888888#1": "607c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "byron_crc_mismatch",
+      "description": "the Icarus address with its CRC off by one",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b3"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_trailing_byte",
+      "description": "the Icarus address followed by one more byte",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b200"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_truncated",
+      "description": "the Icarus address missing its last byte",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_header_only",
+      "description": "a single 0x82 byte",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_outer_arity_1",
+      "description": "the Icarus address with its array declared as one element",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "81d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_payload_arity_2",
+      "description": "a payload array declared as two elements over three, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582182581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a20ba7941"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_root_27_bytes",
+      "description": "a payload whose root is 27 bytes, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582083581b000000000000000000000000000000000000000000000000000000a0001a0ebb62f2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_not_a_map",
+      "description": "a payload whose attributes are an array, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c0000000000000000000000000000000000000000000000000000000080001a4bf398c3"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_payload_trailing_byte",
+      "description": "a payload with a byte after its item, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a000001af77b75c4"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_foreign_tag",
+      "description": "the payload under tag 121 instead of 24",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d879582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_chunked_payload",
+      "description": "the payload as an indefinite byte string of two chunks",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d8185f5083581cf195a03699f48d9660d7159f6651bf0b0c3eda9e454e526242dfc8ced4a000ff1a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_indefinite_outer",
+      "description": "the address array as an indefinite array (header 0x9f)",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "9fd818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2ff"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unsupported_reward_account",
+      "description": "a reward account resolved as a spent input's address",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "e0d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unsupported_header_nibble_9",
+      "description": "an address under header nibble 9, which no era defines",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "90d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unsupported_empty",
+      "description": "an empty address",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": ""
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "unsupported_short_shelley",
+      "description": "an enterprise header followed by 27 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_vkey_31",
+      "description": "a bootstrap row whose vkey is 31 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028184581fb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_vkey_not_bytes",
+      "description": "a bootstrap row whose vkey is a number",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281840558405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_arity_3",
+      "description": "a bootstrap row of three elements",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281835820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccf5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_arity_2",
+      "description": "a vkeywitness-shaped row in the bootstrap slot",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281825820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_vkey_arity_4",
+      "description": "a bootstrap-shaped row in the vkey witness slot",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_row_not_array",
+      "description": "a bootstrap row that is a number",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028105f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_slot_map",
+      "description": "the bootstrap slot holding a map",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a102a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dominance_malformed_row_then_watched",
+      "description": "a 31-byte-vkey bootstrap row, then the watched key's row",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028284581fb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0845820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "dominance_number_row_then_watched",
+      "description": "a bootstrap row that is a number, then the watched key's row",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028205845820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "dominance_bad_byron_watched_vkey",
+      "description": "a CRC-broken Byron input beside the watched key's vkey witness",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081825820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a00000"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "dominance_reward_input_then_watched_input",
+      "description": "a reward-account input, then an input paying the watched key",
+      "raw_tx_hex": "84a10082825820888888888888888888888888888888888888888888888888888888888888888800825820888888888888888888888888888888888888888888888888888888888888888801a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "e0d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7",
+        "8888888888888888888888888888888888888888888888888888888888888888#1": "607c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": true,
+          "complete": false
+        },
+        "verdict": "USE_FOUND"
+      }
+    }
+  ]
+}
