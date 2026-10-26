@@ -4,7 +4,8 @@
 //! a clean NO_USE.
 
 use sextant::watchkey::{
-    Scan, input_use, native_script_use, output_use, proposal_use, transaction_use, update_use,
+    Scan, Verdict, input_use, native_script_use, output_use, proposal_use, transaction_use,
+    update_use,
 };
 use std::collections::BTreeSet;
 
@@ -446,4 +447,48 @@ fn an_output_the_read_path_refuses_is_incomplete() {
             "{body:02x?}"
         );
     }
+}
+
+/// materios's flood_ref_indef_pair_sigW, from the red-team of 015cb84: an output whose
+/// script_ref is the native pair `[_ 0, [0, h'a1..']]`, which cardano-cli accepts. The sig
+/// clause is read; refusing the pair would let one such output per block deny NO_USE.
+#[test]
+fn the_indefinite_script_ref_flood_reads_its_sig_clause() {
+    let body = hex::decode(concat!(
+        "a30081825820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaa000181a300581d60c9c9c9c9c9c9c9c9c9c9",
+        "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9011a001e848003d81858",
+        "239f008200581ca1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "a1a1a1a1a1a1a1ff021a0002bf20",
+    ))
+    .unwrap();
+    let spent = [&[0x60][..], &OTHER].concat();
+    let scan = |watched: &BTreeSet<[u8; 28]>| {
+        transaction_use(&body, &[0xa0], true, watched, |_| Ok(Some(&spent[..]))).verdict()
+    };
+    assert_eq!(scan(&watched()), Verdict::UseFound);
+    assert_eq!(scan(&BTreeSet::from([[0x5e; 28]])), Verdict::NoUse);
+}
+
+/// materios's swallow_N, from the same red-team: output 0's multiasset holds `[1, break]`.
+/// A skip that takes the break for an item reads a different body from the one the ledger
+/// would refuse, so the scan stays INCOMPLETE and finds nothing.
+#[test]
+fn a_break_in_a_multiasset_leaves_the_transaction_incomplete() {
+    let body = hex::decode(concat!(
+        "a10182bf018207829f8201ffff82581d60a1a1a1a1a1a1a1a1a1a1a1",
+        "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10700581d60c9c9c9c9c9c9",
+        "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9ff82581d60c9",
+        "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c907",
+    ))
+    .unwrap();
+    let scan = transaction_use(&body, &[0xa0], true, &watched(), |_| Ok(None));
+    assert_eq!(
+        scan.surfaces,
+        Scan {
+            found: false,
+            complete: false
+        }
+    );
+    assert_eq!(scan.verdict(), Verdict::Incomplete);
 }

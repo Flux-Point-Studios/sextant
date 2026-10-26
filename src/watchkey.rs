@@ -8,7 +8,7 @@ use minicbor::data::Type;
 use crate::hash::blake2b224;
 use crate::utxo::{
     OutPoint, decode_outpoint, decode_single_output, input_set_len, read_bytes, seq_has_next,
-    skip_item,
+    skip_item, walk_item,
 };
 
 /// Payment key/script hash (28 bytes) of a Shelley address, or `None` when the
@@ -751,95 +751,28 @@ fn certificate_arity(kind: u64) -> Option<u64> {
     }
 }
 
-/// An open container in the deep walk: the items still due in a definite one, or
-/// `None` for an indefinite one, which ends at a break (a map's only between pairs).
-struct Open {
-    left: Option<u64>,
-    map: bool,
-    owes_value: bool,
-}
-
-/// Walks one CBOR item without recursion and records matches as leaves decode, so
-/// a later malformed child cannot erase them. An indefinite byte string counts as
-/// its joined chunks.
+/// Walks one CBOR item and records matches as leaves decode, so a later malformed
+/// child cannot erase them. An indefinite byte string counts as its joined chunks.
 fn collect_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
     budget: &mut u32,
     scan: &mut Scan,
 ) -> Result<(), ()> {
-    let mut open: Vec<Open> = Vec::new();
-    let mut started = false;
-    loop {
-        match open.last_mut() {
-            None if started => return Ok(()),
-            None => started = true,
-            Some(top) => match top.left.as_mut() {
-                Some(0) => {
-                    open.pop();
-                    continue;
-                }
-                Some(left) => *left -= 1,
-                None => {
-                    if !top.owes_value && d.datatype().map_err(|_| ())? == Type::Break {
-                        d.skip().map_err(|_| ())?;
-                        open.pop();
-                        continue;
-                    }
-                    top.owes_value = top.map && !top.owes_value;
-                }
-            },
+    let within = walk_item(d, budget, |d| {
+        let mut leaf = Vec::new();
+        for chunk in d.bytes_iter().map_err(|_| ())? {
+            leaf.extend_from_slice(chunk.map_err(|_| ())?);
         }
-        if *budget == 0 {
-            scan.complete = false;
-            d.skip().map_err(|_| ())?;
-            continue;
-        }
-        *budget -= 1;
-        match d.datatype().map_err(|_| ())? {
-            Type::Bytes | Type::BytesIndef => {
-                let mut leaf = Vec::new();
-                for chunk in d.bytes_iter().map_err(|_| ())? {
-                    leaf.extend_from_slice(chunk.map_err(|_| ())?);
-                }
-                scan.found |= match leaf.len() {
-                    28 => <[u8; 28]>::try_from(leaf.as_slice())
-                        .is_ok_and(|hash| watched.contains(&hash)),
-                    29 => reward_credential(&leaf).is_some_and(|c| watched.contains(&c)),
-                    _ => false,
-                };
-            }
-            Type::Array | Type::ArrayIndef => {
-                let left = d.array().map_err(|_| ())?;
-                open.push(Open {
-                    left,
-                    map: false,
-                    owes_value: false,
-                });
-            }
-            Type::Map | Type::MapIndef => {
-                let left = match d.map().map_err(|_| ())? {
-                    Some(pairs) => Some(pairs.checked_mul(2).ok_or(())?),
-                    None => None,
-                };
-                open.push(Open {
-                    left,
-                    map: true,
-                    owes_value: false,
-                });
-            }
-            Type::Tag => {
-                d.tag().map_err(|_| ())?;
-                open.push(Open {
-                    left: Some(1),
-                    map: false,
-                    owes_value: false,
-                });
-            }
-            Type::Break => return Err(()),
-            _ => d.skip().map_err(|_| ())?,
-        }
-    }
+        scan.found |= match leaf.len() {
+            28 => <[u8; 28]>::try_from(leaf.as_slice()).is_ok_and(|hash| watched.contains(&hash)),
+            29 => reward_credential(&leaf).is_some_and(|c| watched.contains(&c)),
+            _ => false,
+        };
+        Ok(())
+    })?;
+    scan.complete &= within;
+    Ok(())
 }
 
 /// Does a watched key appear in a certificate -- body key 4, a set of certs. Each
@@ -960,13 +893,14 @@ const KNOWN_BODY_KEYS: [u64; 21] = [
 const KNOWN_WITNESS_KEYS: core::ops::RangeInclusive<u64> = 0..=7;
 
 /// Whether every key of the map `data` is one `known` admits and every value is
-/// well-formed. The values are walked with nothing watched: unlike minicbor's `skip`,
-/// the walk refuses a break wherever an item is due, at any depth.
+/// well-formed: unlike minicbor's `skip`, the walk refuses a break wherever an item
+/// is due, at any depth.
 fn known_shape(data: &[u8], known: impl Fn(u64) -> bool) -> Scan {
     let mut budget = WALK_BUDGET;
     scan_map(data, |key, d, scan| {
-        scan.complete &= known(key);
-        collect_watched(d, &BTreeSet::new(), &mut budget, scan)
+        let within = walk_item(d, &mut budget, |d| d.skip().map_err(|_| ()))?;
+        scan.complete &= known(key) && within;
+        Ok(())
     })
 }
 
@@ -1008,9 +942,13 @@ impl TransactionScan {
 
 /// Scans one transaction from the spans a block lays out -- its body, its witness
 /// set and its phase-2 validity -- resolving each consumed input's creating output
-/// through `resolve`. The spans must come from a hash-verified block: some CBOR no
-/// ledger accepts (a mistyped known field, an odd-length credential) can still read
-/// complete.
+/// through `resolve`. The spans must hold ledger-valid bytes of a canonically verified
+/// block. A body commitment authenticates bytes; it proves neither their ledger
+/// acceptance nor the block's place on the chain, and both stay the caller's to prove.
+/// On bytes no ledger accepts, some shapes (a mistyped known field, an odd-length
+/// credential) still read complete, and a stray break can let a surface take a use
+/// from outside its field while the surfaces read incomplete. A found on an incomplete
+/// scan proves no use.
 pub fn transaction_use<'a>(
     body: &[u8],
     witnesses: &[u8],

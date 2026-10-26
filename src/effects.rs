@@ -310,13 +310,21 @@ mod tests {
     /// `block` with transaction `tx`'s outputs (body key 1) replaced by `outputs` and the
     /// header's body hash recomputed, so the commitment holds and only the outputs differ.
     fn with_outputs(block: &[u8], tx: usize, outputs: &[u8]) -> Vec<u8> {
+        with_body(block, tx, |body| {
+            let value = value_span(body, 1);
+            [&body[..value.start], outputs, &body[value.end..]].concat()
+        })
+    }
+
+    /// `block` with transaction `tx`'s body replaced by `patch` of it and the header's body
+    /// hash recomputed, so the commitment holds and only that body differs.
+    fn with_body(block: &[u8], tx: usize, patch: impl FnOnce(&[u8]) -> Vec<u8>) -> Vec<u8> {
         let (view, spans) = HeaderView::decode_block(block).unwrap();
         let body = tx_body_spans(block, &spans.tx_bodies).unwrap()[tx].clone();
-        let value = value_span(&block[body.clone()], 1);
         let mut patched = [
-            &block[..body.start + value.start],
-            outputs,
-            &block[body.start + value.end..],
+            &block[..body.start],
+            &patch(&block[body.clone()]),
+            &block[body.end..],
         ]
         .concat();
         let (_, fresh) = HeaderView::decode_block(&patched).unwrap();
@@ -397,6 +405,44 @@ mod tests {
         let number = [vec![0x82], outputs[0].clone(), vec![0x05]].concat();
         assert_eq!(
             extract_block_effects(&with_outputs(&block, tx, &number)).map(|_| ()),
+            Err(ExtractError::MalformedBody)
+        );
+    }
+
+    /// An output no read could return, or a body with no outputs key, refuses the block
+    /// instead of creating outpoints.
+    #[test]
+    fn a_body_the_read_path_refuses_creates_no_outpoint() {
+        let block = committed_block();
+        let (tx, outputs) = outputs_of_a_multi_output_tx(&block);
+        for output in [
+            // {0: h'00', 0: h'01', 1: 7}: a repeated address key.
+            vec![0xa3, 0x00, 0x41, 0x00, 0x00, 0x41, 0x01, 0x01, 0x07],
+            // {0: h'00', 1: 7, 4: 0}: an output key the ledger does not define.
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x04, 0x00],
+            // [(_ h'00'), 7]: an address in chunks.
+            vec![0x82, 0x5f, 0x41, 0x00, 0xff, 0x07],
+        ] {
+            let patched = [vec![0x82], outputs[0].clone(), output.clone()].concat();
+            assert_eq!(
+                extract_block_effects(&with_outputs(&block, tx, &patched)).map(|_| ()),
+                Err(ExtractError::MalformedBody),
+                "{output:02x?}"
+            );
+        }
+        // The body without key 1: its definite map one entry shorter.
+        let without_outputs = with_body(&block, tx, |body| {
+            let entry = value_span(body, 1);
+            assert!((0xa1..=0xb7).contains(&body[0]) && body[entry.start - 1] == 0x01);
+            [
+                &[body[0] - 1][..],
+                &body[1..entry.start - 1],
+                &body[entry.end..],
+            ]
+            .concat()
+        });
+        assert_eq!(
+            extract_block_effects(&without_outputs).map(|_| ()),
             Err(ExtractError::MalformedBody)
         );
     }

@@ -390,9 +390,10 @@ pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
 
 /// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
 /// the count of created outpoints `(tx_id, 0..n)`. The outputs are walked in either length
-/// form (a real preprod block encodes them indefinitely) and each must be an output, a map or
-/// a legacy array, so a header can never count an item that is not there or is no output. The
-/// body is walked to its end; one with no outputs key, or with two, is malformed.
+/// form (a real preprod block encodes them indefinitely) and each must decode as the read
+/// path decodes an output, so a header can never count an item that is not there or that
+/// no read could return. The body is walked to its end; one with no outputs key, or with
+/// two, is malformed.
 pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
@@ -403,13 +404,7 @@ pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
             let outputs = d.array().map_err(|_| UtxoError::MalformedTx)?;
             let mut n = 0;
             while seq_has_next(&mut d, outputs, n)? {
-                if !matches!(
-                    d.datatype().map_err(|_| UtxoError::MalformedTx)?,
-                    Type::Map | Type::MapIndef | Type::Array | Type::ArrayIndef
-                ) {
-                    return Err(UtxoError::MalformedTx);
-                }
-                d.skip().map_err(|_| UtxoError::MalformedTx)?;
+                decode_single_output(&mut d)?;
                 n += 1;
             }
             if count.replace(n).is_some() {
@@ -457,14 +452,97 @@ fn expect_end(d: &mut Decoder<'_>, len: Option<u64>, read: u64) -> Result<(), Ut
     Ok(())
 }
 
-/// Skip one item where the shape requires one. minicbor's `skip` reads a break as an item,
-/// which would let a container short of an item end on the break of the container around
-/// it and read on into that container.
+/// Skip one item where the shape requires one, refusing a break wherever an item is due
+/// inside it too. minicbor's `skip` reads such a break as an item, which would let a
+/// container short of an item end on the break of the container around it and read on
+/// into that container.
 pub(crate) fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
-    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Break {
-        return Err(UtxoError::MalformedTx);
+    let mut budget = u32::MAX;
+    match walk_item(d, &mut budget, |d| d.skip().map_err(|_| ())) {
+        Ok(true) => Ok(()),
+        _ => Err(UtxoError::MalformedTx),
     }
-    d.skip().map_err(|_| UtxoError::MalformedTx)
+}
+
+/// An open container in [`walk_item`]: the items still due in a definite one, or `None`
+/// for an indefinite one, which ends at a break (a map's only between pairs).
+struct Open {
+    left: Option<u64>,
+    map: bool,
+    owes_value: bool,
+}
+
+/// Walks one CBOR item without recursion, refusing a break wherever an item is due, at
+/// any depth. `bytes` consumes each byte string, chunked or not. Each item spends one
+/// unit of `budget`; once it is spent, the rest of the item is skipped unread and the
+/// walk answers `false`.
+pub(crate) fn walk_item(
+    d: &mut Decoder<'_>,
+    budget: &mut u32,
+    mut bytes: impl FnMut(&mut Decoder<'_>) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    let mut open: Vec<Open> = Vec::new();
+    let mut started = false;
+    let mut within = true;
+    loop {
+        match open.last_mut() {
+            None if started => return Ok(within),
+            None => started = true,
+            Some(top) => match top.left.as_mut() {
+                Some(0) => {
+                    open.pop();
+                    continue;
+                }
+                Some(left) => *left -= 1,
+                None => {
+                    if !top.owes_value && d.datatype().map_err(|_| ())? == Type::Break {
+                        d.skip().map_err(|_| ())?;
+                        open.pop();
+                        continue;
+                    }
+                    top.owes_value = top.map && !top.owes_value;
+                }
+            },
+        }
+        if *budget == 0 {
+            within = false;
+            d.skip().map_err(|_| ())?;
+            continue;
+        }
+        *budget -= 1;
+        match d.datatype().map_err(|_| ())? {
+            Type::Bytes | Type::BytesIndef => bytes(d)?,
+            Type::Array | Type::ArrayIndef => {
+                let left = d.array().map_err(|_| ())?;
+                open.push(Open {
+                    left,
+                    map: false,
+                    owes_value: false,
+                });
+            }
+            Type::Map | Type::MapIndef => {
+                let left = match d.map().map_err(|_| ())? {
+                    Some(pairs) => Some(pairs.checked_mul(2).ok_or(())?),
+                    None => None,
+                };
+                open.push(Open {
+                    left,
+                    map: true,
+                    owes_value: false,
+                });
+            }
+            Type::Tag => {
+                d.tag().map_err(|_| ())?;
+                open.push(Open {
+                    left: Some(1),
+                    map: false,
+                    owes_value: false,
+                });
+            }
+            Type::Break => return Err(()),
+            _ => d.skip().map_err(|_| ())?,
+        }
+    }
 }
 
 /// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
@@ -560,8 +638,10 @@ fn decode_map_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
             0 => address = Some(read_bytes(d)?),
             1 => lovelace = Some(decode_value(d)?),
             2 => datum = Some(decode_datum_option(d)?),
-            // 3 = script_ref (not part of the read-path verdict), or a future key.
-            _ => skip_item(d)?,
+            // script_ref, which the read-path verdict does not use.
+            3 => skip_item(d)?,
+            // The ledger refuses any other key on sight.
+            _ => return Err(UtxoError::MalformedTx),
         }
         i += 1;
     }
@@ -869,6 +949,71 @@ mod tests {
         // {1: [o], 1: [o]}: the outputs key repeated.
         let repeated = [&[0xa2, 0x01, 0x81][..], &o, &[0x01, 0x81], &o].concat();
         assert_eq!(output_count(&repeated), Err(UtxoError::MalformedTx));
+    }
+
+    #[test]
+    fn a_body_without_outputs_has_no_count() {
+        // {0: []}: the ledger requires key 1.
+        assert_eq!(
+            output_count(&[0xa1, 0x00, 0x80]),
+            Err(UtxoError::MalformedTx)
+        );
+    }
+
+    #[test]
+    fn output_count_counts_only_outputs_the_read_path_reads() {
+        for output in [
+            // {0: h'00', 0: h'01', 1: 7}: a repeated address key.
+            vec![0xa3, 0x00, 0x41, 0x00, 0x00, 0x41, 0x01, 0x01, 0x07],
+            // [(_ h'00'), 7]: an address in chunks.
+            vec![0x82, 0x5f, 0x41, 0x00, 0xff, 0x07],
+            // [h'00', [_ 7, {}]]: an indefinite value pair.
+            vec![0x82, 0x41, 0x00, 0x9f, 0x07, 0xa0, 0xff],
+            // [h'00', [7, {break: 0}]]: a break where a multiasset key is due.
+            vec![0x82, 0x41, 0x00, 0x82, 0x07, 0xa1, 0xff, 0x00],
+            // {0: h'00', 1: 7, 4: 0}: an output key the ledger does not define.
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x04, 0x00],
+        ] {
+            assert_eq!(
+                output_count(&body_with_output(&output)),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_output_key_the_ledger_does_not_define_is_refused() {
+        // cardano-cli 11.0.0.0 refuses key 4 on sight, in either length form: "not a valid key".
+        for output in [
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x04, 0x00],
+            vec![0xbf, 0x00, 0x41, 0x00, 0x01, 0x07, 0x04, 0x00, 0xff],
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_break_deep_in_a_skipped_item_ends_the_read() {
+        // materios's swallow_N: output 0's multiasset holds [1, break]. A skip that takes the
+        // break for an item ends output 0 early and reads the next array, [h'60 a1..', 7], as
+        // output 1.
+        let body = hex::decode(concat!(
+            "a10182bf018207829f8201ffff82581d60",
+            "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "0700581d60",
+            "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9",
+            "ff82581d60",
+            "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9",
+            "07",
+        ))
+        .unwrap();
+        assert_eq!(output_exists(&body, 1), Err(UtxoError::MalformedTx));
+        assert_eq!(output_count(&body), Err(UtxoError::MalformedTx));
     }
 
     #[test]
