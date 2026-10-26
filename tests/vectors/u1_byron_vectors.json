@@ -1,5 +1,5 @@
 {
-  "note": "Hand-labelled from the Conway CDDL and the U1 contract: a well-formed Byron address closes a spent input with no credential, every other credential-free address leaves it open, and a witness row is read only in its CDDL shape. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "note": "Hand-labelled from the Conway CDDL, the U1 contract and the shipped ledger's verdicts: a well-formed Byron address closes a spent input with no credential, every other credential-free address leaves it open, a witness row is read only in its CDDL shape, and a break where an item is due in the body or the witness set leaves the transaction open. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract; a vector's correction records a label it once carried.",
   "vectors": [
     {
       "name": "byron_icarus_unwatched",
@@ -384,7 +384,7 @@
     },
     {
       "name": "byron_attributes_indefinite_map",
-      "description": "the attributes as an indefinite map {_ 1: h'00'}, which the ledger reads",
+      "description": "the attributes as an indefinite map {_ 1: h'00'}, which no ledger decoder reads",
       "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
       "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
       "resolve": {
@@ -397,9 +397,325 @@
         },
         "resolved_input": {
           "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      },
+      "correction": {
+        "previous_expected": {
+          "use_surfaces": {
+            "target_found": false,
+            "complete": true
+          },
+          "resolved_input": {
+            "target_found": false,
+            "complete": true
+          },
+          "verdict": "NO_USE"
+        },
+        "previous_fixture_sha256": "a12c95834736d1b070d076ddf34740b26c6e5738680bcd70499c5635181680ca",
+        "reason": "The CLEAN label read cardano-ledger master. materios's red-team of e451998 (F1) ran the shipped cardano-cli 11.0.0.0 (sha256 b55687eb...), which refuses an indefinite Byron attribute map, as every Byron-to-Conway decoder does."
+      }
+    },
+    {
+      "name": "byron_attributes_descending_keys",
+      "description": "attributes keyed 5 then 3, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000a205400340001a838cdff6"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_duplicate_keys",
+      "description": "attribute key 5 twice, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000a205400540001a8701a344"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_ascending_unknown_keys",
+      "description": "unknown attribute keys 3 and 5 in order, which the ledger keeps",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000a203400540001a084156e4"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
           "complete": true
         },
         "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_magic_not_a_uint",
+      "description": "a network magic (key 2) whose bytes hold a byte string",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000a102424100001a9e56af68"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_magic_trailing_byte",
+      "description": "a network magic whose bytes hold a uint and one more byte",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582983581c00000000000000000000000000000000000000000000000000000000a102461a2d964a0900001a4d30aa05"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_testnet_magic",
+      "description": "a network magic holding the uint 764824073",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c00000000000000000000000000000000000000000000000000000000a102451a2d964a09001abc4937db"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_magic_true",
+      "description": "a network magic whose bytes hold the simple value true",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c00000000000000000000000000000000000000000000000000000000a10241f5001abfbf6ec4"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_path_not_bytes",
+      "description": "a derivation path (key 1) whose bytes hold a uint",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c00000000000000000000000000000000000000000000000000000000a1014105001ab9b62097"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_type_1",
+      "description": "address type 1, which the ledger does not define",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c00000000000000000000000000000000000000000000000000000000a0011aa9708cf7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_type_2",
+      "description": "address type 2, a redeem address",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c00000000000000000000000000000000000000000000000000000000a0021a3079dd4d"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "byron_type_3",
+      "description": "address type 3, which the ledger does not define",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c00000000000000000000000000000000000000000000000000000000a0031a477eeddb"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_type_break",
+      "description": "a break where the address type is due",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c00000000000000000000000000000000000000000000000000000000a0ff1af37553ec"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_root_29_bytes",
+      "description": "a payload whose root is 29 bytes, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581d0000000000000000000000000000000000000000000000000000000000a0001a6ecc2ddc"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_outer_98_02",
+      "description": "the address array as 98 02, a non-minimal head under nibble 9",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "9802d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_after_a_gap_input",
+      "description": "a reward-account input, then a well-formed Byron input",
+      "raw_tx_hex": "84a10082825820888888888888888888888888888888888888888888888888888888888888888800825820888888888888888888888888888888888888888888888888888888888888888801a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "e0d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7",
+        "8888888888888888888888888888888888888888888888888888888888888888#1": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
       }
     },
     {
@@ -823,6 +1139,226 @@
       }
     },
     {
+      "name": "witness_vkey_33",
+      "description": "a vkey witness row whose vkey is 33 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081825821b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b20058405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_signature_65",
+      "description": "a bootstrap row whose signature is 65 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258415a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a005820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_chain_code_33",
+      "description": "a bootstrap row whose chain code is 33 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5821cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0041a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_vkey_arity_3",
+      "description": "a vkey witness row of three elements",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081835820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a40f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_break_value",
+      "description": "witness-set key 3 whose value is a break",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a103fff5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "body_break_value",
+      "description": "body key 7 whose value is a break",
+      "raw_tx_hex": "84a2008182582088888888888888888888888888888888888888888888888888888888888888880007ffa0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_nested_break",
+      "description": "witness-set key 3 whose array holds a break",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10381fff5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_set_break",
+      "description": "witness-set key 3 whose tag-258 set holds a break",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a103d9010281fff5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "body_break_map_key",
+      "description": "body key 7 whose map has a break for a key",
+      "raw_tx_hex": "84a2008182582088888888888888888888888888888888888888888888888888888888888888880007a1ff00a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "body_tag_break",
+      "description": "body key 7 whose tag 121 holds a break",
+      "raw_tx_hex": "84a2008182582088888888888888888888888888888888888888888888888888888888888888880007d879ffa0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "auxiliary_data_break",
+      "description": "a transaction whose auxiliary data is a break",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5ff",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
       "name": "dominance_malformed_row_then_watched",
       "description": "a 31-byte-vkey bootstrap row, then the watched key's row",
       "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028284581fb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0845820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
@@ -901,6 +1437,1386 @@
           "complete": false
         },
         "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "o_payload_text",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818782183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_crc_negative",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0003adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_key_break_only",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1ff001a2005775b"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_attrs_negkey",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a1204100001abe574abb"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_key_neg",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1204100001ad9981cc2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_key_bool",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1f44100001a70ae320c"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_attrs_magic_text",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a1026178001a6bc79810"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_val_text",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1056161001a0adf5fc8"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_val_array",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582383581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa10580001aad4b0ccb"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_root29_shifted",
+      "description": "red-team probe of the Byron address reader",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581d11111111111111111111111111111111111111111111111111111111a0001a40a02ca5"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_attrs_indef_empty",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446bfff001a9de13278"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_attrs_indef_magic",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c9404608e1f9a92744c2344b3859bbb2fd4a2bd999821ab7648e31b63bf024101ff001a20307224"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_indef_two",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818584683581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7abf01581e581c5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e024101ff001a745269f3"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_outer_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "9802d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_outer_indef",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "9fd818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0ff"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_crc_nonminimal8",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001b00000000dc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_key_nonmin8",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582c83581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa11b00000000000000024101001a3838aa87"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_payload_len_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d81859002183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_tag24_nonminimal2",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d90018582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_tag24_nonminimal4",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82da00000018582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001adc7746b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_root_len_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d81858228359001c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001a86fd6a1f"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_payload_arr_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d81858229803581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0001ab3834fc9"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_attrs_key_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a118054100001a7a700919"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_attrs_map_len_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446b801054100001a3359afb9"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_val_nonmin_len1",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa105580100001a8243065b"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_val_nonmin_len2",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582683581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa10559000100001aaa270015"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_type_nonminimal0",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a018001a9ba4b31e"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_magic_inner_nonmin",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102451a00000001001a5ae19863"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "magic_24_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582683581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa10243190018001a33ba55f5"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dpath_inner_nonminimal",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa101425800001a2b0a025f"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_dup",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582783581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa2054100054101001a395eea92"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dup_key_mixed_encoding",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa202410118024101001a75f381d2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_unsorted",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582783581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa2054100044101001a81e28df7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "order_numeric_desc_bytes_asc",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa206410018054100001abe295575"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "order_numeric_asc_bytes_desc",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa218054100064100001ae17d8d62"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "order_numeric_asc_both_minimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582783581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa2054100064100001a32f0743d"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "o_type1",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0011aab707626"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type3",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0031a457e170a"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type255",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a018ff1ab6a65c93"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type256",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582383581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a01901001a304f2d2b"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type_neg1",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0201ae7196678"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "o_type_bignum0",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582283581c7748aeff3aec8b5918f8dfa3e3ba882902457bcb49f777da70d2b446a0c2401a96afdf1b"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "g_redeem_type2",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581c9bbb573eb493bf02e991a841a8970ee0c50fbff5129ee4dc249a83a6a0021a8ccf3312"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "g_redeem_type2_magic",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c71f0a46d8892b96fe9dd9a15eaa4fe4c8ccfcad4c97b14a161c50383a1024101021ac7dccf3e"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_magic_inner_text",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102426161001a3bf6fc76"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_magic_inner_neg",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1024120001a46275fd5"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_magic_inner_trailing",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102420100001a0fc76db0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "magic_2p32",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582c83581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102491b0000000100000000001ad2d4ed07"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_dpath_inner_int",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1014107001a8e57425e"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "a_dpath_empty",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582383581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa10140001a61b87359"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dpath_inner_trailing",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa101424000001a393ff097"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dpath_inner_indef_empty",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa101425fff001abd61e9a8"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "dpath_inner_indef_chunk",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582783581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa101445f4100ff001a4601e465"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "magic_0",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1024100001ad3a37b77"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "magic_24_minimal",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102421818001a9e2b6d16"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "magic_2p31",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102451a80000000001af21c19b0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "magic_2p32m1",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa102451affffffff001a7a27a1c0"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_dpath_inner_empty",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1014140001a316f9b9c"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_key0",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1004100001a79aab3fc"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_val_empty",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582383581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa10540001a66b1db85"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "h8_attr_key23",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa1174100001ab464dcda"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "h8_attr_value_len23",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818583a83581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa105570000000000000000000000000000000000000000000000001a0251616d"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_key_255",
+      "description": "shipped cardano-cli 11.0.0.0: ACCEPT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa118ff4100001aba15f914"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "a_key_256",
+      "description": "shipped cardano-cli 11.0.0.0: REJECT",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582683581c7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7aa11901004100001aa6cacb3f"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "k_boot_attrs_break_then_watched",
+      "description": "a bootstrap row whose attributes are a break, then the watched key's row",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a10282845820fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f61858405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccff845820ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c58405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "8b218424ad74df25d35c2ea8e094a4c5c5aeb2cbb442419331569313",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "k_vkey_sig_break_then_watched",
+      "description": "a vkey row whose signature is a break, then the watched key's vkey row",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a10082825820fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618ff825820ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c58405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "8b218424ad74df25d35c2ea8e094a4c5c5aeb2cbb442419331569313",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": true,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "k_boot_attrs_map",
+      "description": "a bootstrap row whose attributes are a map",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a10281845820fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f61858405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccca0f5f6",
+      "target_vkh": "8b218424ad74df25d35c2ea8e094a4c5c5aeb2cbb442419331569313",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "w_vkey_33",
+      "description": "a vkey row whose vkey is 33 bytes",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a10081825821fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f6180058405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "8b218424ad74df25d35c2ea8e094a4c5c5aeb2cbb442419331569313",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "w_boot_33",
+      "description": "a bootstrap row whose vkey is 33 bytes",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a10281845821fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f6180058405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "8b218424ad74df25d35c2ea8e094a4c5c5aeb2cbb442419331569313",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
       }
     },
     {

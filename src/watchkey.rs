@@ -67,41 +67,74 @@ pub struct Scan {
 }
 
 /// Whether `address` is a well-formed Byron address: exactly the CBOR item
-/// `[#6.24(bytes payload), crc]`, the array definite, the payload a definite byte
-/// string, `crc` its CRC-32, and the payload exactly `[bytes .size 28, attributes,
-/// uint]` with that array definite and the attributes the ledger's
-/// `Map Word8 ByteString`. A Byron address carries no VKH: the key behind it can
-/// spend only through a bootstrap witness, which [`witness_use`] hashes.
+/// `[#6.24(bytes payload), crc]` opening with the byte 0x82, on which the ledger
+/// dispatches, the payload a definite byte string that [`byron_payload`] accepts and
+/// `crc` its CRC-32. Heads elsewhere may be non-minimal, as the shipped ledger reads
+/// them. A Byron address carries no VKH: the key behind it can spend only through a
+/// bootstrap witness, which [`witness_use`] hashes.
 fn byron_address(address: &[u8]) -> bool {
-    let mut d = Decoder::new(address);
+    let Some((&0x82, pair)) = address.split_first() else {
+        return false;
+    };
+    let mut d = Decoder::new(pair);
     let payload = (|| {
-        if d.array().ok()? != Some(2) || d.tag().ok()?.as_u64() != 24 {
+        if d.tag().ok()?.as_u64() != 24 {
             return None;
         }
         let payload = d.bytes().ok()?;
         (d.u64().ok()? == u64::from(crc32(payload))).then_some(payload)
     })();
-    payload.is_some_and(|payload| d.position() == address.len() && byron_payload(payload))
+    payload.is_some_and(|payload| d.position() == pair.len() && byron_payload(payload))
 }
 
-/// Whether a Byron address payload is exactly `[bytes .size 28, attributes, uint]`, the
-/// attributes a map in either length form from uints below 256 to definite byte strings.
+/// Whether a Byron address payload is exactly `[bytes .size 28, attributes, type]` as
+/// the ledger reads it: the attributes a definite `Map Word8 ByteString` with strictly
+/// ascending keys, the derivation path (key 1) one canonical byte string and the
+/// network magic (key 2) one canonical uint below 2^32, other keys opaque; the type
+/// 0 (a key) or 2 (a redeem key) in the one byte the ledger decodes it from.
 fn byron_payload(payload: &[u8]) -> bool {
     let mut d = Decoder::new(payload);
     let read = (|| {
         if d.array().ok()? != Some(3) || d.bytes().ok()?.len() != 28 {
             return None;
         }
-        let attributes = d.map().ok()?;
-        let mut i = 0;
-        while seq_has_next(&mut d, attributes, i).ok()? {
-            d.u8().ok()?;
-            d.bytes().ok()?;
-            i += 1;
+        let mut previous = None;
+        for _ in 0..d.map().ok()?? {
+            let key = d.u8().ok()?;
+            let value = d.bytes().ok()?;
+            let typed = match key {
+                1 => canonical_bytes(value),
+                2 => canonical_magic(value),
+                _ => true,
+            };
+            if !typed || previous.is_some_and(|previous| key <= previous) {
+                return None;
+            }
+            previous = Some(key);
         }
-        d.u64().ok()
+        Some(())
     })();
-    read.is_some() && d.position() == payload.len()
+    read.is_some() && matches!(&payload[d.position()..], [0x00] | [0x02])
+}
+
+/// Whether `content` is exactly one byte string in its canonical encoding, the form
+/// the ledger decodes a Byron derivation path in.
+fn canonical_bytes(content: &[u8]) -> bool {
+    let mut canonical = Vec::new();
+    Decoder::new(content)
+        .bytes()
+        .is_ok_and(|bytes| minicbor::Encoder::new(&mut canonical).bytes(bytes).is_ok())
+        && canonical == content
+}
+
+/// Whether `content` is exactly one uint below 2^32 in its canonical encoding, the
+/// form the ledger decodes a Byron network magic in.
+fn canonical_magic(content: &[u8]) -> bool {
+    let mut canonical = Vec::new();
+    Decoder::new(content)
+        .u32()
+        .is_ok_and(|magic| minicbor::Encoder::new(&mut canonical).u32(magic).is_ok())
+        && canonical == content
 }
 
 /// CRC-32 with the IEEE polynomial, the checksum a Byron address carries.
@@ -926,12 +959,23 @@ const KNOWN_BODY_KEYS: [u64; 21] = [
 /// V1, Plutus data, redeemers, Plutus V2 and Plutus V3.
 const KNOWN_WITNESS_KEYS: core::ops::RangeInclusive<u64> = 0..=7;
 
+/// Whether every key of the map `data` is one `known` admits and every value is
+/// well-formed. The values are walked with nothing watched: unlike minicbor's `skip`,
+/// the walk refuses a break wherever an item is due, at any depth.
+fn known_shape(data: &[u8], known: impl Fn(u64) -> bool) -> Scan {
+    let mut budget = WALK_BUDGET;
+    scan_map(data, |key, d, scan| {
+        scan.complete &= known(key);
+        collect_watched(d, &BTreeSet::new(), &mut budget, scan)
+    })
+}
+
 /// The watched-key scan of one transaction: its body and witness surfaces folded
 /// into one scan, beside the inputs it consumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionScan {
     /// Every body and witness surface, plus the checks that the body and the
-    /// witness set hold no key outside the ledger's.
+    /// witness set hold no key outside the ledger's and no stray break.
     pub surfaces: Scan,
     /// The creating outputs of the inputs the transaction consumes.
     pub inputs: Scan,
@@ -965,8 +1009,8 @@ impl TransactionScan {
 /// Scans one transaction from the spans a block lays out -- its body, its witness
 /// set and its phase-2 validity -- resolving each consumed input's creating output
 /// through `resolve`. The spans must come from a hash-verified block: some CBOR no
-/// ledger accepts (a stray break, a mistyped known field, an odd-length credential)
-/// can still read complete.
+/// ledger accepts (a mistyped known field, an odd-length credential) can still read
+/// complete.
 pub fn transaction_use<'a>(
     body: &[u8],
     witnesses: &[u8],
@@ -975,14 +1019,8 @@ pub fn transaction_use<'a>(
     resolve: impl FnMut(&OutPoint) -> Result<Option<&'a [u8]>, ()>,
 ) -> TransactionScan {
     let scans = [
-        scan_map(body, |key, d, scan| {
-            scan.complete &= KNOWN_BODY_KEYS.contains(&key);
-            d.skip().map_err(|_| ())
-        }),
-        scan_map(witnesses, |key, d, scan| {
-            scan.complete &= KNOWN_WITNESS_KEYS.contains(&key);
-            d.skip().map_err(|_| ())
-        }),
+        known_shape(body, |key| KNOWN_BODY_KEYS.contains(&key)),
+        known_shape(witnesses, |key| KNOWN_WITNESS_KEYS.contains(&key)),
         required_signer_use(body, watched),
         output_use(body, watched),
         withdrawal_use(body, watched),
@@ -1413,5 +1451,18 @@ mod tests {
     fn malformed_collateral_return_is_incomplete() {
         // {16: 5} -- collateral return neither an array nor a map.
         assert!(!output_use(&[0xa1, 0x10, 0x05], &watched_set(&[STK])).complete);
+    }
+
+    #[test]
+    fn a_body_value_past_the_walk_budget_is_incomplete() {
+        // {7: [0, ...]} = a1 07 9a <u32 count> 00...; the array is one node, each 0 one more.
+        let surfaces = |elements: u32| {
+            let mut body = vec![0xa1, 0x07, 0x9a];
+            body.extend_from_slice(&elements.to_be_bytes());
+            body.resize(body.len() + elements as usize, 0x00);
+            transaction_use(&body, &[0xa0], true, &watched_set(&[STK]), |_| Ok(None)).surfaces
+        };
+        assert!(surfaces(WALK_BUDGET - 1).complete);
+        assert!(!surfaces(WALK_BUDGET).complete);
     }
 }
