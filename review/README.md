@@ -23,7 +23,7 @@ Run at f928b45, from the repository root:
 at a clone before rerunning them.
 
 ## Gemtek native runs (`review/gemtek-native-logs/<commit>/`)
-- Host: Linux x86_64. Toolchain: rustc 1.94.1 (e408947bf 2026-03-25), cargo 1.94.1. Python reference: python3 with cbor2.
+- Host: Linux x86_64. Toolchain: rustc 1.94.1 (e408947bf 2026-03-25), cargo 1.94.1.
 - Each directory's `exits` file is its source binding. Its first line is the commit checked out (detached).
   It then lists every command's exit status and, where taken, fixture SHA-256s.
 - Logs are the commands' raw output:
@@ -32,6 +32,5 @@ at a clone before rerunning them.
   - `3-clippy.log`: `cargo clippy --all-targets -- -D warnings`;
   - `4-fmt.log`: `cargo fmt --check`;
   - `5-nostd.log`: `cargo check --no-default-features`;
-  - `0-python.log`: `python3 scripts/test_r57_first_use.py` at the paired r57-live head.
 - The 651148e and f928b45 directories predate this layout; their files are named per step.
 - `MANIFEST.sha256` (in `review/`) lists the SHA-256 of every file under `review/` and of the test files above.
