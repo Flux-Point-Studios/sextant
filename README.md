@@ -21,7 +21,7 @@ Two principles run through the whole codebase:
 
 ## What it verifies
 
-Each capability is implemented on Sextant's own code path and **differentially tested** against an independent implementation on the same inputs (so a bug shows up as a byte-level disagreement, not a silent wrong answer).
+Each capability is implemented on Sextant's own code path and **differentially tested** against an independent implementation on the same inputs, so a bug shows up as a byte-level disagreement.
 
 | Capability | What is checked | Independent oracle |
 |---|---|---|
@@ -31,8 +31,9 @@ Each capability is implemented on Sextant's own code path and **differentially t
 | **KES body signature** | `Sum6Kes` signature over the header body | `pallas-crypto` (`kes` feature) |
 | **Chain following** | Hash-linked, gap-free segments across an **epoch boundary**, including Praos nonce evolution (η0) | `pallas` rolling-nonce |
 | **Mithril** | A **genesis-anchored** certificate chain: genesis Ed25519 root, STM stake-threshold multi-signatures, AVK binding across epochs, byte-exact content hashing | `mithril-stm` |
-| **UTxO read** | A transaction's certified **inclusion** in the Mithril `CardanoTransactions` set (BLAKE2s MMR / `MKMapProof` recompute), then a Conway output decode | `ckb-merkle-mountain-range`, `pallas-primitives` |
-| **Windowed-unspent** | No input spending a watched outpoint appears in a header-verified, body-committed, gap-free window from a certified anchor to a verified tip | the batch verifier is the frozen oracle for the incremental follower |
+| **UTxO read** | A transaction's certified **inclusion** in the Mithril `CardanoTransactions` set (BLAKE2s MMR / `MKMapProof` recompute). It establishes no output: what a transaction created depends on its phase-2 outcome, which its block records | `ckb-merkle-mountain-range` |
+| **Created output** | An output a transaction created under its block's phase-2 record (`invalid_transactions`): regular outputs for a valid transaction, only the collateral return for an invalid one, read from block bytes bound to an expected block hash | `pallas-traverse` |
+| **Windowed-unspent** | No input spending a watched outpoint appears in a header-verified, body-committed, gap-free window from a certified anchor to a verified tip, which observed the outpoint's creation under its block's phase-2 record | the batch verifier is the frozen oracle for the incremental follower |
 
 The test corpus includes **61 real block vectors** harvested from Cardano preprod and mainnet, plus adversarial mutation vectors (tampered VRF proofs, swapped bodies, forged commitments, non-canonical encodings) proving each check is non-vacuous.
 
@@ -42,8 +43,8 @@ The test corpus includes **61 real block vectors** harvested from Cardano prepro
 
 "Is this outpoint currently unspent?" has **no absolute cryptographic answer** on Cardano — the ledger decides spendability atomically at submission, and there is no state commitment to prove a negative against. Sextant refuses to fake one. Instead it exposes a **ladder of distinct trust bases**, each naming what it rests on, none coercible into a stronger one:
 
-- **Tier 0 — `NotEstablished`.** A single-transaction inclusion read proves an output was *created* and certified as of a block height. Liveness is not established, and cannot be, by this path.
-- **Tier 1 — Windowed (`WatchedWindow`).** *Shipped.* A Mithril certificate anchors the outpoint's existence; a follower re-verifies every block body from the anchor to a tip and scans inputs for a spend. No spend observed + follower live ⇒ *no spend through the verified tip*, **as of** that tip, under two **surfaced assumptions** (Mithril quorum, data completeness). Not absolute, not eternal, not tip-state — and it says so. Withholding the spending block cannot advance the tip, so it collapses to a *stall*, never a false "unspent".
+- **Tier 0 — `NotEstablished`.** A single-transaction inclusion read proves a transaction is in the certified set as of a block height. It establishes no output — the transaction's phase-2 outcome is in its block — and liveness is not established, and cannot be, by this path.
+- **Tier 1 — Windowed (`WatchedWindow`).** *Shipped.* A Mithril certificate anchors the window; a follower re-verifies every block body from the anchor to a tip, observes the outpoint's creation under its block's phase-2 record, and scans inputs for a spend. No spend observed + follower live ⇒ *no spend through the verified tip*, **as of** that tip, under two **surfaced assumptions** (Mithril quorum, data completeness). The answer is windowed and dated, and says so: it makes no absolute, eternal or tip-state claim. Withholding the spending block cannot advance the tip, so it collapses to a *stall*, never a false "unspent".
 - **Tier 2 — `CertifiedUnspent` (cryptographic, reserved).** A future Mithril ledger-state (UTxO-set) commitment + membership proof. Membership at a snapshot re-bases the Tier-1 window to *snapshot→tip* (bounded), covering any outpoint of any age. See [`docs/mithril-utxo-commitment-note.md`](docs/mithril-utxo-commitment-note.md).
 - **Tier 3 — `Attested` (economic, reserved).** A committee (e.g. a witness network) attesting an observation — a second opinion, **never** coercible into the cryptographic tier.
 
@@ -62,10 +63,10 @@ Sextant is **sans-io**: it verifies bytes it is handed and holds no sockets, thr
 ### Consumable surfaces
 
 - **Rust** — `sextant` as a library crate.
-- **C ABI** — a stable, `cbindgen`-generated header ([`include/sextant.h`](include/sextant.h), `SEXTANT_ABI_VERSION 4`) over a `cdylib`/`staticlib`. Every export runs its body inside a panic guard so a panic can never unwind across the FFI boundary; the header is drift-gated (the committed header must byte-match a fresh `cbindgen` run).
+- **C ABI** — a stable, `cbindgen`-generated header ([`include/sextant.h`](include/sextant.h), `SEXTANT_ABI_VERSION 6`) over a `cdylib`/`staticlib`. Every export runs its body inside a panic guard so a panic can never unwind across the FFI boundary; the header is drift-gated (the committed header must byte-match a fresh `cbindgen` run).
 - **WebAssembly** — the default graph builds to `wasm32-unknown-unknown` for in-browser / on-device verification.
 
-The C ABI exposes: `sextant_verify_segment`, `sextant_header_decode`, `sextant_verify_utxo_read`, `sextant_mithril_verify_chain_anchored` *(mithril feature)*, `sextant_verify_watched_window`, the incremental follower handle (`sextant_follower_new` / `_append` / `_supply_next_eta0` / `_rollback` / `_re_anchor` / `_verdict` / `_destroy`), plus `sextant_abi_version` and `sextant_status_message`.
+The C ABI exposes: `sextant_verify_segment`, `sextant_header_decode`, `sextant_verify_utxo_read`, `sextant_verify_created_output`, `sextant_mithril_verify_chain_anchored` *(mithril feature)*, `sextant_verify_watched_window`, the incremental follower handle (`sextant_follower_new` / `_append` / `_supply_next_eta0` / `_rollback` / `_re_anchor` / `_verdict` / `_destroy`), plus `sextant_abi_version` and `sextant_status_message`.
 
 ---
 
@@ -99,11 +100,13 @@ scripts/harness.sh --full
 Two runnable consumer examples (both use the `mithril` feature to authenticate the chain to genesis first):
 
 ```sh
-# A single verified UTxO read → spend gate, then a spoofed-response refusal
+# A body-only certified read: found included and refused for want of its phase-2
+# outcome, then a spoofed-response refusal
 cargo run --example verified_read_gate --features mithril
 
-# The windowed watch gate: PROCEED only on no-spend (naming basis, anchor, as-of, lag,
-# assumptions), REFUSE fail-closed on a spend, a gap, and a truncated window
+# The windowed watch gate: PROCEED only on no-spend over the output its creating block
+# holds (naming basis, anchor, as-of, lag, assumptions, the header-vouched creating
+# block), REFUSE fail-closed on a short payment, a spend, a gap, and a truncated window
 cargo run --example windowed_spend_gate --features mithril
 ```
 
@@ -114,7 +117,7 @@ Their stdout is the honest service-log excerpt: a `PROCEED` line always names th
 ## Status
 
 - **Read-path verification core — complete.** Header VRF/KES/opcert, chain-following with nonce evolution across an epoch boundary, genesis-anchored Mithril certificate chains, and certified UTxO inclusion with a tampered-claim rejection test — all differentially byte-identical to independent oracles on real preprod + mainnet vectors.
-- **C-ABI / WASM trust substrate — shipped.** A stable, drift-gated C header (ABI v4) and a wasm-safe build, with a CI leg that links the static library and runs a C smoke test.
+- **C-ABI / WASM trust substrate — shipped.** A stable, drift-gated C header (ABI v6) and a wasm-safe build, with a CI leg that links the static library and runs a C smoke test.
 - **Windowed-unspent (Tier 1) — shipped end-to-end.** The batch verifier, the incremental `WindowFollower` (append-one-block-at-a-time, epoch-crossing, rollback with eviction-as-finalization, two-region spend honesty), the C-ABI follower handle, and consumer examples.
 - **Deferred, by design (not diluted):** a live relay-follower transport, the Tier-2 Mithril ledger-state commitment (a proposal note is committed for the Mithril team), and the Tier-3 economic attestation tier.
 
@@ -141,7 +144,8 @@ tools/harvest/  a workspace member that fetches real vectors (not part of the tr
 A genuine success from Sextant proves exactly what its documentation says and **nothing more**:
 
 - A verified **header segment** proves each block's authorship (opcert + leader-VRF + KES) and the hash links — *not* that the segment is the canonical chain (that rests on the Mithril anchor, a surfaced assumption).
-- A verified **UTxO read** proves authentic on-chain bytes + certified inclusion + provenance anchored to genesis *as of a certified height ~100 blocks behind tip* — *not* current spendability.
+- A certified **UTxO read** proves a transaction's inclusion in the genesis-anchored certified set *as of a certified height ~100 blocks behind tip* — and establishes no output, since the transaction's phase-2 outcome is in its block.
+- A **created output** read proves an output the transaction created under its block's phase-2 record, within block bytes bound to the expected hash the caller supplies — *not* that the block is canonical, which rests on where that hash came from, and *not* current spendability.
 - A **windowed no-spend** proves no spend through a verified tip under the Mithril-quorum and data-completeness assumptions — *not* absolute or tip-state unspent.
 - A future **Tier-2 UTxO-set membership** answer at a snapshot S carries its `AnchorBasis`: `StmCertified` when S's state was recomputed from the STM-stake-quorum-certified blocks, or `AncillarySigned` when it was taken from the Mithril cardano-database ancillary — a snapshot signed by a **single IOG-operated Ed25519 key, not the stake quorum**. The two are distinct trust classes, banded like the spend-status tiers and never coerced; the single-key basis is dischargeable to the quorum basis by an independent from-genesis extraction audit.
 

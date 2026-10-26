@@ -12,9 +12,12 @@
  * the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
  * follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
  * [`SextantWatchVerdict`] reserved byte as `spend_region`; 4→5 for the Tier-2 certified-state
- * spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]).
+ * spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]); 5→6 for the
+ * block-bound [`sextant_verify_created_output`] with its 420 band, and
+ * [`sextant_verify_utxo_read`] refusing every included body with
+ * [`SextantStatus::UtxoValidityNotEstablished`].
  */
-#define SEXTANT_ABI_VERSION 5
+#define SEXTANT_ABI_VERSION 6
 
 /**
  * The only defined `spend_status` value a verified read returns. The read path can
@@ -283,6 +286,15 @@ enum SextantStatus
   UtxoInclusionMalformedProof = 402,
   UtxoMalformedTx = 410,
   UtxoOutputIndexOutOfRange = 411,
+  UtxoValidityNotEstablished = 412,
+  CreatedDecode = 420,
+  CreatedHeaderHashMismatch = 421,
+  CreatedBodyCommitmentMismatch = 422,
+  CreatedMalformedValidity = 423,
+  CreatedMalformedBody = 424,
+  CreatedTransactionAbsent = 425,
+  CreatedTransactionRepeated = 426,
+  CreatedNotCreated = 427,
 };
 #ifndef __cplusplus
 typedef int32_t SextantStatus;
@@ -343,19 +355,11 @@ typedef struct {
 } SextantHeaderView;
 
 /**
- * A verified transaction output, projected into a caller-allocated fixed-width
- * `#[repr(C)]` struct. The scalars live here; the variable-length `address` and
- * `datum` bytes are delivered to the caller's `(buf, cap)` pairs, with the true
- * lengths reported here so a caller can size a retry (the sizing protocol).
- *
- * ## Honest scope — read before gating on the result
- * A genuine `Ok` proves the returned `{address, lovelace, datum}` are the AUTHENTIC
- * on-chain bytes of a Mithril-certified output: its certified INCLUSION and its
- * provenance are anchored to the network genesis key as of `certified_at`, and
- * NOTHING MORE. It is NOT a claim that the output is currently available to spend —
- * Cardano commits to no UTxO-set accumulator, the verdict trails tip by ~100 blocks,
- * and the ledger decides availability atomically at submission. `spend_status` is
- * ALWAYS [`SEXTANT_SPEND_NOT_ESTABLISHED`]; never gate a spend on it.
+ * The out-struct of [`sextant_verify_utxo_read`], kept at its ABI-5 layout. That export
+ * never writes it: an included body establishes no output, so the call refuses with
+ * [`SextantStatus::UtxoValidityNotEstablished`] and leaves the struct and both buffers as
+ * the caller left them. A created output is read with [`sextant_verify_created_output`]
+ * into a [`SextantCreatedOutput`].
  */
 typedef struct {
   /**
@@ -392,6 +396,60 @@ typedef struct {
    */
   uint8_t _reserved[6];
 } SextantVerifiedOutput;
+
+/**
+ * An output a block created, projected into a caller-allocated fixed-width `#[repr(C)]`
+ * struct by [`sextant_verify_created_output`]. The scalars live here; the variable-length
+ * `address` and `datum` bytes go to the caller's `(buf, cap)` pairs, with the true lengths
+ * reported here so a caller can size a retry (the sizing protocol).
+ *
+ * ## Honest scope
+ * The fields hold within the block bytes that hash to the caller's expected block hash,
+ * which `block_hash` echoes: the output is one the transaction created there under the
+ * phase-2 outcome that block records. Whether that block is in the canonical chain is
+ * the caller's to establish upstream. Nothing here is a liveness claim.
+ */
+typedef struct {
+  /**
+   * The output's ADA amount in lovelace (its `coin`; any multi-asset is excluded).
+   */
+  uint64_t lovelace;
+  /**
+   * The height of the block the output was read from.
+   */
+  uint64_t block_number;
+  /**
+   * The slot of the block the output was read from.
+   */
+  uint64_t slot;
+  /**
+   * The true length of the address bytes; may exceed `address_cap` (then retry).
+   */
+  uintptr_t address_len;
+  /**
+   * The true length of the datum bytes: `0` = none, `32` = a datum hash, variable
+   * = an inline datum; may exceed `datum_cap` (then retry).
+   */
+  uintptr_t datum_len;
+  /**
+   * The header hash of the block the output was read from: the expected hash.
+   */
+  uint8_t block_hash[32];
+  /**
+   * `0` = no datum, `1` = a 32-byte datum hash in `datum_buf`, `2` = an inline
+   * datum (`datum_len` raw plutus-data CBOR bytes in `datum_buf`, `#6.24`-unwrapped).
+   */
+  uint8_t datum_kind;
+  /**
+   * `1` = the creating transaction is phase-2-valid and this is one of its regular
+   * outputs; `0` = it is phase-2-invalid and this is its collateral return.
+   */
+  uint8_t phase2_valid;
+  /**
+   * Explicit tail padding; zeroed on write so the struct is fully deterministic.
+   */
+  uint8_t _reserved[6];
+} SextantCreatedOutput;
 
 /**
  * The verdict of a windowed watch check, projected into a caller-allocated fixed-width
@@ -573,39 +631,30 @@ int32_t sextant_header_decode(const uint8_t *bytes,
 uintptr_t sextant_status_message(int32_t status, uint8_t *buf, uintptr_t cap);
 
 /**
- * Verify that output `out_index` of the transaction whose body is `tx_bytes` is a
- * genesis-anchored, Mithril-certified on-chain output, and marshal its
- * `{address, lovelace, datum}` back to the caller.
+ * Check output `out_index` of the transaction whose body is `tx_bytes` against a
+ * Mithril-certified transaction set, by [`crate::utxo::verify_utxo_read`]. An included
+ * body establishes no output: the body carries no phase-2 outcome, so every call that
+ * passes the checks below returns [`SextantStatus::UtxoValidityNotEstablished`] (`412`).
+ * The output is read from its creating block with [`sextant_verify_created_output`].
  *
- * This is a CORE export — present in the default library and the wasm32 build (its
- * verifier composes only Blake2b/Blake2s + minicbor, no feature-gated crypto crate).
- * `certified_root` is
- * the 32-byte certified transaction Merkle root; obtain it ONLY from a
- * genesis-authenticated certificate (see the mithril anchored verify) so a provider
- * cannot inject one. The supplied `tx_bytes` are hashed here, never a
- * provider-supplied hash, so substituted/tampered bytes are rejected as not-included.
+ * This is a CORE export — present in the default library and the wasm32 build.
+ * `certified_root` is the 32-byte certified transaction Merkle root. The supplied
+ * `tx_bytes` are hashed here, never a provider-supplied hash.
  *
- * ## The sizing protocol (allocation-free; caller owns every buffer)
- * The fixed scalars land in `*out`; the variable-length `address` and `datum` bytes
- * go to `address_buf`/`datum_buf`, whose true lengths are reported in
- * `out.address_len`/`out.datum_len`. If EITHER buffer is too small the call writes
- * the full struct (true lengths, no variable bytes) and returns
- * [`SextantStatus::ErrBufferTooSmall`] (`-3`); the caller reads the lengths, resizes,
- * and retries (idempotent). A `(NULL, 0)` pair is a pure sizing probe. There is no
- * free function — on wasm no free callback can cross back in.
- *
- * ## Honest scope
- * A genuine `Ok` proves authentic bytes + certified inclusion + provenance anchored
- * to genesis as of `certified_at`, NOTHING MORE; it is NOT a liveness claim, and
- * `out.spend_status` is always [`SEXTANT_SPEND_NOT_ESTABLISHED`]. Never gate on it.
+ * ## Precedence
+ * A null `tx_bytes`/`proof_hex`/`certified_root`/`out` is [`SextantStatus::ErrNullPointer`],
+ * then an empty `tx_bytes` is [`SextantStatus::ErrEmptyInput`]; neither writes
+ * `out_detail`. Then a body outside the certified set is the 400 band, an output that does
+ * not decode `410`, an index past the outputs `411`, and anything else `412`; each writes
+ * `out_detail = {index:-1, detail:0}` when non-null. No return writes `*out`,
+ * `address_buf` or `datum_buf`: they are left as the caller left them.
  *
  * # Safety
  * `tx_bytes` must point to `tx_bytes_len` readable bytes; `proof_hex` to
- * `proof_hex_len` readable bytes; `certified_root` to 32 readable bytes; `out` to a
- * writable [`SextantVerifiedOutput`]. `address_buf`/`datum_buf` must each be null
- * (permitted iff its cap is 0) or point to `address_cap`/`datum_cap` writable bytes.
- * `out_detail` must be null or point to a writable [`SextantErrorDetail`]. All
- * borrows live only for the duration of the call.
+ * `proof_hex_len` readable bytes; `certified_root` to 32 readable bytes; `out` must be
+ * non-null. `address_buf`/`datum_buf` are never read or written. `out_detail` must be
+ * null or point to a writable [`SextantErrorDetail`]. All borrows live only for the
+ * duration of the call.
  */
 int32_t sextant_verify_utxo_read(const uint8_t *tx_bytes,
                                  uintptr_t tx_bytes_len,
@@ -620,6 +669,58 @@ int32_t sextant_verify_utxo_read(const uint8_t *tx_bytes,
                                  uint8_t *datum_buf,
                                  uintptr_t datum_cap,
                                  SextantErrorDetail *out_detail);
+
+/**
+ * Read output `out_index` of transaction `tx_id` as created by `block` (ledger
+ * `[era, block]` CBOR) whose header must hash to `expected_block_hash`, by
+ * [`crate::effects::verify_created_output`], and marshal it into `*out` and the caller's
+ * buffers.
+ *
+ * This is a CORE export — present in the default library and the wasm32 build.
+ *
+ * ## Honest scope
+ * A `0` proves the transaction created this output within the bytes bound to
+ * `expected_block_hash`, under the phase-2 outcome the block records. It proves nothing
+ * about that block's place in the chain: the expected hash must come from a source the
+ * caller trusts for canonical membership. A hash taken from the same untrusted bytes
+ * proves nothing, and one from a follower-verified header chain carries that chain's
+ * surfaced Mithril-quorum and leader-eligibility assumptions. Nothing here is a
+ * liveness claim.
+ *
+ * ## The sizing protocol (allocation-free; caller owns every buffer)
+ * The fixed scalars land in `*out`; the variable-length `address` and `datum` bytes
+ * go to `address_buf`/`datum_buf`, whose true lengths are reported in
+ * `out.address_len`/`out.datum_len`. If EITHER buffer is too small the call writes
+ * the full struct (true lengths, no variable bytes) and returns
+ * [`SextantStatus::ErrBufferTooSmall`] (`-3`); the caller reads the lengths, resizes,
+ * and retries (idempotent). A `(NULL, 0)` pair is a pure sizing probe. There is no
+ * free function — on wasm no free callback can cross back in.
+ *
+ * ## Precedence
+ * A null `block`/`expected_block_hash`/`tx_id`/`out` is [`SextantStatus::ErrNullPointer`],
+ * then an empty `block` is [`SextantStatus::ErrEmptyInput`]; neither writes `out_detail`.
+ * A refusal is the 420 band, with a decode failure's 100-band leaf code in
+ * `out_detail.detail`, and leaves `*out` and both buffers as the caller left them. Only
+ * `0` and `-3` write `*out`, and only `0` writes the buffers.
+ *
+ * # Safety
+ * `block` must point to `block_len` readable bytes; `expected_block_hash` and `tx_id` to
+ * 32 readable bytes each; `out` to a writable [`SextantCreatedOutput`].
+ * `address_buf`/`datum_buf` must each be null (permitted iff its cap is 0) or point to
+ * `address_cap`/`datum_cap` writable bytes. `out_detail` must be null or point to a
+ * writable [`SextantErrorDetail`]. All borrows live only for the duration of the call.
+ */
+int32_t sextant_verify_created_output(const uint8_t *block,
+                                      uintptr_t block_len,
+                                      const uint8_t *expected_block_hash,
+                                      const uint8_t *tx_id,
+                                      uint16_t out_index,
+                                      SextantCreatedOutput *out,
+                                      uint8_t *address_buf,
+                                      uintptr_t address_cap,
+                                      uint8_t *datum_buf,
+                                      uintptr_t datum_cap,
+                                      SextantErrorDetail *out_detail);
 
 /**
  * Run [`crate::window::verify_watched_window`] over a certified, header-verified block

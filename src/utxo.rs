@@ -1,30 +1,28 @@
-//! UTxO read verification: prove an output's bytes are the authentic,
-//! genesis-anchored on-chain bytes of a Mithril-certified transaction.
+//! UTxO read verification over a Mithril-certified transaction, and the Conway
+//! transaction-output decoder the read paths share.
 //!
-//! This is the read path's terminal verdict. It composes the pure-Rust inclusion
-//! verifier ([`crate::inclusion::verify_tx_inclusion`], default wasm-safe graph)
-//! with a Conway transaction-output decoder on Sextant's own minicbor path.
+//! [`verify_utxo_read`] composes the pure-Rust inclusion verifier
+//! ([`crate::inclusion::verify_tx_inclusion`], default wasm-safe graph) with that decoder.
 //!
-//! ## What a genuine `Ok` proves — and what it does NOT
+//! ## Inclusion establishes no output
 //! Cardano commits to no UTxO-set state root (a Conway header carries only
 //! `block_body_hash`, a per-block tx-merkle root — no ledger-state accumulator).
 //! Mithril certifies *transactions* (`CardanoTransactionsMerkleRoot`, ~100 blocks
-//! behind tip), not a UTxO set. So `Ok` proves exactly: the returned
-//! `{address, lovelace, datum}` are the authentic on-chain bytes of output
-//! `(H, out_index)`, and `H` is a member of the Mithril-certified transaction set
-//! at `certified_at`, authenticated (when `certified_root` comes off a
-//! [`crate::mithril::verify_chain_anchored`] cert) back to the network genesis key.
+//! behind tip), not a UTxO set. Membership of `H` in the certified set proves the
+//! transaction is on chain; it does not prove what the transaction created. What a
+//! transaction creates depends on its phase-2 outcome, which its block records in
+//! `invalid_transactions` and its body does not carry: a phase-2-valid transaction
+//! creates its regular outputs, an invalid one only its collateral return. A body and
+//! an inclusion proof therefore establish no output, and [`verify_utxo_read`] refuses
+//! every included body with [`UtxoError::ValidityNotEstablished`]. An output's creation
+//! is read from its creating block by [`crate::effects::verify_created_output`].
 //!
-//! It does **not** and **cannot** prove `(H, out_index)` is currently *unspent*:
-//! transaction-set membership is a monotone "created" predicate, no Cardano
-//! commitment exists to prove unspent against, and the verdict trails tip by ~100
-//! blocks. Unspent is the ledger's to decide, atomically, at submission. That
-//! honesty is enforced in the return type: this single-tx read path yields only
-//! [`SpendStatus::NotEstablished`], and every verdict carries `certified_at` so no
-//! caller may read it as tip state. The stronger Tier-2 [`SpendStatus::CertifiedUnspent`]
-//! (unspent across a verified window from a certified snapshot) comes from the
-//! certified-state path ([`crate::utxoset::UtxoSet::certified_spend_status`]), not
-//! this one — the ladder is `#[non_exhaustive]` and uncoercible to unconditional liveness.
+//! Neither path proves an output is currently *unspent*: no Cardano commitment exists
+//! to prove unspent against, and unspent is the ledger's to decide, atomically, at
+//! submission. The stronger Tier-2 [`SpendStatus::CertifiedUnspent`] (unspent across a
+//! verified window from a certified snapshot) comes from the certified-state path
+//! ([`crate::utxoset::UtxoSet::certified_spend_status`]) — the ladder is
+//! `#[non_exhaustive]` and uncoercible to unconditional liveness.
 //!
 //! ## The bytes are hashed here, never trusted from a provider
 //! `verify_utxo_read` hashes the *supplied* `tx_bytes` to obtain `H`
@@ -36,6 +34,7 @@
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use minicbor::Decoder;
 use minicbor::data::Type;
@@ -192,9 +191,8 @@ pub enum SpendStatus {
     },
 }
 
-/// A verified transaction output: the authentic on-chain bytes of a
-/// certified-transaction output, with the certified height it was attested at and
-/// the honest, uncoercible spend verdict.
+/// The record [`verify_utxo_read`] is declared to return. It never returns one: an
+/// included body establishes no output (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedOutput {
     /// The output's raw address bytes (Shelley address / Byron CBOR-address bytes,
@@ -224,6 +222,9 @@ pub enum UtxoError {
     MalformedTx,
     /// `out_index` is past the end of the transaction's output list.
     OutputIndexOutOfRange,
+    /// The body is included and its output decodes, but nothing read establishes the
+    /// transaction's phase-2 outcome, so the output is not established as created.
+    ValidityNotEstablished,
 }
 
 impl core::fmt::Display for UtxoError {
@@ -232,44 +233,42 @@ impl core::fmt::Display for UtxoError {
             UtxoError::Inclusion(e) => write!(f, "certified inclusion failed: {e}"),
             UtxoError::MalformedTx => f.write_str("malformed Conway transaction body or output"),
             UtxoError::OutputIndexOutOfRange => f.write_str("output index past end of transaction"),
+            UtxoError::ValidityNotEstablished => {
+                f.write_str("the transaction's phase-2 outcome is not established")
+            }
         }
     }
 }
 
 impl core::error::Error for UtxoError {}
 
-/// Verify that output `out_index` of the transaction whose body is `tx_bytes` is a
-/// genesis-anchored, Mithril-certified on-chain output, and return its
-/// `{address, lovelace, datum}` with the honest spend verdict.
+/// Check output `out_index` of the transaction whose body is `tx_bytes` against a
+/// Mithril-certified transaction set. Every included body is refused with
+/// [`UtxoError::ValidityNotEstablished`]: the body carries no phase-2 outcome, so no
+/// output is established as created (see the module docs). The output is read from its
+/// creating block by [`crate::effects::verify_created_output`].
 ///
 /// `tx_bytes` is the raw transaction *body* CBOR (the `KeepRaw` body span, so
 /// `Blake2b-256(tx_bytes)` is the transaction id). `proof_hex` is the aggregator's
 /// HEX(JSON) `MKMapProof<BlockRange>` for that transaction. `certified_root` is the
-/// certified transaction Merkle root — genesis-anchored only when obtained from a
-/// [`crate::mithril::verify_chain_anchored`]-authenticated certificate.
-/// `block_number` is the certified height, echoed as `certified_at`.
+/// certified transaction Merkle root. `_certified_height` is the certified height,
+/// which a refusal does not consume.
 ///
-/// The supplied bytes are hashed here (never a provider-supplied hash) and their
-/// certified inclusion is checked *before* the output is decoded, so tampered or
-/// substituted bytes are rejected as not-included.
+/// The refusals come in this order: the supplied bytes are hashed here (never a
+/// provider-supplied hash) and a body outside the certified set is
+/// [`UtxoError::Inclusion`]; an output that does not decode is [`UtxoError::MalformedTx`];
+/// an index past the outputs is [`UtxoError::OutputIndexOutOfRange`].
 pub fn verify_utxo_read(
     tx_bytes: &[u8],
     out_index: usize,
     proof_hex: &[u8],
     certified_root: &[u8; 32],
-    block_number: u64,
+    _certified_height: u64,
 ) -> Result<VerifiedOutput, UtxoError> {
     let h = blake2b256(tx_bytes);
     verify_tx_inclusion(proof_hex, &h, certified_root).map_err(UtxoError::Inclusion)?;
-
-    let (address, lovelace, datum) = decode_output(tx_bytes, out_index)?;
-    Ok(VerifiedOutput {
-        address,
-        lovelace,
-        datum,
-        certified_at: block_number,
-        spend_status: SpendStatus::NotEstablished,
-    })
+    decode_output(tx_bytes, out_index)?;
+    Err(UtxoError::ValidityNotEstablished)
 }
 
 /// Decode the set of outpoints a Conway transaction consumes — its inputs
@@ -305,7 +304,11 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
 /// consumes the closing `Break` when the sequence ends. Cardano/Conway encodes body maps, input
 /// sets, and output lists in EITHER length form (a real preprod block encodes outputs indefinitely),
 /// so every tx-body navigator must accept both rather than rejecting the indefinite form.
-fn seq_has_next(d: &mut Decoder<'_>, len: Option<u64>, i: u64) -> Result<bool, UtxoError> {
+pub(crate) fn seq_has_next(
+    d: &mut Decoder<'_>,
+    len: Option<u64>,
+    i: u64,
+) -> Result<bool, UtxoError> {
     match len {
         Some(n) => Ok(i < n),
         None => {
@@ -368,50 +371,73 @@ fn decode_input_vec(d: &mut Decoder<'_>) -> Result<Vec<OutPoint>, UtxoError> {
     Ok(out)
 }
 
-/// Whether the transaction body carries CBOR map key `key` — used to detect a collateral
-/// return (key 16), which a phase-2-invalid transaction produces at output index `|outputs|`.
-pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
+/// The outputs transaction body `tx_bytes` created, as `(index, span)` pairs with each span a
+/// byte range of `tx_bytes`, under the phase-2 outcome its block records: a phase-2-valid
+/// transaction creates its regular outputs (key 1) at `0..n`, and an invalid one only its
+/// collateral return (key 16), at index `n`. The body is walked to its end in either length
+/// form: key 1 must appear exactly once and key 16 at most once, and every output in either
+/// must decode as the read path decodes one, so no index is created for an item no read
+/// could return. `phase2_valid` is read from the block's body-committed
+/// `invalid_transactions` (see [`crate::window`]), never taken from a caller.
+pub(crate) fn created_outputs(
+    tx_bytes: &[u8],
+    phase2_valid: bool,
+) -> Result<Vec<(u16, Range<usize>)>, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
+    let mut regular: Option<Vec<Range<usize>>> = None;
+    let mut collateral_return = None;
     let mut i = 0;
     while seq_has_next(&mut d, len, i)? {
-        if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
-            return Ok(true);
+        match d.u64().map_err(|_| UtxoError::MalformedTx)? {
+            1 => {
+                let outputs = d.array().map_err(|_| UtxoError::MalformedTx)?;
+                let mut spans = Vec::new();
+                let mut n = 0;
+                while seq_has_next(&mut d, outputs, n)? {
+                    spans.push(output_span(&mut d)?);
+                    n += 1;
+                }
+                if regular.replace(spans).is_some() {
+                    return Err(UtxoError::MalformedTx);
+                }
+            }
+            16 => {
+                if collateral_return.replace(output_span(&mut d)?).is_some() {
+                    return Err(UtxoError::MalformedTx);
+                }
+            }
+            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
         i += 1;
     }
-    Ok(false)
+    if d.position() != tx_bytes.len() {
+        return Err(UtxoError::MalformedTx);
+    }
+    let regular = regular.ok_or(UtxoError::MalformedTx)?;
+    let created: Vec<(usize, Range<usize>)> = if phase2_valid {
+        regular.into_iter().enumerate().collect()
+    } else {
+        let after = regular.len();
+        collateral_return
+            .map(|span| (after, span))
+            .into_iter()
+            .collect()
+    };
+    created
+        .into_iter()
+        .map(|(index, span)| {
+            let index = u16::try_from(index).map_err(|_| UtxoError::MalformedTx)?;
+            Ok((index, span))
+        })
+        .collect()
 }
 
-/// The number of outputs a transaction body produces (the length of its key-1 outputs array) —
-/// the count of created outpoints `(tx_id, 0..n)`. Accepts both a definite and an indefinite
-/// outputs array (a real preprod block encodes outputs indefinitely). A body with no outputs key
-/// is malformed.
-pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
-    let mut d = Decoder::new(tx_bytes);
-    let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
-    let mut i = 0;
-    while seq_has_next(&mut d, len, i)? {
-        if d.u64().map_err(|_| UtxoError::MalformedTx)? == 1 {
-            let arr = d.array().map_err(|_| UtxoError::MalformedTx)?;
-            return match arr {
-                Some(count) => usize::try_from(count).map_err(|_| UtxoError::MalformedTx),
-                None => {
-                    // Indefinite outputs array: count elements until the closing break.
-                    let mut count = 0usize;
-                    while seq_has_next(&mut d, None, 0)? {
-                        d.skip().map_err(|_| UtxoError::MalformedTx)?;
-                        count += 1;
-                    }
-                    Ok(count)
-                }
-            };
-        }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
-        i += 1;
-    }
-    Err(UtxoError::MalformedTx)
+/// Decode one output where the decoder stands and return the byte range it occupied.
+fn output_span(d: &mut Decoder<'_>) -> Result<Range<usize>, UtxoError> {
+    let start = d.position();
+    decode_single_output(d)?;
+    Ok(start..d.position())
 }
 
 /// Decode a `set<transaction_input>` (bare array or tag-258 wrapped, definite or indefinite) into
@@ -440,20 +466,6 @@ fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
     let index = u16::try_from(d.u64().map_err(|_| UtxoError::MalformedTx)?)
         .map_err(|_| UtxoError::MalformedTx)?;
     Ok(OutPoint { tx_id, index })
-}
-
-/// Whether Conway transaction body `tx_bytes` produced an output at `out_index` — the
-/// outputs array (key 1) has more than `out_index` entries. Binds a windowed "creation
-/// observed" to the outpoint's ACTUAL existence (the creating transaction really made
-/// an output at that index), not merely to the transaction's presence, so a phantom
-/// index is never read as created. Fail-closed: a malformed body is `Err`, never a
-/// phantom `Ok(true)`.
-pub fn output_exists(tx_bytes: &[u8], out_index: usize) -> Result<bool, UtxoError> {
-    match decode_output(tx_bytes, out_index) {
-        Ok(_) => Ok(true),
-        Err(UtxoError::OutputIndexOutOfRange) => Ok(false),
-        Err(e) => Err(e),
-    }
 }
 
 /// Decode output `out_index` from a Conway transaction-body CBOR map (key 1 =
@@ -496,7 +508,7 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
 /// 3?: script_ref}`) or a legacy array (`[address, value]` or
 /// `[address, value, datum_hash]`).
-fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
+pub(crate) fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
         Type::Map => decode_map_output(d),
         Type::Array => decode_legacy_output(d),
@@ -718,6 +730,137 @@ mod tests {
             decode_output(&body_with_output(&out), 1),
             Err(UtxoError::OutputIndexOutOfRange)
         );
+    }
+
+    /// The number of outputs a phase-2-valid body creates.
+    fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
+        created_outputs(tx_bytes, true).map(|created| created.len())
+    }
+
+    #[test]
+    fn created_outputs_walks_the_outputs_it_creates() {
+        // o = [h'00', 7], a legacy output.
+        let o = [0x82, 0x41, 0x00, 0x07];
+        let count =
+            |outputs: &[&[u8]]| output_count(&[&[0xa1, 0x01][..], &outputs.concat()].concat());
+        assert_eq!(count(&[&[0x82], &o, &o]), Ok(2));
+        assert_eq!(count(&[&[0x9f], &o, &o, &[0xff]]), Ok(2));
+        for outputs in [
+            // Declared two, one present.
+            &[&[0x82][..], &o][..],
+            // Declared one, two present.
+            &[&[0x81], &o, &o],
+            // A break, and a number, where the second output is due.
+            &[&[0x82], &o, &[0xff]],
+            &[&[0x82], &o, &[0x05]],
+            // The second output cut short.
+            &[&[0x82], &o, &o[..3]],
+        ] {
+            assert_eq!(
+                count(outputs),
+                Err(UtxoError::MalformedTx),
+                "{outputs:02x?}"
+            );
+        }
+        // {1: [o], 1: [o]}: the outputs key repeated.
+        let repeated = [&[0xa2, 0x01, 0x81][..], &o, &[0x01, 0x81], &o].concat();
+        assert_eq!(output_count(&repeated), Err(UtxoError::MalformedTx));
+        // {1: [o]} and a byte after it: the body ends where its map does.
+        let trailing = [&[0xa1, 0x01, 0x81][..], &o, &[0x00]].concat();
+        for phase2_valid in [true, false] {
+            assert_eq!(
+                created_outputs(&trailing, phase2_valid),
+                Err(UtxoError::MalformedTx)
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_without_outputs_creates_nothing_readable() {
+        // {0: []} and {0: [], 16: o}: the ledger requires key 1, whatever the outcome.
+        for body in [
+            &[0xa1, 0x00, 0x80][..],
+            &[0xa2, 0x00, 0x80, 0x10, 0x82, 0x41, 0x00, 0x07],
+        ] {
+            for phase2_valid in [true, false] {
+                assert_eq!(
+                    created_outputs(body, phase2_valid),
+                    Err(UtxoError::MalformedTx),
+                    "{body:02x?}"
+                );
+            }
+        }
+    }
+
+    /// A valid transaction creates its regular outputs and an invalid one only its
+    /// collateral return, after them; the return decodes, and appears once, either way.
+    #[test]
+    fn the_phase_2_outcome_picks_what_a_body_creates() {
+        let o = [0x82, 0x41, 0x00, 0x07];
+        let r = [0x82, 0x41, 0x01, 0x08];
+        let indices = |body: &[u8], phase2_valid| {
+            created_outputs(body, phase2_valid).map(|created| {
+                created
+                    .into_iter()
+                    .map(|(index, span)| (index, body[span].to_vec()))
+                    .collect::<Vec<_>>()
+            })
+        };
+        // {1: [o, o], 16: r}
+        let body = [&[0xa2, 0x01, 0x82][..], &o, &o, &[0x10], &r].concat();
+        assert_eq!(
+            indices(&body, true),
+            Ok(vec![(0, o.to_vec()), (1, o.to_vec())])
+        );
+        assert_eq!(indices(&body, false), Ok(vec![(2, r.to_vec())]));
+        // {1: [], 16: r} creates the return at 0; {1: [o]} creates nothing when invalid.
+        let no_outputs = [&[0xa2, 0x01, 0x80, 0x10][..], &r].concat();
+        assert_eq!(indices(&no_outputs, false), Ok(vec![(0, r.to_vec())]));
+        assert_eq!(indices(&no_outputs, true), Ok(vec![]));
+        let no_return = [&[0xa1, 0x01, 0x81][..], &o].concat();
+        assert_eq!(indices(&no_return, false), Ok(vec![]));
+        for body in [
+            // {1: [o], 16: h'00'}: a return no read could return.
+            [&[0xa2, 0x01, 0x81][..], &o, &[0x10, 0x41, 0x00]].concat(),
+            // {1: [], 16: r, 16: r}: the return repeated.
+            [&[0xa3, 0x01, 0x80, 0x10][..], &r, &[0x10], &r].concat(),
+        ] {
+            for phase2_valid in [true, false] {
+                assert_eq!(
+                    created_outputs(&body, phase2_valid),
+                    Err(UtxoError::MalformedTx),
+                    "{body:02x?}"
+                );
+            }
+        }
+    }
+
+    /// Independent cross-decoder differential on the golden preprod order transaction
+    /// (`tests/vectors/mithril-tx-body.cbor`): pallas's `MultiEraOutput` accessors are the
+    /// oracle for `{address, lovelace, datum}` on every output, an inline-datum map output
+    /// and a legacy array output among them.
+    #[test]
+    fn the_golden_outputs_decode_as_pallas_decodes_them() {
+        use pallas_codec::minicbor;
+        use pallas_primitives::conway::TransactionBody;
+        use pallas_traverse::{Era, MultiEraOutput};
+
+        let hex_text = std::fs::read_to_string("tests/vectors/mithril-tx-body.cbor").unwrap();
+        let body_bytes = hex::decode(hex_text.trim()).unwrap();
+        let body: TransactionBody = minicbor::decode(&body_bytes).unwrap();
+        assert_eq!(body.outputs.len(), 2);
+        for i in 0..body.outputs.len() {
+            let out_bytes = minicbor::to_vec(&body.outputs[i]).unwrap();
+            let oracle = MultiEraOutput::decode(Era::Conway, &out_bytes).unwrap();
+            let (address, lovelace, datum) = decode_output(&body_bytes, i).unwrap();
+            assert_eq!(address, oracle.address().unwrap().to_vec(), "{i}");
+            assert_eq!(lovelace, oracle.value().coin(), "{i}");
+            assert_eq!(datum.is_some(), oracle.datum().is_some(), "{i}");
+        }
+        assert!(matches!(
+            decode_output(&body_bytes, 0),
+            Ok((_, 5_000_000, Some(Datum::Inline(_))))
+        ));
     }
 
     // ---- decode_spends (the tx-INPUT decoder) ----

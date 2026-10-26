@@ -1,7 +1,7 @@
-//! UTxO read verification (DoD line 5, UTxO part 3 — CLOSES the line): the read
-//! path proves an output's bytes are the authentic, genesis-anchored on-chain
-//! bytes of a Mithril-certified transaction, and carries the honest verdict that
-//! it CANNOT establish liveness (unspent).
+//! UTxO read verification (DoD line 5, UTxO part 3): the read path checks a body's
+//! certified inclusion in the Mithril transaction set, and an included body establishes
+//! no output — its phase-2 outcome lives in its block, not its body — so the read refuses
+//! with `ValidityNotEstablished` once every earlier check has passed.
 //!
 //! The oracle is the real chain: `tests/vectors/mithril-tx-body.cbor` is the exact
 //! `KeepRaw` transaction-body CBOR of the golden preprod transaction, so
@@ -10,29 +10,20 @@
 //! (`83c012fd…5d774129`) is the `cardano_transactions_merkle_root` an STM-
 //! authenticated certificate committed. `verify_utxo_read` hashes the SUPPLIED
 //! bytes (never a provider-supplied hash), certifies inclusion of that hash, then
-//! decodes the requested output on Sextant's own minicbor path.
+//! decodes the requested output on Sextant's own minicbor path before it refuses.
 
 use sextant::inclusion::InclusionError;
-use sextant::utxo::{
-    Datum, OutPoint, SpendSet, SpendStatus, UtxoError, decode_spends, verify_utxo_read,
-};
+use sextant::utxo::{OutPoint, SpendSet, UtxoError, decode_spends, verify_utxo_read};
 use std::fs;
 use std::path::PathBuf;
 
 /// The STM-authenticated certified transaction Merkle root the proof recomputes to.
 const CERTIFIED_ROOT_HEX: &str = "83c012fdc3e756fb5230d1a6554fbf743ccea171b37d536a64350c4f5d774129";
-/// The certified height carried on every verdict (`latest_block_number` == the
-/// certifying cert's `CardanoTransactions` block).
+/// The certified height of the certifying cert's `CardanoTransactions` block.
 const CERTIFIED_BLOCK: u64 = 4_927_469;
 
-/// Output 0: a script address holding 5 ADA and an inline datum (an on-chain order).
+/// Output 0's script address, which the tamper leg flips a coin byte after.
 const OUT0_ADDR_HEX: &str = "7015e93b4326724b8e2d3abc3a6aaef29ce6d6877cfc815eb8f3bd3699";
-const OUT0_LOVELACE: u64 = 5_000_000;
-const OUT0_DATUM_HEX: &str = "d8799fbfd8799f4040ffd8799f1a09d00ed6ffd8799f581c3c0307006496e072a496c0742e55af0c64284b5bf668f2b420fe4f3540ffd8799f1a3b9aca00ffff1b0000019f53ec4417ff";
-
-/// Output 1: a base payment address holding ~4867 ADA, no datum (legacy array form).
-const OUT1_ADDR_HEX: &str = "007dedab05f07efa1093e73b17a9433ca2f53151015e9b30e17e6a17b1667a2455db60b2c4a4ddd2342c21463d55a465dddc409f9a604ddf05";
-const OUT1_LOVELACE: u64 = 4_867_657_971;
 
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -61,32 +52,21 @@ fn root() -> [u8; 32] {
     out
 }
 
+/// Both outputs of the certified golden transaction decode, and neither is established:
+/// the body carries no phase-2 outcome, so an included read refuses rather than return
+/// an output the transaction may never have created.
 #[test]
-fn verify_utxo_read_yields_the_certified_output_bytes() {
+fn an_included_body_establishes_no_output() {
     let body = tx_body();
     let proof = proof_hex();
     let root = root();
-
-    // Output 0: script address + 5 ADA + inline datum.
-    let out0 =
-        verify_utxo_read(&body, 0, &proof, &root, CERTIFIED_BLOCK).expect("output 0 verifies");
-    assert_eq!(out0.address, hex::decode(OUT0_ADDR_HEX).unwrap());
-    assert_eq!(out0.lovelace, OUT0_LOVELACE);
-    assert_eq!(
-        out0.datum,
-        Some(Datum::Inline(hex::decode(OUT0_DATUM_HEX).unwrap()))
-    );
-    assert_eq!(out0.certified_at, CERTIFIED_BLOCK);
-    assert_eq!(out0.spend_status, SpendStatus::NotEstablished);
-
-    // Output 1: base payment address + ~4867 ADA + no datum (legacy array form).
-    let out1 =
-        verify_utxo_read(&body, 1, &proof, &root, CERTIFIED_BLOCK).expect("output 1 verifies");
-    assert_eq!(out1.address, hex::decode(OUT1_ADDR_HEX).unwrap());
-    assert_eq!(out1.lovelace, OUT1_LOVELACE);
-    assert_eq!(out1.datum, None);
-    assert_eq!(out1.certified_at, CERTIFIED_BLOCK);
-    assert_eq!(out1.spend_status, SpendStatus::NotEstablished);
+    for index in [0, 1] {
+        assert_eq!(
+            verify_utxo_read(&body, index, &proof, &root, CERTIFIED_BLOCK),
+            Err(UtxoError::ValidityNotEstablished),
+            "{index}"
+        );
+    }
 }
 
 /// The DoD negative: tampering with the economic content of the claimed output
@@ -127,21 +107,9 @@ fn a_different_transactions_bytes_are_rejected_under_this_proof() {
     );
 }
 
-/// Honesty guard: the read path can NEVER return a positive-liveness verdict. The
-/// certified transaction set is a monotone "created" predicate ~100 blocks behind
-/// tip; Cardano commits to no UTxO-set accumulator, so unspent is undecidable here.
-/// `SpendStatus` has exactly one inhabitant and no code path narrows it.
-#[test]
-fn the_verdict_never_claims_liveness() {
-    let out = verify_utxo_read(&tx_body(), 0, &proof_hex(), &root(), CERTIFIED_BLOCK).unwrap();
-    // The verdict is the honest tier. The compile-time tripwire that no liveness
-    // tier exists lives in the crate's own unit tests: `SpendStatus` is
-    // `#[non_exhaustive]`, so an external exhaustive match is not permitted here.
-    assert_eq!(out.spend_status, SpendStatus::NotEstablished);
-}
-
 /// An output index past the transaction's output list is rejected — reachable only
-/// on the certified bytes, since inclusion is checked first.
+/// on the certified bytes, since inclusion is checked first, and ahead of the refusal
+/// every included body ends in.
 #[test]
 fn an_output_index_past_the_end_is_rejected() {
     assert_eq!(
@@ -150,15 +118,13 @@ fn an_output_index_past_the_end_is_rejected() {
     );
 }
 
-/// The end-to-end genesis-anchored read: the certified root the output verifies
-/// against is not a bare constant — it is the `cardano_transactions_merkle_root`
-/// an STM-authenticated certificate committed (and that certificate authenticates
-/// back toward the genesis key via the existing Mithril verifiers). Composing
-/// `verify_standard` → `certified_transactions()` → `verify_utxo_read` binds the
-/// decoded output to the genesis-anchored chain of trust, on Sextant's own path.
+/// The genesis-anchored root admits the body: the certified root is the
+/// `cardano_transactions_merkle_root` an STM-authenticated certificate committed, the
+/// golden body is included under it (the read reaches its final refusal), and under any
+/// other root it is not.
 #[cfg(feature = "mithril")]
 #[test]
-fn the_output_is_read_against_an_stm_authenticated_certified_root() {
+fn the_body_is_included_under_an_stm_authenticated_certified_root() {
     use sextant::mithril::{Certificate, verify_standard};
 
     let cert_bytes = fs::read(vectors_dir().join("mithril-txproof-cert.json")).expect("read cert");
@@ -182,17 +148,27 @@ fn the_output_is_read_against_an_stm_authenticated_certified_root() {
     let mut authenticated_root = [0u8; 32];
     hex::decode_to_slice(&ct.merkle_root, &mut authenticated_root).unwrap();
 
-    let out = verify_utxo_read(
-        &tx_body(),
-        0,
-        &proof_hex(),
-        &authenticated_root,
-        ct.block_number,
-    )
-    .expect("output verifies against the STM-authenticated root");
-    assert_eq!(out.lovelace, OUT0_LOVELACE);
-    assert_eq!(out.certified_at, CERTIFIED_BLOCK);
-    assert_eq!(out.spend_status, SpendStatus::NotEstablished);
+    assert_eq!(
+        verify_utxo_read(
+            &tx_body(),
+            0,
+            &proof_hex(),
+            &authenticated_root,
+            ct.block_number,
+        ),
+        Err(UtxoError::ValidityNotEstablished)
+    );
+    authenticated_root[0] ^= 0x01;
+    assert!(matches!(
+        verify_utxo_read(
+            &tx_body(),
+            0,
+            &proof_hex(),
+            &authenticated_root,
+            ct.block_number,
+        ),
+        Err(UtxoError::Inclusion(_))
+    ));
 }
 
 /// Independent cross-decoder differential for the tx-INPUT decoder: pallas decodes
@@ -234,46 +210,4 @@ fn decode_spends_matches_pallas_inputs_on_the_golden_tx() {
         expected,
         "decode_spends disagrees with pallas on the golden tx's consumed outpoints",
     );
-}
-
-/// Independent cross-decoder differential: pallas decodes the same golden transaction
-/// body and its `MultiEraOutput` accessors yield `{address, lovelace, datum-presence}`
-/// on a code path independent of Sextant's own minicbor `decode_output`. Parity on
-/// EVERY output is the oracle the rest of this library's verdicts carry (pallas for
-/// header/opcert/KES, cardano-crypto for VRF, ckb for the MMR proof) — so a future
-/// divergence from the ledger on some output shape is caught, not silently wrong.
-#[test]
-fn utxo_output_decode_matches_pallas_on_every_output() {
-    use pallas_codec::minicbor;
-    use pallas_primitives::conway::TransactionBody;
-    use pallas_traverse::{Era, MultiEraOutput};
-
-    let body_bytes = tx_body();
-    let body: TransactionBody =
-        minicbor::decode(&body_bytes).expect("pallas decodes the Conway body");
-    assert!(body.outputs.len() >= 2, "golden tx has both test outputs");
-
-    for i in 0..body.outputs.len() {
-        let out_bytes = minicbor::to_vec(&body.outputs[i]).expect("re-encode output");
-        let oracle = MultiEraOutput::decode(Era::Conway, &out_bytes).expect("pallas output");
-
-        let sextant = verify_utxo_read(&body_bytes, i, &proof_hex(), &root(), CERTIFIED_BLOCK)
-            .unwrap_or_else(|e| panic!("output {i} verifies: {e:?}"));
-
-        assert_eq!(
-            sextant.address,
-            oracle.address().expect("pallas address").to_vec(),
-            "output {i}: address disagrees with pallas",
-        );
-        assert_eq!(
-            sextant.lovelace,
-            oracle.value().coin(),
-            "output {i}: lovelace disagrees with pallas",
-        );
-        assert_eq!(
-            sextant.datum.is_some(),
-            oracle.datum().is_some(),
-            "output {i}: datum-presence disagrees with pallas",
-        );
-    }
 }

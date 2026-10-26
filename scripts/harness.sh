@@ -27,6 +27,8 @@ full() {
   cargo build --release
   cargo test --all-features
   cargo rustc --release --target wasm32-unknown-unknown --crate-type cdylib
+  # The wasm32 build is the artifact a browser loads; run it, not only build it.
+  node tests/wasm/abi.mjs "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/sextant.wasm"
   guest_gate
   header_gate
 }

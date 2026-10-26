@@ -21,6 +21,7 @@ use std::ptr;
 use std::slice;
 
 use crate::chain::{self, ChainError};
+use crate::effects::{self, CreatedOutputError};
 use crate::follow::{AppendRefusal, ReAnchor, Rollback, SlotSchedule, WindowFollower};
 use crate::header::{DecodeError, HeaderView};
 use crate::inclusion::InclusionError;
@@ -42,8 +43,11 @@ use crate::mithril::{
 /// the windowed watch-verdict export ([`sextant_verify_watched_window`]); 3→4 for the live
 /// follower exports ([`sextant_follower_new`] …) and the reinterpretation of the
 /// [`SextantWatchVerdict`] reserved byte as `spend_region`; 4→5 for the Tier-2 certified-state
-/// spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]).
-pub const SEXTANT_ABI_VERSION: u32 = 5;
+/// spend-status band ([`SextantSpendStatus`] + [`SEXTANT_SPEND_CERTIFIED`]); 5→6 for the
+/// block-bound [`sextant_verify_created_output`] with its 420 band, and
+/// [`sextant_verify_utxo_read`] refusing every included body with
+/// [`SextantStatus::UtxoValidityNotEstablished`].
+pub const SEXTANT_ABI_VERSION: u32 = 6;
 
 /// The only defined `spend_status` value a verified read returns. The read path can
 /// NEVER establish that an output is currently available to spend (see
@@ -133,6 +137,16 @@ pub enum SextantStatus {
     UtxoInclusionMalformedProof = 402,
     UtxoMalformedTx = 410,
     UtxoOutputIndexOutOfRange = 411,
+    UtxoValidityNotEstablished = 412,
+
+    CreatedDecode = 420,
+    CreatedHeaderHashMismatch = 421,
+    CreatedBodyCommitmentMismatch = 422,
+    CreatedMalformedValidity = 423,
+    CreatedMalformedBody = 424,
+    CreatedTransactionAbsent = 425,
+    CreatedTransactionRepeated = 426,
+    CreatedNotCreated = 427,
 }
 
 /// Per-verdict detail carried alongside the status code, so a caller can point at the
@@ -173,19 +187,11 @@ pub struct SextantHeaderView {
     pub _reserved: [u8; 6],
 }
 
-/// A verified transaction output, projected into a caller-allocated fixed-width
-/// `#[repr(C)]` struct. The scalars live here; the variable-length `address` and
-/// `datum` bytes are delivered to the caller's `(buf, cap)` pairs, with the true
-/// lengths reported here so a caller can size a retry (the sizing protocol).
-///
-/// ## Honest scope — read before gating on the result
-/// A genuine `Ok` proves the returned `{address, lovelace, datum}` are the AUTHENTIC
-/// on-chain bytes of a Mithril-certified output: its certified INCLUSION and its
-/// provenance are anchored to the network genesis key as of `certified_at`, and
-/// NOTHING MORE. It is NOT a claim that the output is currently available to spend —
-/// Cardano commits to no UTxO-set accumulator, the verdict trails tip by ~100 blocks,
-/// and the ledger decides availability atomically at submission. `spend_status` is
-/// ALWAYS [`SEXTANT_SPEND_NOT_ESTABLISHED`]; never gate a spend on it.
+/// The out-struct of [`sextant_verify_utxo_read`], kept at its ABI-5 layout. That export
+/// never writes it: an included body establishes no output, so the call refuses with
+/// [`SextantStatus::UtxoValidityNotEstablished`] and leaves the struct and both buffers as
+/// the caller left them. A created output is read with [`sextant_verify_created_output`]
+/// into a [`SextantCreatedOutput`].
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SextantVerifiedOutput {
@@ -206,6 +212,42 @@ pub struct SextantVerifiedOutput {
     /// Always [`SEXTANT_SPEND_NOT_ESTABLISHED`] (`0`) — the read path cannot establish
     /// liveness; never gate on it.
     pub spend_status: u8,
+    /// Explicit tail padding; zeroed on write so the struct is fully deterministic.
+    pub _reserved: [u8; 6],
+}
+
+/// An output a block created, projected into a caller-allocated fixed-width `#[repr(C)]`
+/// struct by [`sextant_verify_created_output`]. The scalars live here; the variable-length
+/// `address` and `datum` bytes go to the caller's `(buf, cap)` pairs, with the true lengths
+/// reported here so a caller can size a retry (the sizing protocol).
+///
+/// ## Honest scope
+/// The fields hold within the block bytes that hash to the caller's expected block hash,
+/// which `block_hash` echoes: the output is one the transaction created there under the
+/// phase-2 outcome that block records. Whether that block is in the canonical chain is
+/// the caller's to establish upstream. Nothing here is a liveness claim.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SextantCreatedOutput {
+    /// The output's ADA amount in lovelace (its `coin`; any multi-asset is excluded).
+    pub lovelace: u64,
+    /// The height of the block the output was read from.
+    pub block_number: u64,
+    /// The slot of the block the output was read from.
+    pub slot: u64,
+    /// The true length of the address bytes; may exceed `address_cap` (then retry).
+    pub address_len: usize,
+    /// The true length of the datum bytes: `0` = none, `32` = a datum hash, variable
+    /// = an inline datum; may exceed `datum_cap` (then retry).
+    pub datum_len: usize,
+    /// The header hash of the block the output was read from: the expected hash.
+    pub block_hash: [u8; 32],
+    /// `0` = no datum, `1` = a 32-byte datum hash in `datum_buf`, `2` = an inline
+    /// datum (`datum_len` raw plutus-data CBOR bytes in `datum_buf`, `#6.24`-unwrapped).
+    pub datum_kind: u8,
+    /// `1` = the creating transaction is phase-2-valid and this is one of its regular
+    /// outputs; `0` = it is phase-2-invalid and this is its collateral return.
+    pub phase2_valid: u8,
     /// Explicit tail padding; zeroed on write so the struct is fully deterministic.
     pub _reserved: [u8; 6],
 }
@@ -597,6 +639,39 @@ const STATUS_MESSAGES: &[(SextantStatus, &str)] = {
             S::UtxoOutputIndexOutOfRange,
             "utxo read: output index past end of transaction",
         ),
+        (
+            S::UtxoValidityNotEstablished,
+            "utxo read: inclusion establishes no phase-2 outcome, so no output",
+        ),
+        (S::CreatedDecode, "created output: block failed to decode"),
+        (
+            S::CreatedHeaderHashMismatch,
+            "created output: header does not hash to the expected block hash",
+        ),
+        (
+            S::CreatedBodyCommitmentMismatch,
+            "created output: block body does not hash to its header commitment",
+        ),
+        (
+            S::CreatedMalformedValidity,
+            "created output: invalid_transactions is not a strictly ascending index list",
+        ),
+        (
+            S::CreatedMalformedBody,
+            "created output: malformed transaction body",
+        ),
+        (
+            S::CreatedTransactionAbsent,
+            "created output: no transaction in the block has the id",
+        ),
+        (
+            S::CreatedTransactionRepeated,
+            "created output: the block carries the transaction more than once",
+        ),
+        (
+            S::CreatedNotCreated,
+            "created output: the transaction created no output at the index",
+        ),
     ]
 };
 
@@ -618,7 +693,28 @@ fn utxo_status(e: &UtxoError) -> i32 {
         UtxoError::Inclusion(InclusionError::MalformedProof) => S::UtxoInclusionMalformedProof,
         UtxoError::MalformedTx => S::UtxoMalformedTx,
         UtxoError::OutputIndexOutOfRange => S::UtxoOutputIndexOutOfRange,
+        UtxoError::ValidityNotEstablished => S::UtxoValidityNotEstablished,
     }) as i32
+}
+
+/// Flatten a [`CreatedOutputError`] to `(status, detail)`: the 420 band, with a decode
+/// failure's 100-band leaf code as the detail.
+fn created_status(e: &CreatedOutputError) -> (i32, u64) {
+    use SextantStatus as S;
+    let code = match e {
+        CreatedOutputError::Decode(err) => {
+            let (leaf, _) = decode_status(err);
+            return (S::CreatedDecode as i32, leaf as u64);
+        }
+        CreatedOutputError::HeaderHashMismatch => S::CreatedHeaderHashMismatch,
+        CreatedOutputError::BodyCommitmentMismatch => S::CreatedBodyCommitmentMismatch,
+        CreatedOutputError::MalformedValidity => S::CreatedMalformedValidity,
+        CreatedOutputError::MalformedBody => S::CreatedMalformedBody,
+        CreatedOutputError::TransactionAbsent => S::CreatedTransactionAbsent,
+        CreatedOutputError::TransactionRepeated => S::CreatedTransactionRepeated,
+        CreatedOutputError::NotCreated => S::CreatedNotCreated,
+    };
+    (code as i32, 0)
 }
 
 /// Copy `min(src.len(), cap)` bytes into `dst`, but only when `dst` is non-null and
@@ -639,39 +735,30 @@ unsafe fn copy_min(dst: *mut u8, cap: usize, src: &[u8]) {
     unsafe { ptr::copy_nonoverlapping(src.as_ptr(), dst, n) };
 }
 
-/// Verify that output `out_index` of the transaction whose body is `tx_bytes` is a
-/// genesis-anchored, Mithril-certified on-chain output, and marshal its
-/// `{address, lovelace, datum}` back to the caller.
+/// Check output `out_index` of the transaction whose body is `tx_bytes` against a
+/// Mithril-certified transaction set, by [`crate::utxo::verify_utxo_read`]. An included
+/// body establishes no output: the body carries no phase-2 outcome, so every call that
+/// passes the checks below returns [`SextantStatus::UtxoValidityNotEstablished`] (`412`).
+/// The output is read from its creating block with [`sextant_verify_created_output`].
 ///
-/// This is a CORE export — present in the default library and the wasm32 build (its
-/// verifier composes only Blake2b/Blake2s + minicbor, no feature-gated crypto crate).
-/// `certified_root` is
-/// the 32-byte certified transaction Merkle root; obtain it ONLY from a
-/// genesis-authenticated certificate (see the mithril anchored verify) so a provider
-/// cannot inject one. The supplied `tx_bytes` are hashed here, never a
-/// provider-supplied hash, so substituted/tampered bytes are rejected as not-included.
+/// This is a CORE export — present in the default library and the wasm32 build.
+/// `certified_root` is the 32-byte certified transaction Merkle root. The supplied
+/// `tx_bytes` are hashed here, never a provider-supplied hash.
 ///
-/// ## The sizing protocol (allocation-free; caller owns every buffer)
-/// The fixed scalars land in `*out`; the variable-length `address` and `datum` bytes
-/// go to `address_buf`/`datum_buf`, whose true lengths are reported in
-/// `out.address_len`/`out.datum_len`. If EITHER buffer is too small the call writes
-/// the full struct (true lengths, no variable bytes) and returns
-/// [`SextantStatus::ErrBufferTooSmall`] (`-3`); the caller reads the lengths, resizes,
-/// and retries (idempotent). A `(NULL, 0)` pair is a pure sizing probe. There is no
-/// free function — on wasm no free callback can cross back in.
-///
-/// ## Honest scope
-/// A genuine `Ok` proves authentic bytes + certified inclusion + provenance anchored
-/// to genesis as of `certified_at`, NOTHING MORE; it is NOT a liveness claim, and
-/// `out.spend_status` is always [`SEXTANT_SPEND_NOT_ESTABLISHED`]. Never gate on it.
+/// ## Precedence
+/// A null `tx_bytes`/`proof_hex`/`certified_root`/`out` is [`SextantStatus::ErrNullPointer`],
+/// then an empty `tx_bytes` is [`SextantStatus::ErrEmptyInput`]; neither writes
+/// `out_detail`. Then a body outside the certified set is the 400 band, an output that does
+/// not decode `410`, an index past the outputs `411`, and anything else `412`; each writes
+/// `out_detail = {index:-1, detail:0}` when non-null. No return writes `*out`,
+/// `address_buf` or `datum_buf`: they are left as the caller left them.
 ///
 /// # Safety
 /// `tx_bytes` must point to `tx_bytes_len` readable bytes; `proof_hex` to
-/// `proof_hex_len` readable bytes; `certified_root` to 32 readable bytes; `out` to a
-/// writable [`SextantVerifiedOutput`]. `address_buf`/`datum_buf` must each be null
-/// (permitted iff its cap is 0) or point to `address_cap`/`datum_cap` writable bytes.
-/// `out_detail` must be null or point to a writable [`SextantErrorDetail`]. All
-/// borrows live only for the duration of the call.
+/// `proof_hex_len` readable bytes; `certified_root` to 32 readable bytes; `out` must be
+/// non-null. `address_buf`/`datum_buf` are never read or written. `out_detail` must be
+/// null or point to a writable [`SextantErrorDetail`]. All borrows live only for the
+/// duration of the call.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn sextant_verify_utxo_read(
@@ -689,6 +776,8 @@ pub unsafe extern "C" fn sextant_verify_utxo_read(
     datum_cap: usize,
     out_detail: *mut SextantErrorDetail,
 ) -> i32 {
+    // The ABI-5 output parameters keep their places; nothing is marshalled into them.
+    let _ = (address_buf, address_cap, datum_buf, datum_cap);
     guard(|| {
         if tx_bytes.is_null() || proof_hex.is_null() || certified_root.is_null() || out.is_null() {
             return SextantStatus::ErrNullPointer as i32;
@@ -702,32 +791,109 @@ pub unsafe extern "C" fn sextant_verify_utxo_read(
         let proof = unsafe { slice::from_raw_parts(proof_hex, proof_hex_len) };
         let root = unsafe { &*(certified_root as *const [u8; 32]) };
 
-        let v = match utxo::verify_utxo_read(tx, out_index, proof, root, block_number) {
-            Ok(v) => v,
+        let status = match utxo::verify_utxo_read(tx, out_index, proof, root, block_number) {
+            Err(e) => utxo_status(&e),
+            // verify_utxo_read establishes no output, so none is ever marshalled.
+            Ok(_) => SextantStatus::UtxoValidityNotEstablished as i32,
+        };
+        write_detail(out_detail, -1, 0);
+        status
+    })
+}
+
+/// Read output `out_index` of transaction `tx_id` as created by `block` (ledger
+/// `[era, block]` CBOR) whose header must hash to `expected_block_hash`, by
+/// [`crate::effects::verify_created_output`], and marshal it into `*out` and the caller's
+/// buffers.
+///
+/// This is a CORE export — present in the default library and the wasm32 build.
+///
+/// ## Honest scope
+/// A `0` proves the transaction created this output within the bytes bound to
+/// `expected_block_hash`, under the phase-2 outcome the block records. It proves nothing
+/// about that block's place in the chain: the expected hash must come from a source the
+/// caller trusts for canonical membership. A hash taken from the same untrusted bytes
+/// proves nothing, and one from a follower-verified header chain carries that chain's
+/// surfaced Mithril-quorum and leader-eligibility assumptions. Nothing here is a
+/// liveness claim.
+///
+/// ## The sizing protocol (allocation-free; caller owns every buffer)
+/// The fixed scalars land in `*out`; the variable-length `address` and `datum` bytes
+/// go to `address_buf`/`datum_buf`, whose true lengths are reported in
+/// `out.address_len`/`out.datum_len`. If EITHER buffer is too small the call writes
+/// the full struct (true lengths, no variable bytes) and returns
+/// [`SextantStatus::ErrBufferTooSmall`] (`-3`); the caller reads the lengths, resizes,
+/// and retries (idempotent). A `(NULL, 0)` pair is a pure sizing probe. There is no
+/// free function — on wasm no free callback can cross back in.
+///
+/// ## Precedence
+/// A null `block`/`expected_block_hash`/`tx_id`/`out` is [`SextantStatus::ErrNullPointer`],
+/// then an empty `block` is [`SextantStatus::ErrEmptyInput`]; neither writes `out_detail`.
+/// A refusal is the 420 band, with a decode failure's 100-band leaf code in
+/// `out_detail.detail`, and leaves `*out` and both buffers as the caller left them. Only
+/// `0` and `-3` write `*out`, and only `0` writes the buffers.
+///
+/// # Safety
+/// `block` must point to `block_len` readable bytes; `expected_block_hash` and `tx_id` to
+/// 32 readable bytes each; `out` to a writable [`SextantCreatedOutput`].
+/// `address_buf`/`datum_buf` must each be null (permitted iff its cap is 0) or point to
+/// `address_cap`/`datum_cap` writable bytes. `out_detail` must be null or point to a
+/// writable [`SextantErrorDetail`]. All borrows live only for the duration of the call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn sextant_verify_created_output(
+    block: *const u8,
+    block_len: usize,
+    expected_block_hash: *const u8,
+    tx_id: *const u8,
+    out_index: u16,
+    out: *mut SextantCreatedOutput,
+    address_buf: *mut u8,
+    address_cap: usize,
+    datum_buf: *mut u8,
+    datum_cap: usize,
+    out_detail: *mut SextantErrorDetail,
+) -> i32 {
+    guard(|| {
+        if block.is_null() || expected_block_hash.is_null() || tx_id.is_null() || out.is_null() {
+            return SextantStatus::ErrNullPointer as i32;
+        }
+        if block_len == 0 {
+            return SextantStatus::ErrEmptyInput as i32;
+        }
+        // SAFETY: each pointer is non-null (checked) and, by contract, points to the
+        // stated number of readable bytes; the borrows live only inside this closure.
+        let bytes = unsafe { slice::from_raw_parts(block, block_len) };
+        let expected = unsafe { &*(expected_block_hash as *const [u8; 32]) };
+        let tx_id = unsafe { &*(tx_id as *const [u8; 32]) };
+
+        let created = match effects::verify_created_output(bytes, expected, tx_id, out_index) {
+            Ok(created) => created,
             Err(e) => {
-                write_detail(out_detail, -1, 0);
-                return utxo_status(&e);
+                let (status, detail) = created_status(&e);
+                write_detail(out_detail, -1, detail);
+                return status;
             }
         };
 
-        let address_len = v.address.len();
-        let (datum_kind, datum_bytes): (u8, &[u8]) = match &v.datum {
+        let (datum_kind, datum_bytes): (u8, &[u8]) = match &created.datum {
             None => (0, &[]),
             Some(Datum::Hash(h)) => (1, h.as_slice()),
             Some(Datum::Inline(bytes)) => (2, bytes.as_slice()),
         };
-        let datum_len = datum_bytes.len();
-        let projected = SextantVerifiedOutput {
-            lovelace: v.lovelace,
-            certified_at: v.certified_at,
-            address_len,
-            datum_len,
+        let projected = SextantCreatedOutput {
+            lovelace: created.lovelace,
+            block_number: created.block_number,
+            slot: created.slot,
+            address_len: created.address.len(),
+            datum_len: datum_bytes.len(),
+            block_hash: created.block_hash,
             datum_kind,
-            spend_status: SEXTANT_SPEND_NOT_ESTABLISHED,
+            phase2_valid: u8::from(created.phase2_valid),
             _reserved: [0u8; 6],
         };
 
-        if address_cap < address_len || datum_cap < datum_len {
+        if address_cap < projected.address_len || datum_cap < projected.datum_len {
             // Sizing sub-result: publish the true lengths, copy no variable bytes.
             // SAFETY: `out` is non-null (checked); written once on this path.
             unsafe { *out = projected };
@@ -739,7 +905,7 @@ pub unsafe extern "C" fn sextant_verify_utxo_read(
         // `*_len`/`datum_kind` to interpret already-written buffers), THEN the detail.
         // SAFETY: caps are ≥ the true lengths, so `copy_min` writes the full fields.
         unsafe {
-            copy_min(address_buf, address_cap, &v.address);
+            copy_min(address_buf, address_cap, &created.address);
             copy_min(datum_buf, datum_cap, datum_bytes);
             *out = projected;
         }

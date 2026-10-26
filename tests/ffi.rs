@@ -90,9 +90,6 @@ fn no_detail() -> SextantErrorDetail {
 const UTXO_CERTIFIED_ROOT_HEX: &str =
     "83c012fdc3e756fb5230d1a6554fbf743ccea171b37d536a64350c4f5d774129";
 const UTXO_CERTIFIED_BLOCK: u64 = 4927469;
-const UTXO_EXPECTED_LOVELACE: u64 = 5_000_000;
-const UTXO_EXPECTED_ADDR_LEN: usize = 29;
-const UTXO_EXPECTED_DATUM_HEX: &str = "d8799fbfd8799f4040ffd8799f1a09d00ed6ffd8799f581c3c0307006496e072a496c0742e55af0c64284b5bf668f2b420fe4f3540ffd8799f1a3b9aca00ffff1b0000019f53ec4417ff";
 /// Output 0's script address; the tamper flips the coin byte that follows it.
 const UTXO_OUT0_ADDR_HEX: &str = "7015e93b4326724b8e2d3abc3a6aaef29ce6d6877cfc815eb8f3bd3699";
 
@@ -271,49 +268,84 @@ fn status_message_sizes_then_copies() {
 }
 
 #[test]
-fn abi_version_is_five() {
-    assert_eq!(sextant_abi_version(), 5);
+fn abi_version_is_six() {
+    assert_eq!(sextant_abi_version(), 6);
     assert_eq!(sextant_abi_version(), SEXTANT_ABI_VERSION);
 }
 
-/// The CORE (ungated, wasm-safe) UTxO-read export: it computes the SAME verdict as
-/// the in-process `verify_utxo_read` on the real golden order, marshals the
-/// variable-length address/datum via the caller-sizing (`-3`) protocol, and rejects
-/// a spoofed body as not-included — all without pulling any mithril/blst symbol.
+/// The CORE (ungated, wasm-safe) UTxO-read export over the real golden order: every
+/// included body is refused with `UtxoValidityNotEstablished` (412), as the in-process
+/// `verify_utxo_read` refuses it, after the inclusion, decode and index checks keep their
+/// order; no return writes the out-struct or either buffer — sentinel bytes survive every
+/// call — and the boundary guards never write the detail.
 mod utxo_ffi {
     use super::{
-        UTXO_CERTIFIED_BLOCK, UTXO_EXPECTED_ADDR_LEN, UTXO_EXPECTED_DATUM_HEX,
-        UTXO_EXPECTED_LOVELACE, UTXO_OUT0_ADDR_HEX, no_detail, tamper_output0_coin, unhex,
-        utxo_certified_root, utxo_proof_hex, utxo_tx_body,
+        UTXO_CERTIFIED_BLOCK, tamper_output0_coin, utxo_certified_root, utxo_proof_hex,
+        utxo_tx_body,
     };
     use sextant::ffi::{
         SEXTANT_SPEND_NOT_ESTABLISHED, SextantErrorDetail, SextantStatus, SextantVerifiedOutput,
         sextant_verify_utxo_read,
     };
+    use std::mem::{MaybeUninit, size_of};
     use std::ptr;
 
-    fn zeroed() -> SextantVerifiedOutput {
-        // SAFETY: `SextantVerifiedOutput` is a plain `#[repr(C)]` scalar aggregate.
-        unsafe { std::mem::zeroed() }
+    const STRUCT_SENTINEL: u8 = 0x5a;
+    const BUFFER_SENTINEL: u8 = 0xaa;
+
+    /// An out-struct with every byte set to [`STRUCT_SENTINEL`], so any write shows.
+    fn sentinel() -> SextantVerifiedOutput {
+        let mut out = MaybeUninit::<SextantVerifiedOutput>::uninit();
+        // SAFETY: every byte is written, and the struct is a padding-free `#[repr(C)]`
+        // aggregate of integers that takes any bit pattern.
+        unsafe {
+            out.as_mut_ptr().write_bytes(STRUCT_SENTINEL, 1);
+            out.assume_init()
+        }
     }
 
-    /// Call the export over borrowed inputs and raw output buffers (raw so a test can
-    /// pass `NULL`/`0` as a sizing probe).
-    #[allow(clippy::too_many_arguments)]
-    fn verify_raw(
+    fn struct_bytes(out: &SextantVerifiedOutput) -> &[u8] {
+        // SAFETY: the struct is padding-free, so all of its bytes are initialised.
+        unsafe {
+            std::slice::from_raw_parts(
+                (out as *const SextantVerifiedOutput).cast::<u8>(),
+                size_of::<SextantVerifiedOutput>(),
+            )
+        }
+    }
+
+    fn sentinel_detail() -> SextantErrorDetail {
+        SextantErrorDetail {
+            index: 77,
+            detail: 77,
+        }
+    }
+
+    /// Call the export over borrowed inputs into sentinel-filled outputs, `buffers`
+    /// choosing 256-byte buffers or a `NULL`/`0` sizing probe, and report the status and
+    /// whether the struct and both buffers came back as they went in.
+    fn read(
         body: &[u8],
         out_index: usize,
-        proof: &[u8],
         root: &[u8; 32],
-        block: u64,
-        out: *mut SextantVerifiedOutput,
-        addr_buf: *mut u8,
-        addr_cap: usize,
-        datum_buf: *mut u8,
-        datum_cap: usize,
-        detail: *mut SextantErrorDetail,
-    ) -> i32 {
-        unsafe {
+        buffers: bool,
+    ) -> (i32, bool, SextantErrorDetail) {
+        let proof = utxo_proof_hex();
+        let mut out = sentinel();
+        let mut addr = [BUFFER_SENTINEL; 256];
+        let mut datum = [BUFFER_SENTINEL; 256];
+        let mut d = sentinel_detail();
+        let (addr_ptr, addr_cap, datum_ptr, datum_cap) = if buffers {
+            (
+                addr.as_mut_ptr(),
+                addr.len(),
+                datum.as_mut_ptr(),
+                datum.len(),
+            )
+        } else {
+            (ptr::null_mut(), 0, ptr::null_mut(), 0)
+        };
+        let rc = unsafe {
             sextant_verify_utxo_read(
                 body.as_ptr(),
                 body.len(),
@@ -321,258 +353,121 @@ mod utxo_ffi {
                 proof.as_ptr(),
                 proof.len(),
                 root.as_ptr(),
-                block,
-                out,
-                addr_buf,
+                UTXO_CERTIFIED_BLOCK,
+                &mut out,
+                addr_ptr,
                 addr_cap,
-                datum_buf,
+                datum_ptr,
                 datum_cap,
-                detail,
+                &mut d,
             )
+        };
+        let untouched = struct_bytes(&out).iter().all(|b| *b == STRUCT_SENTINEL)
+            && addr.iter().chain(&datum).all(|b| *b == BUFFER_SENTINEL);
+        (rc, untouched, d)
+    }
+
+    /// Both outputs of the golden order are included and refused: 412, the detail
+    /// `{-1, 0}`, and nothing marshalled — with room in the buffers and as a sizing probe
+    /// alike, so no `-3` lengths leak either.
+    #[test]
+    fn an_included_read_refuses_and_writes_no_output() {
+        let (body, root) = (utxo_tx_body(), utxo_certified_root());
+        for index in [0, 1] {
+            for buffers in [true, false] {
+                let (rc, untouched, d) = read(&body, index, &root, buffers);
+                assert_eq!(rc, SextantStatus::UtxoValidityNotEstablished as i32);
+                assert!(untouched, "{index} {buffers}");
+                assert_eq!((d.index, d.detail), (-1, 0));
+            }
         }
     }
 
-    /// The golden order verifies through the C ABI: the struct scalars match the
-    /// in-process verdict and the variable-length address + inline datum land in the
-    /// caller buffers.
+    /// The refusals keep their order and their codes, each leaving the outputs alone: a
+    /// spoofed body is not included (400) even at an index past its outputs, a wrong root
+    /// recomputes to no certified root, and an index past the outputs of the included
+    /// body is 411, ahead of 412.
     #[test]
-    fn good_read_fills_struct_and_buffers() {
-        let (body, proof, root) = (utxo_tx_body(), utxo_proof_hex(), utxo_certified_root());
-        let expected_datum = unhex(UTXO_EXPECTED_DATUM_HEX);
-        let mut out = zeroed();
-        let mut addr = [0u8; 64];
-        let mut datum = [0u8; 256];
-        let mut d = no_detail();
-
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
+    fn the_refusals_keep_their_order_and_write_no_output() {
+        let (body, root) = (utxo_tx_body(), utxo_certified_root());
+        let spoof = tamper_output0_coin(&body);
+        let mut wrong_root = root;
+        wrong_root[0] ^= 0x01;
+        for (case, rc, expected) in [
+            (
+                "spoof",
+                read(&spoof, 0, &root, true),
+                SextantStatus::UtxoInclusionNotIncluded,
+            ),
+            (
+                "spoof past the end",
+                read(&spoof, 99, &root, true),
+                SextantStatus::UtxoInclusionNotIncluded,
+            ),
+            (
+                "past the end",
+                read(&body, 2, &root, true),
+                SextantStatus::UtxoOutputIndexOutOfRange,
+            ),
+        ] {
+            assert_eq!(rc.0, expected as i32, "{case}");
+            assert!(rc.1, "{case}");
+            assert_eq!((rc.2.index, rc.2.detail), (-1, 0), "{case}");
+        }
+        let (rc, untouched, _) = read(&body, 0, &wrong_root, true);
+        assert!(
+            [
+                SextantStatus::UtxoInclusionNotIncluded as i32,
+                SextantStatus::UtxoInclusionRootMismatch as i32
+            ]
+            .contains(&rc),
+            "{rc}"
         );
-
-        assert_eq!(rc, SextantStatus::Ok as i32);
-        assert_eq!(out.lovelace, UTXO_EXPECTED_LOVELACE);
-        assert_eq!(out.certified_at, UTXO_CERTIFIED_BLOCK);
-        assert_eq!(out.address_len, UTXO_EXPECTED_ADDR_LEN);
-        assert_eq!(out.datum_kind, 2, "an inline datum");
-        assert_eq!(out.datum_len, expected_datum.len());
-        assert_eq!(out.spend_status, SEXTANT_SPEND_NOT_ESTABLISHED);
-        assert_eq!(out._reserved, [0u8; 6]);
-        assert_eq!(
-            &addr[..out.address_len],
-            unhex(UTXO_OUT0_ADDR_HEX).as_slice()
-        );
-        assert_eq!(&datum[..out.datum_len], expected_datum.as_slice());
-        assert_eq!(d.index, -1);
-    }
-
-    /// A pure sizing probe (`NULL` buffers, caps `0`) reports `-3` with the true
-    /// lengths and touches no buffer.
-    #[test]
-    fn sizing_query_null_bufs() {
-        let (body, proof, root) = (utxo_tx_body(), utxo_proof_hex(), utxo_certified_root());
-        let mut out = zeroed();
-        let mut d = no_detail();
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            ptr::null_mut(),
-            0,
-            ptr::null_mut(),
-            0,
-            &mut d,
-        );
-        assert_eq!(rc, SextantStatus::ErrBufferTooSmall as i32);
-        assert_eq!(out.address_len, UTXO_EXPECTED_ADDR_LEN);
-        assert_eq!(out.datum_len, unhex(UTXO_EXPECTED_DATUM_HEX).len());
-        assert_eq!(out.datum_kind, 2);
-        assert_eq!(out.spend_status, SEXTANT_SPEND_NOT_ESTABLISHED);
-    }
-
-    /// Exact caps succeed; a datum buffer one byte short of the true length rejects
-    /// with `-3` and copies NOTHING (not a truncated prefix) into either buffer.
-    #[test]
-    fn buffer_too_small_reports_true_lengths() {
-        let (body, proof, root) = (utxo_tx_body(), utxo_proof_hex(), utxo_certified_root());
-        let expected_datum = unhex(UTXO_EXPECTED_DATUM_HEX);
-
-        // Exact caps -> Ok, full datum delivered.
-        let mut out = zeroed();
-        let mut addr = vec![0u8; UTXO_EXPECTED_ADDR_LEN];
-        let mut datum = vec![0u8; expected_datum.len()];
-        let mut d = no_detail();
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
-        );
-        assert_eq!(rc, SextantStatus::Ok as i32);
-        assert_eq!(datum, expected_datum);
-
-        // Address fits, datum one byte short -> -3 and NO partial copy on either buffer.
-        let mut out = zeroed();
-        let mut addr = vec![0u8; UTXO_EXPECTED_ADDR_LEN];
-        let mut datum = vec![0xAAu8; expected_datum.len() - 1];
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
-        );
-        assert_eq!(rc, SextantStatus::ErrBufferTooSmall as i32);
-        assert_eq!(out.address_len, UTXO_EXPECTED_ADDR_LEN);
-        assert_eq!(out.datum_len, expected_datum.len());
-        assert_eq!(
-            addr,
-            vec![0u8; UTXO_EXPECTED_ADDR_LEN],
-            "address left untouched"
-        );
-        assert_eq!(
-            datum,
-            vec![0xAAu8; expected_datum.len() - 1],
-            "datum left untouched (no truncated prefix)"
-        );
-    }
-
-    /// A spoofed body (one output-coin byte flipped) hashes to a value the proof does
-    /// not attest — rejected as not-included (400) before any output is decoded.
-    #[test]
-    fn tampered_bytes_not_included() {
-        let (proof, root) = (utxo_proof_hex(), utxo_certified_root());
-        let body = tamper_output0_coin(&utxo_tx_body());
-        let mut out = zeroed();
-        let mut addr = [0u8; 64];
-        let mut datum = [0u8; 256];
-        let mut d = no_detail();
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
-        );
-        assert_eq!(rc, SextantStatus::UtxoInclusionNotIncluded as i32);
-    }
-
-    /// An output index past the end (real bytes, so inclusion passes first) reports
-    /// the out-of-range status.
-    #[test]
-    fn out_of_range_index() {
-        let (body, proof, root) = (utxo_tx_body(), utxo_proof_hex(), utxo_certified_root());
-        let mut out = zeroed();
-        let mut addr = [0u8; 64];
-        let mut datum = [0u8; 256];
-        let mut d = no_detail();
-        let rc = verify_raw(
-            &body,
-            99,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
-        );
-        assert_eq!(rc, SextantStatus::UtxoOutputIndexOutOfRange as i32);
+        assert!(untouched);
     }
 
     /// Null required pointers and a zero-length tx body are caller errors, reported
-    /// without touching the verifier.
+    /// without touching the verifier, the out-struct or the detail; a null pointer is
+    /// reported ahead of an empty one.
     #[test]
     fn null_and_empty_guards() {
         let (body, proof, root) = (utxo_tx_body(), utxo_proof_hex(), utxo_certified_root());
-        let mut out = zeroed();
-        let mut addr = [0u8; 64];
-        let mut datum = [0u8; 256];
-        let mut d = no_detail();
-
-        // Null tx_bytes.
-        let rc = unsafe {
+        let mut out = sentinel();
+        let mut d = sentinel_detail();
+        let call = |tx: *const u8,
+                    len: usize,
+                    out: *mut SextantVerifiedOutput,
+                    d: &mut SextantErrorDetail| unsafe {
             sextant_verify_utxo_read(
-                ptr::null(),
-                10,
+                tx,
+                len,
                 0,
                 proof.as_ptr(),
                 proof.len(),
                 root.as_ptr(),
                 UTXO_CERTIFIED_BLOCK,
-                &mut out,
-                addr.as_mut_ptr(),
-                addr.len(),
-                datum.as_mut_ptr(),
-                datum.len(),
-                &mut d,
+                out,
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                0,
+                d,
             )
         };
-        assert_eq!(rc, SextantStatus::ErrNullPointer as i32);
-
-        // Null out struct.
-        let rc = verify_raw(
-            &body,
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            ptr::null_mut(),
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
+        assert_eq!(
+            call(ptr::null(), 0, &mut out, &mut d),
+            SextantStatus::ErrNullPointer as i32
         );
-        assert_eq!(rc, SextantStatus::ErrNullPointer as i32);
-
-        // Zero-length tx bytes (non-null ptr, len 0) -> empty input.
-        let rc = verify_raw(
-            &[],
-            0,
-            &proof,
-            &root,
-            UTXO_CERTIFIED_BLOCK,
-            &mut out,
-            addr.as_mut_ptr(),
-            addr.len(),
-            datum.as_mut_ptr(),
-            datum.len(),
-            &mut d,
+        assert_eq!(
+            call(body.as_ptr(), body.len(), ptr::null_mut(), &mut d),
+            SextantStatus::ErrNullPointer as i32
         );
-        assert_eq!(rc, SextantStatus::ErrEmptyInput as i32);
+        assert_eq!(
+            call(body.as_ptr(), 0, &mut out, &mut d),
+            SextantStatus::ErrEmptyInput as i32
+        );
+        assert!(struct_bytes(&out).iter().all(|b| *b == STRUCT_SENTINEL));
+        assert_eq!((d.index, d.detail), (77, 77));
     }
 
     /// The honest-scope constant is the only defined spend-status value, and it is 0.
@@ -585,12 +480,11 @@ mod utxo_ffi {
 #[cfg(feature = "mithril")]
 mod mithril_ffi {
     use super::{
-        UTXO_CERTIFIED_BLOCK, UTXO_CERTIFIED_ROOT_HEX, UTXO_EXPECTED_DATUM_HEX,
-        UTXO_EXPECTED_LOVELACE, no_detail, tamper_output0_coin, unhex, utxo_proof_hex,
-        utxo_tx_body, vectors_dir,
+        UTXO_CERTIFIED_BLOCK, UTXO_CERTIFIED_ROOT_HEX, no_detail, tamper_output0_coin,
+        utxo_proof_hex, utxo_tx_body, vectors_dir,
     };
     use sextant::ffi::{
-        SEXTANT_SPEND_NOT_ESTABLISHED, SextantErrorDetail, SextantStatus, SextantVerifiedOutput,
+        SextantErrorDetail, SextantStatus, SextantVerifiedOutput,
         sextant_mithril_verify_chain_anchored, sextant_verify_utxo_read,
     };
     use sextant::mithril::Certificate;
@@ -795,67 +689,56 @@ mod mithril_ffi {
     }
 
     /// End-to-end C-ABI compose: authenticate the chain to genesis, take the certified
-    /// root from the AUTHENTICATED tip, feed it straight into the UTxO-read export, and
-    /// run the order predicate — then a spoofed body rejects as not-included (400).
+    /// root from the AUTHENTICATED tip, and feed it straight into the UTxO-read export.
+    /// The authentic body is included under it and still refused (412): inclusion
+    /// establishes no output, so the struct and buffers stay as they were. A spoofed
+    /// body is not included (400).
     #[test]
-    fn anchored_root_feeds_a_verified_utxo_read() {
+    fn anchored_root_admits_the_body_and_establishes_no_output() {
         let a = anchored(&anchor_chain_certs(), Some(&genesis_vkey()));
         assert_eq!(a.rc, SextantStatus::Ok as i32);
         assert_eq!(a.has_ct, 1);
 
         let proof = utxo_proof_hex();
-        let expected_datum = unhex(UTXO_EXPECTED_DATUM_HEX);
-        let mut out: SextantVerifiedOutput = unsafe { std::mem::zeroed() };
-        let mut addr = [0u8; 64];
-        let mut datum = [0u8; 256];
-        let mut d = no_detail();
+        let read = |body: &[u8]| {
+            let mut out: SextantVerifiedOutput = unsafe { std::mem::zeroed() };
+            let mut addr = [0u8; 64];
+            let mut datum = [0u8; 256];
+            let mut d = no_detail();
+            let rc = unsafe {
+                sextant_verify_utxo_read(
+                    body.as_ptr(),
+                    body.len(),
+                    0,
+                    proof.as_ptr(),
+                    proof.len(),
+                    a.ct_root.as_ptr(),
+                    a.ct_block,
+                    &mut out,
+                    addr.as_mut_ptr(),
+                    addr.len(),
+                    datum.as_mut_ptr(),
+                    datum.len(),
+                    &mut d,
+                )
+            };
+            let untouched = out.lovelace == 0
+                && out.certified_at == 0
+                && out.address_len == 0
+                && out.datum_len == 0
+                && addr.iter().chain(&datum).all(|b| *b == 0);
+            (rc, untouched)
+        };
 
-        // Authentic body -> Ok, meets the order predicate over the verified output.
         let body = utxo_tx_body();
-        let rc = unsafe {
-            sextant_verify_utxo_read(
-                body.as_ptr(),
-                body.len(),
-                0,
-                proof.as_ptr(),
-                proof.len(),
-                a.ct_root.as_ptr(),
-                a.ct_block,
-                &mut out,
-                addr.as_mut_ptr(),
-                addr.len(),
-                datum.as_mut_ptr(),
-                datum.len(),
-                &mut d,
-            )
-        };
-        assert_eq!(rc, SextantStatus::Ok as i32);
-        assert_eq!(out.certified_at, UTXO_CERTIFIED_BLOCK);
-        let proceed = out.lovelace >= UTXO_EXPECTED_LOVELACE
-            && out.datum_kind == 2
-            && datum[..out.datum_len] == expected_datum[..];
-        assert!(proceed, "the authentic certified order meets the predicate");
-        assert_eq!(out.spend_status, SEXTANT_SPEND_NOT_ESTABLISHED);
-
-        // Spoofed body -> not included (400); never reaches the predicate.
-        let spoof = tamper_output0_coin(&body);
-        let rc = unsafe {
-            sextant_verify_utxo_read(
-                spoof.as_ptr(),
-                spoof.len(),
-                0,
-                proof.as_ptr(),
-                proof.len(),
-                a.ct_root.as_ptr(),
-                a.ct_block,
-                &mut out,
-                addr.as_mut_ptr(),
-                addr.len(),
-                datum.as_mut_ptr(),
-                datum.len(),
-                &mut d,
-            )
-        };
-        assert_eq!(rc, SextantStatus::UtxoInclusionNotIncluded as i32);
+        assert_eq!(a.ct_block, UTXO_CERTIFIED_BLOCK);
+        assert_eq!(
+            read(&body),
+            (SextantStatus::UtxoValidityNotEstablished as i32, true)
+        );
+        assert_eq!(
+            read(&tamper_output0_coin(&body)),
+            (SextantStatus::UtxoInclusionNotIncluded as i32, true)
+        );
     }
 }

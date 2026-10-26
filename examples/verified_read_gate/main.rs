@@ -1,7 +1,8 @@
-//! Verified-read spend gate example — the first downstream consumer of Sextant's
-//! read verdict. Runs the accept path then the spoof path over committed preprod
-//! fixtures and prints the structured log lines; this stdout IS the DoD "service
-//! log excerpt". Exits nonzero on any unexpected outcome (fail-closed).
+//! Verified-read provenance example — the body-only composition over Sextant's certified
+//! inclusion read. Runs the authentic path (found included, refused for want of its
+//! phase-2 outcome) then the spoof path (refused as not included) over committed preprod
+//! fixtures and prints the structured log lines. Exits nonzero on any unexpected outcome
+//! (fail-closed).
 //!
 //!   cargo run --example verified_read_gate --features mithril
 

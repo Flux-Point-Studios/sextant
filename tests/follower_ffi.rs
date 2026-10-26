@@ -178,11 +178,11 @@ fn c_verdict(f: *mut SextantFollower) -> SextantWatchVerdict {
     out
 }
 
-/// The ABI contract is at version 5 (the Tier-2 certified-state spend-status band).
+/// The ABI contract is at version 6 (the block-bound created-output read).
 #[test]
-fn abi_version_is_five() {
-    assert_eq!(SEXTANT_ABI_VERSION, 5);
-    assert_eq!(sextant_abi_version(), 5);
+fn abi_version_is_six() {
+    assert_eq!(SEXTANT_ABI_VERSION, 6);
+    assert_eq!(sextant_abi_version(), 6);
 }
 
 /// Replaying the whole window through the C follower yields `SPEND_OBSERVED` naming the

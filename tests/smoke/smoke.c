@@ -27,6 +27,16 @@
         }                                                                      \
     } while (0)
 
+/* Whether every one of the `n` bytes at `p` is `value`: a sentinel survives a call. */
+static int all_bytes_are(const uint8_t *p, size_t n, uint8_t value) {
+    for (size_t i = 0; i < n; i++) {
+        if (p[i] != value) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int main(void) {
     /* The header the consumer compiled against must match the linked ABI. */
     CHECK(sextant_abi_version() == SEXTANT_ABI_VERSION);
@@ -59,40 +69,33 @@ int main(void) {
     size_t n = sextant_status_message(rc, (uint8_t *)msg, sizeof msg);
     CHECK(n > 0);
 
-    /* ---- The core UTxO-read consumer: the C analogue of the Rust
-     * examples/verified_read_gate, over the same real preprod order. Compiled
-     * WITHOUT -DSEXTANT_MITHRIL, so it exercises the core export against the default
-     * no-blst static library. The certified root is a committed fixture here; the
-     * mithril compose that DERIVES it from a genesis-anchored verify is proven in
-     * tests/ffi.rs under --all-features (smoke.c can't include the mithril proto). */
+    /* ---- The core UTxO-read export, over the real preprod order the Rust
+     * examples/verified_read_gate reads. Compiled WITHOUT -DSEXTANT_MITHRIL, so it
+     * exercises the core export against the default no-blst static library. The order
+     * is included in the certified set and still refused: an included body establishes
+     * no output (412), so nothing is marshalled - the sentinel bytes in the struct and
+     * both buffers survive, a sizing probe included. */
     SextantVerifiedOutput vout;
     SextantErrorDetail vdetail = {0, 0};
+    uint8_t addr_buf[128];
+    uint8_t datum_buf[256];
+    memset(&vout, 0x5a, sizeof vout);
+    memset(addr_buf, 0xaa, sizeof addr_buf);
+    memset(datum_buf, 0xaa, sizeof datum_buf);
 
-    /* Sizing probe: NULL buffers, caps 0 -> ErrBufferTooSmall with the true lengths
-     * (and nothing copied). */
     int32_t rc_size = sextant_verify_utxo_read(
         UTXO_TX_BODY, sizeof UTXO_TX_BODY, 0, UTXO_PROOF_HEX, sizeof UTXO_PROOF_HEX,
         UTXO_CERTIFIED_ROOT, UTXO_BLOCK_NUMBER, &vout, NULL, 0, NULL, 0, &vdetail);
-    CHECK(rc_size == ErrBufferTooSmall);
-    CHECK(vout.address_len > 0);
-    CHECK(vout.datum_len == sizeof UTXO_EXPECTED_DATUM);
-
-    /* Resize to the reported lengths and retry -> Ok, with the authentic fields. */
-    uint8_t addr_buf[128];
-    uint8_t datum_buf[256];
-    CHECK(vout.address_len <= sizeof addr_buf);
-    CHECK(vout.datum_len <= sizeof datum_buf);
-    int32_t rc_ok = sextant_verify_utxo_read(
+    CHECK(rc_size == UtxoValidityNotEstablished);
+    int32_t rc_read = sextant_verify_utxo_read(
         UTXO_TX_BODY, sizeof UTXO_TX_BODY, 0, UTXO_PROOF_HEX, sizeof UTXO_PROOF_HEX,
         UTXO_CERTIFIED_ROOT, UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
         datum_buf, sizeof datum_buf, &vdetail);
-    CHECK(rc_ok == Ok);
-    CHECK(vout.lovelace >= UTXO_EXPECTED_LOVELACE);
-    CHECK(vout.certified_at == UTXO_BLOCK_NUMBER);
-    CHECK(vout.datum_kind == 2); /* an inline datum */
-    CHECK(vout.datum_len == sizeof UTXO_EXPECTED_DATUM);
-    CHECK(memcmp(datum_buf, UTXO_EXPECTED_DATUM, vout.datum_len) == 0);
-    CHECK(vout.spend_status == SEXTANT_SPEND_NOT_ESTABLISHED);
+    CHECK(rc_read == UtxoValidityNotEstablished);
+    CHECK(vdetail.index == -1 && vdetail.detail == 0);
+    CHECK(all_bytes_are((const uint8_t *)&vout, sizeof vout, 0x5a));
+    CHECK(all_bytes_are(addr_buf, sizeof addr_buf, 0xaa));
+    CHECK(all_bytes_are(datum_buf, sizeof datum_buf, 0xaa));
 
     /* Spoof-refuse: flip output 0's coin byte so the body no longer hashes to the
      * certified leaf -> rejected as not-included (400), never a false accept. */
@@ -110,6 +113,32 @@ int main(void) {
                                    sizeof UTXO_PROOF_HEX, UTXO_CERTIFIED_ROOT,
                                    UTXO_BLOCK_NUMBER, &vout, addr_buf, sizeof addr_buf,
                                    datum_buf, sizeof datum_buf, &vdetail) == ErrNullPointer);
+    CHECK(all_bytes_are((const uint8_t *)&vout, sizeof vout, 0x5a));
+
+    /* ---- The block-bound created-output export: a garbage block refuses in the 420
+     * band, its decode leaf in the detail, with the struct and buffers untouched; null
+     * and empty inputs are caller errors. The authentic reads over a real mainnet block
+     * are proven in tests/created_output.rs's FFI module (the block is too large to
+     * embed here). */
+    SextantCreatedOutput cout;
+    SextantErrorDetail cdetail = {0, 0};
+    uint8_t expected_hash[32];
+    memset(expected_hash, 0, sizeof expected_hash);
+    memset(&cout, 0x5a, sizeof cout);
+    int32_t rc_created =
+        sextant_verify_created_output(b0, sizeof b0, expected_hash, expected_hash, 0, &cout,
+                                      addr_buf, sizeof addr_buf, datum_buf,
+                                      sizeof datum_buf, &cdetail);
+    CHECK(rc_created == CreatedDecode);
+    CHECK(cdetail.index == -1 && cdetail.detail == DecodeUnsupportedEra);
+    CHECK(all_bytes_are((const uint8_t *)&cout, sizeof cout, 0x5a));
+    CHECK(all_bytes_are(addr_buf, sizeof addr_buf, 0xaa));
+    CHECK(sextant_verify_created_output(NULL, sizeof b0, expected_hash, expected_hash, 0,
+                                        &cout, NULL, 0, NULL, 0, &cdetail) == ErrNullPointer);
+    CHECK(sextant_verify_created_output(b0, sizeof b0, expected_hash, expected_hash, 0, NULL,
+                                        NULL, 0, NULL, 0, &cdetail) == ErrNullPointer);
+    CHECK(sextant_verify_created_output(b0, 0, expected_hash, expected_hash, 0, &cout, NULL,
+                                        0, NULL, 0, &cdetail) == ErrEmptyInput);
 
     /* ---- The windowed watch-verdict export: garbage in must yield a STALLED
      * non-answer across the C boundary, NEVER a false no-spend, and the fixed
@@ -182,8 +211,8 @@ int main(void) {
     sextant_follower_destroy(NULL);
 
     printf("smoke: ok (abi=%u verify_segment rc=%d index=%lld header rc=%d msg=\"%s\" "
-           "utxo lovelace=%llu datum_len=%zu spoof_rc=%d watch_kind=%u follow_rc=%d)\n",
-           sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg,
-           (unsigned long long)vout.lovelace, vout.datum_len, rc_spoof, wv.kind, rc_a);
+           "utxo_rc=%d spoof_rc=%d created_rc=%d watch_kind=%u follow_rc=%d)\n",
+           sextant_abi_version(), rc, (long long)detail.index, rc_hdr, msg, rc_read,
+           rc_spoof, rc_created, wv.kind, rc_a);
     return 0;
 }

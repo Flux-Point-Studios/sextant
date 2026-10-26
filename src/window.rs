@@ -39,7 +39,7 @@ use crate::chain::{self, ChainError};
 use crate::hash::blake2b256;
 use crate::header::{BlockBodySpans, DecodeError, HeaderView};
 use crate::inclusion::verify_tx_inclusion;
-use crate::utxo::{CertifiedTransactions, OutPoint, decode_spends, output_exists};
+use crate::utxo::{CertifiedTransactions, OutPoint, created_outputs, decode_spends, seq_has_next};
 
 /// Why a block's transaction bodies did not bind to its header commitment.
 /// Untrusted bytes make every failure an ordinary recoverable outcome.
@@ -97,6 +97,56 @@ pub(crate) fn hash_alonzo_seg_wits(block_bytes: &[u8], spans: &BlockBodySpans) -
     blake2b256(&preimage)
 }
 
+/// `block` with the bytes at `range` replaced by `replacement` and the header's
+/// `block_body_hash` recomputed over the result, so the commitment holds and only those
+/// bytes differ.
+#[cfg(test)]
+pub(crate) fn recommitted(block: &[u8], range: Range<usize>, replacement: &[u8]) -> Vec<u8> {
+    let (view, _) = HeaderView::decode_block(block).expect("decode_block");
+    let mut out = [&block[..range.start], replacement, &block[range.end..]].concat();
+    let (_, spans) = HeaderView::decode_block(&out).expect("decode_block");
+    let hash = hash_alonzo_seg_wits(&out, &spans);
+    let at = out
+        .windows(32)
+        .position(|window| window == view.block_body_hash)
+        .expect("the header's body hash");
+    out[at..at + 32].copy_from_slice(&hash);
+    out
+}
+
+/// The phase-2 outcome of each of a block's `tx_count` transactions, read from its
+/// `invalid_transactions` element (block index 4): `true` where the transaction is
+/// phase-2-valid. The element lists the invalid transactions' indices, as a bare or
+/// tag-258 array in either length form. The ledger aligns that list with the
+/// transactions by position, which reads it as the set it names only while the indices
+/// strictly ascend, so a repeated or descending index, one past the last transaction, or
+/// a non-uint entry is refused.
+pub(crate) fn phase2_valid_flags(region: &[u8], tx_count: usize) -> Result<Vec<bool>, ()> {
+    let mut d = Decoder::new(region);
+    if d.datatype().map_err(|_| ())? == minicbor::data::Type::Tag
+        && d.tag().map_err(|_| ())?.as_u64() != 258
+    {
+        return Err(());
+    }
+    let len = d.array().map_err(|_| ())?;
+    let mut valid = alloc::vec![true; tx_count];
+    let mut lowest = 0;
+    let mut i = 0;
+    while seq_has_next(&mut d, len, i).map_err(|_| ())? {
+        let index = usize::try_from(d.u64().map_err(|_| ())?).map_err(|_| ())?;
+        if index < lowest || index >= tx_count {
+            return Err(());
+        }
+        valid[index] = false;
+        lowest = index + 1;
+        i += 1;
+    }
+    if d.position() != region.len() {
+        return Err(());
+    }
+    Ok(valid)
+}
+
 /// The read-path facts a single block contributes to a windowed spend scan: its
 /// decoded header, whether it created the watched outpoint, and — if it spent it —
 /// the id of the spending transaction.
@@ -108,8 +158,8 @@ pub(crate) fn hash_alonzo_seg_wits(block_bytes: &[u8], spans: &BlockBodySpans) -
 pub(crate) struct BlockFacts {
     /// The block's decoded, body-committed header view.
     pub view: HeaderView,
-    /// Whether the watched outpoint's creating transaction, producing an output at the
-    /// watched index, appears in this block.
+    /// Whether a transaction in this block created the watched outpoint, under the
+    /// phase-2 outcome the block records for it.
     pub created_here: bool,
     /// The spending transaction id, if a transaction in this block consumes the
     /// watched outpoint.
@@ -124,8 +174,9 @@ pub(crate) enum ScanFailure {
     Decode,
     /// The bodies did not hash to the header's `block_body_hash` commitment.
     BodyCommitmentMismatch,
-    /// A body was not a decodable transaction — a producer cannot hide a spend behind
-    /// a malformed body; the scan fails closed.
+    /// A body was not a decodable transaction, or the block's phase-2 record was not a
+    /// strictly ascending list of its transactions' indices — a producer cannot hide a
+    /// spend or a creation behind either; the scan fails closed.
     MalformedBody,
 }
 
@@ -139,13 +190,18 @@ pub(crate) fn scan_block_facts(block: &[u8], watch: &OutPoint) -> Result<BlockFa
     }
     let body_spans =
         tx_body_spans(block, &spans.tx_bodies).map_err(|()| ScanFailure::MalformedBody)?;
+    let valid = phase2_valid_flags(&block[spans.invalid_transactions.clone()], body_spans.len())
+        .map_err(|()| ScanFailure::MalformedBody)?;
     let mut created_here = false;
-    for body in body_spans {
+    for (body, phase2_valid) in body_spans.into_iter().zip(valid) {
         let tx = &block[body];
         let txid = blake2b256(tx);
-        // Creation is observed only when the creating transaction actually produced an
-        // output at the watched index — a phantom index is never read as created.
-        if txid == watch.tx_id && output_exists(tx, watch.index as usize).unwrap_or(false) {
+        if txid == watch.tx_id
+            && created_outputs(tx, phase2_valid)
+                .map_err(|_| ScanFailure::MalformedBody)?
+                .iter()
+                .any(|(index, _)| *index == watch.index)
+        {
             created_here = true;
         }
         let spends = decode_spends(tx).map_err(|_| ScanFailure::MalformedBody)?;
@@ -671,6 +727,66 @@ mod tests {
         // region's last byte, else a body could hide past it.
         let block = vec![0x9f, 0x01, 0xff, 0x02];
         assert!(tx_body_spans(&block, &(0..block.len())).is_err());
+    }
+
+    #[test]
+    fn the_phase_2_record_reads_as_the_ledger_aligns_it() {
+        let flags =
+            |valid: &[usize]| -> Vec<bool> { (0..4).map(|i| !valid.contains(&i)).collect() };
+        // [], [1, 3] bare, tag-258 wrapped, and indefinite: the set they name.
+        assert_eq!(phase2_valid_flags(&[0x80], 4), Ok(vec![true; 4]));
+        for region in [
+            &[0x82, 0x01, 0x03][..],
+            &[0xd9, 0x01, 0x02, 0x82, 0x01, 0x03],
+            &[0x9f, 0x01, 0x03, 0xff],
+        ] {
+            assert_eq!(
+                phase2_valid_flags(region, 4),
+                Ok(flags(&[1, 3])),
+                "{region:02x?}"
+            );
+        }
+        // The ledger aligns the list by position: [3, 1] marks 3 and 4, [1, 1] marks 1 and
+        // 2. Neither reads as a set, so both are refused, as is an index past the last
+        // transaction, a non-uint, another tag, a non-array, and a trailing byte.
+        for region in [
+            &[0x82, 0x03, 0x01][..],
+            &[0x82, 0x01, 0x01],
+            &[0x81, 0x04],
+            &[0x81, 0x20],
+            &[0xd8, 0x18, 0x81, 0x01],
+            &[0xa0],
+            &[0x81, 0x01, 0x00],
+        ] {
+            assert_eq!(phase2_valid_flags(region, 4), Err(()), "{region:02x?}");
+        }
+    }
+
+    /// The scan reads mainnet 13,591,743's phase-2 record, under which transaction 7
+    /// created only its collateral return, and stops on a record the ledger would align
+    /// differently: the block re-committed with `[7, 7]` or `[8, 7]` is a malformed body.
+    #[test]
+    fn a_scan_stops_on_a_phase_2_record_that_reads_as_no_set() {
+        let hex_txt = std::fs::read_to_string("tests/vectors/invalid-mainnet-13591743.block")
+            .expect("the phase-2 fixture");
+        let block = hex::decode(hex_txt.trim()).expect("hex");
+        let (_, spans) = HeaderView::decode_block(&block).expect("decode_block");
+        let tx7 = blake2b256(&block[tx_body_spans(&block, &spans.tx_bodies).unwrap()[7].clone()]);
+        let at = |index| OutPoint { tx_id: tx7, index };
+        let created = |block: &[u8], index| {
+            scan_block_facts(block, &at(index)).map(|facts| facts.created_here)
+        };
+        assert!(matches!(created(&block, 3), Ok(true)));
+        assert!(matches!(created(&block, 0), Ok(false)));
+        for record in [[0x82, 0x07, 0x07], [0x82, 0x08, 0x07]] {
+            let forged = recommitted(&block, spans.invalid_transactions.clone(), &record);
+            for index in [0, 3] {
+                assert!(
+                    matches!(created(&forged, index), Err(ScanFailure::MalformedBody)),
+                    "{record:02x?} {index}"
+                );
+            }
+        }
     }
 
     #[test]

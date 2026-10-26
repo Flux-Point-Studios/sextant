@@ -1,27 +1,33 @@
 //! Windowed spend gate — the downstream consumer of Sextant's windowed watch verdict
-//! (a Masumi-escrow / ADAM-spend-gate stand-in), the honest counterpart to the
-//! single-read `verified_read_gate`.
+//! (a Masumi-escrow / ADAM-spend-gate stand-in): one verified UTxO read before a spend
+//! decision.
 //!
 //! It runs ONE control flow over UNTRUSTED provider bytes: authenticate the Mithril
 //! certificate chain back to the pinned genesis key, take the certified anchor from the
-//! AUTHENTICATED tip (never a provider-supplied height), then scan a header-verified,
-//! body-committed block window for any spend of the watched outpoint and make a single
-//! spend decision over the three-valued verdict.
+//! AUTHENTICATED tip (never a provider-supplied height), scan a header-verified,
+//! body-committed block window for any spend of the watched outpoint, read the watched
+//! output from its creating block in that window, and make a single spend decision over
+//! the verdict and the output's content.
 //!
 //! ## Honest scope (mandatory)
 //! A `PROCEED` means ONLY: no input consuming the watched outpoint appears in any body of
 //! a header-verified, hash-linked, gap-free, body-committed window that observed the
 //! outpoint's creation and reached the caller's `require_through` height — under the
-//! surfaced assumptions, as of the verified tip. It is NOT absolute unspent, NOT eternal,
-//! NOT tip state; the ledger still decides spendability atomically at submission. The gate
-//! prints the basis, anchor, as-of tip, freshness lag, and assumptions on the SAME line as
-//! PROCEED — there is no bare `-> PROCEED` for a windowed verdict. A definite spend
-//! (`SpentObserved`) and every non-answer (`Stalled` — a gap, a truncated or stale window)
-//! are both a fail-closed REFUSE.
+//! surfaced assumptions, as of the verified tip — and the output that window's creating
+//! block holds, under the phase-2 outcome it records, meets the order predicate. The
+//! creating block's hash comes from the verified window's own header view, so the read is
+//! header-vouched under the same assumptions, never canonical on its own. It is NOT
+//! absolute unspent, NOT eternal, NOT tip state; the ledger still decides spendability
+//! atomically at submission. The gate prints the basis, anchor, as-of tip, freshness lag,
+//! assumptions and the created output's provenance on the SAME line as PROCEED — there is
+//! no bare `-> PROCEED` for a windowed verdict. A definite spend (`SpentObserved`), every
+//! non-answer (`Stalled` — a gap, a truncated or stale window), and an output that does
+//! not meet the predicate are all a fail-closed REFUSE.
 
 use std::fs;
 use std::path::PathBuf;
 
+use sextant::effects::{CreatedOutput, CreatedOutputError, verify_created_output};
 use sextant::header::HeaderView;
 use sextant::mithril::{AnchoredError, Certificate, verify_chain_anchored};
 use sextant::utxo::{CertifiedTransactions, OutPoint};
@@ -29,6 +35,10 @@ use sextant::window::{Freshness, WatchBasis, WatchVerdict, verify_watched_window
 
 /// The watched transaction, created in the window's first block (preprod 4921916).
 pub const WATCHED_TX_HEX: &str = "beaa9166c061e56457b5d84de4b3d15c9386b202d2585ff247f47af0dcd32a5e";
+/// The address the watched order output must pay.
+pub const ORDER_ADDRESS_HEX: &str = "00813f0b4a58fe2b7b5a7cc5fdf85df59997ed5a0571464a0f0517e342bca833cb057cfd0336ace4cc64d380a5b9877624aeade868bd1be362";
+/// The minimum lovelace the watched order output must carry.
+pub const MIN_LOVELACE: u64 = 2_000_000;
 /// The transaction that spends `beaa9166…#1` in block[1] (4921917) — the definite-refuse leg.
 pub const SPENDING_TX_HEX: &str =
     "760076f24ea0a151d28a32fb627a17122c92cb7bfb02041995bc98a421687844";
@@ -41,15 +51,17 @@ pub const EPOCH_300_ETA0_HEX: &str =
 pub const REQUIRE_THROUGH: u64 = 4_921_937;
 
 /// The consumer's single decision over a windowed watch verdict. There is no third state:
-/// either no spend was observed across a window that reached the caller's floor, or the
-/// consumer refuses (a definite spend, or any non-answer — fail-closed).
+/// either no spend was observed across a window that reached the caller's floor and the
+/// output it created meets the order predicate, or the consumer refuses (a definite
+/// spend, any non-answer, or an output that does not qualify — fail-closed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     /// No spend of the watched outpoint observed across the verified window under the
-    /// stamped assumptions; the caller's own freshness bound was met.
+    /// stamped assumptions, the caller's own freshness bound was met, and the output read
+    /// from its creating block in that window meets the order predicate.
     Proceed,
-    /// The consumer refuses — a spend was observed, the window could not answer, or the
-    /// chain did not anchor.
+    /// The consumer refuses — a spend was observed, the window could not answer, the
+    /// chain did not anchor, or the created output did not qualify.
     Refuse,
 }
 
@@ -60,6 +72,9 @@ pub struct Outcome {
     pub decision: Decision,
     /// The verified tip height the no-spend evidence holds as of, when a `PROCEED`.
     pub as_of_height: Option<u64>,
+    /// The watched output read from its creating block in the window, once the window
+    /// observed no spend.
+    pub created: Option<CreatedOutput>,
     /// A short machine-readable reason tag when the decision is [`Decision::Refuse`].
     pub refuse_reason: Option<String>,
     /// The structured log lines emitted for this evaluation (the service log).
@@ -86,6 +101,10 @@ pub struct Request<'a> {
     pub require_through: u64,
     /// The caller's recency bound.
     pub freshness: Freshness,
+    /// The address the watched output must pay.
+    pub order_address: &'a [u8],
+    /// The minimum lovelace the watched output must carry.
+    pub min_lovelace: u64,
 }
 
 /// Evaluate one windowed watch and produce the consumer's decision, composing only
@@ -152,7 +171,8 @@ pub fn evaluate(req: &Request) -> Outcome {
         req.freshness,
     );
 
-    // 5. SPEND GATE — the only decision, over the three-valued verdict.
+    // 5. SPEND GATE — the only decision, over the three-valued verdict and, on a no-spend
+    //    verdict, the watched output its creating block in the window holds.
     match verdict {
         WatchVerdict::Unspent { as_of, basis } => {
             let WatchBasis::WatchedWindow(a) = basis else {
@@ -181,13 +201,57 @@ pub fn evaluate(req: &Request) -> Outcome {
                 "INFO watch.scan {reff} basis=WatchedWindow anchor={} as_of={}@slot{} verified=header+body-committed",
                 as_of.anchor_height, as_of.as_of_height, as_of.as_of_slot,
             ));
+            let created = match read_created(req) {
+                Ok(created) => created,
+                Err(reason) => {
+                    log.push(format!(
+                        "WARN watch.read {reff} the window's creating block yielded no output: {reason}"
+                    ));
+                    log.push(format!(
+                        "INFO watch.gate {reff} -> REFUSE (no created output to gate on; spend not submitted)"
+                    ));
+                    return Outcome {
+                        decision: Decision::Refuse,
+                        as_of_height: None,
+                        created: None,
+                        refuse_reason: Some(reason),
+                        log,
+                    };
+                }
+            };
             log.push(format!(
-                "INFO watch.gate {reff} -> PROCEED  basis=WatchedWindow anchor={} as_of={}@slot{} lag={}/{} assumptions={assumptions} note=no-spend-observed through the verified tip (NOT absolute; the ledger decides at submission)",
-                as_of.anchor_height, as_of.as_of_height, as_of.as_of_slot, lag, req.freshness.max_lag,
+                "INFO watch.read {reff} created block={}@{} phase2_valid={} lovelace={} trust=header-vouched",
+                hex::encode(created.block_hash),
+                created.block_number,
+                created.phase2_valid,
+                created.lovelace,
+            ));
+            if created.address != req.order_address || created.lovelace < req.min_lovelace {
+                log.push(format!(
+                    "INFO watch.gate {reff} -> REFUSE (the created output did not meet the order predicate)"
+                ));
+                return Outcome {
+                    decision: Decision::Refuse,
+                    as_of_height: None,
+                    created: Some(created),
+                    refuse_reason: Some("OrderPredicate".to_string()),
+                    log,
+                };
+            }
+            log.push(format!(
+                "INFO watch.gate {reff} -> PROCEED  basis=WatchedWindow anchor={} as_of={}@slot{} lag={}/{} assumptions={assumptions} created=block:{}@{} trust=header-vouched note=no-spend-observed through the verified tip (NOT absolute; the ledger decides at submission)",
+                as_of.anchor_height,
+                as_of.as_of_height,
+                as_of.as_of_slot,
+                lag,
+                req.freshness.max_lag,
+                hex::encode(created.block_hash),
+                created.block_number,
             ));
             Outcome {
                 decision: Decision::Proceed,
                 as_of_height: Some(as_of.as_of_height),
+                created: Some(created),
                 refuse_reason: None,
                 log,
             }
@@ -208,6 +272,7 @@ pub fn evaluate(req: &Request) -> Outcome {
             Outcome {
                 decision: Decision::Refuse,
                 as_of_height: None,
+                created: None,
                 refuse_reason: Some("SpendObserved".to_string()),
                 log,
             }
@@ -226,11 +291,36 @@ pub fn evaluate(req: &Request) -> Outcome {
             Outcome {
                 decision: Decision::Refuse,
                 as_of_height: None,
+                created: None,
                 refuse_reason: Some(tag),
                 log,
             }
         }
     }
+}
+
+/// Read the watched output from its creating block in a window [`verify_watched_window`]
+/// has just verified. Each block's expected hash is the one its verified header view
+/// carries — the hash the window's links bind — never one supplied beside the bytes. A
+/// block without the creating transaction is passed over; any other refusal ends the read.
+fn read_created(req: &Request) -> Result<CreatedOutput, String> {
+    for block in req.window_blocks {
+        let view = HeaderView::from_block_cbor(block).map_err(|e| format!("Decode:{e:?}"))?;
+        match verify_created_output(
+            block,
+            &view.block_hash,
+            &req.watched.tx_id,
+            req.watched.index,
+        ) {
+            Ok(created) => return Ok(created),
+            Err(CreatedOutputError::TransactionAbsent) => continue,
+            Err(e) => return Err(format!("Created:{e:?}")),
+        }
+    }
+    Err(format!(
+        "Created:{:?}",
+        CreatedOutputError::TransactionAbsent
+    ))
 }
 
 /// Build a fail-closed refusal at the pre-scan stage (chain did not anchor).
@@ -244,21 +334,23 @@ fn refuse(mut log: Vec<String>, reff: &str, reason: &str, detail: &str) -> Outco
     Outcome {
         decision: Decision::Refuse,
         as_of_height: None,
+        created: None,
         refuse_reason: Some(reason.to_string()),
         log,
     }
 }
 
-/// Run the four legs over the committed fixtures — the honest PROCEED, then the three
-/// refuse evasions — print the structured log lines, and return a process exit code
-/// (0 only if the never-spent outpoint proceeds AND every evasion is refused fail-closed).
+/// Run the five legs over the committed fixtures — the honest PROCEED, then the four
+/// refusals — print the structured log lines, and return a process exit code (0 only if
+/// the never-spent order output proceeds AND every other leg is refused fail-closed).
 pub fn run_demo() -> i32 {
     let chain = anchor_chain_json();
     let vkey = genesis_vkey();
     let eta0 = eta0();
     let window = preprod_window();
+    let address = order_address();
 
-    let build = |watched: OutPoint, blocks: &[Vec<u8>]| -> Outcome {
+    let build = |watched: OutPoint, blocks: &[Vec<u8>], min_lovelace: u64| -> Outcome {
         evaluate(&Request {
             anchor_chain_json: &chain,
             genesis_vkey: &vkey,
@@ -267,30 +359,41 @@ pub fn run_demo() -> i32 {
             watched,
             require_through: REQUIRE_THROUGH,
             freshness: fresh(),
+            order_address: &address,
+            min_lovelace,
         })
     };
 
-    // Leg 1 — the never-spent outpoint over the full window: PROCEED.
-    let proceed = build(watched(0), &window);
-    // Leg 2 — the spent outpoint over the full window: REFUSE (definite spend).
-    let spent = build(watched(1), &window);
-    // Leg 3 — the spent outpoint with a mid-window block withheld: REFUSE (broken segment).
+    // Leg 1 — the never-spent order output over the full window: PROCEED.
+    let proceed = build(watched(0), &window, MIN_LOVELACE);
+    // Leg 2 — the same output against a floor it does not meet: REFUSE (predicate).
+    let short_paid = build(watched(0), &window, MIN_LOVELACE + 1);
+    // Leg 3 — the spent outpoint over the full window: REFUSE (definite spend).
+    let spent = build(watched(1), &window, MIN_LOVELACE);
+    // Leg 4 — the spent outpoint with a mid-window block withheld: REFUSE (broken segment).
     let mut dropped = window.clone();
     dropped.remove(dropped.len() / 2);
-    let gap = build(watched(1), &dropped);
-    // Leg 4 — the spent outpoint over a window truncated before the spend: REFUSE
+    let gap = build(watched(1), &dropped, MIN_LOVELACE);
+    // Leg 5 — the spent outpoint over a window truncated before the spend: REFUSE
     //         (the caller's require_through floor caught the truncation evasion).
     let truncated = vec![window[0].clone()];
-    let short = build(watched(1), &truncated);
+    let short = build(watched(1), &truncated, MIN_LOVELACE);
 
-    for out in [&proceed, &spent, &gap, &short] {
+    for out in [&proceed, &short_paid, &spent, &gap, &short] {
         for line in &out.log {
             println!("{line}");
         }
     }
 
+    let created_order = proceed
+        .created
+        .as_ref()
+        .is_some_and(|c| c.address == address && c.lovelace == MIN_LOVELACE && c.phase2_valid);
     let ok = proceed.decision == Decision::Proceed
         && proceed.as_of_height == Some(REQUIRE_THROUGH)
+        && created_order
+        && short_paid.decision == Decision::Refuse
+        && short_paid.refuse_reason.as_deref() == Some("OrderPredicate")
         && spent.decision == Decision::Refuse
         && spent.refuse_reason.as_deref() == Some("SpendObserved")
         && spent.log.iter().any(|l| l.contains(SPENDING_TX_HEX))
@@ -302,10 +405,15 @@ pub fn run_demo() -> i32 {
         0
     } else {
         eprintln!(
-            "unexpected outcome: proceed={proceed:?} spent={spent:?} gap={gap:?} short={short:?}"
+            "unexpected outcome: proceed={proceed:?} short_paid={short_paid:?} spent={spent:?} gap={gap:?} short={short:?}"
         );
         1
     }
+}
+
+/// The address the watched order output must pay, as raw bytes.
+pub fn order_address() -> Vec<u8> {
+    unhex(ORDER_ADDRESS_HEX)
 }
 
 /// The vectors directory, resolved from the crate manifest.

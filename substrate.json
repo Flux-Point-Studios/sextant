@@ -22,7 +22,7 @@
     {
       "id": "certified-utxo-read",
       "name": "Certified transaction inclusion and UTxO read",
-      "desc": "Proves a transaction's inclusion in the Mithril CardanoTransactions set by recomputing the MMR and map proofs, then decodes the output it names (address, lovelace, datum). Inclusion proves an output was created as of a certified height; it never claims the output is still unspent.",
+      "desc": "Proves a transaction's inclusion in the Mithril CardanoTransactions set by recomputing the MMR and map proofs. Inclusion is provenance only: a transaction body does not carry its phase-2 outcome, so the read establishes no output from it, and a created output is read from its creating block instead. It never claims an output is unspent.",
       "kind": "engine",
       "paths": ["src/inclusion.rs", "src/utxo.rs"],
       "consumes": ["mithril-certificate-verifier"],
@@ -31,7 +31,7 @@
     {
       "id": "windowed-unspent",
       "name": "Windowed-unspent follower",
-      "desc": "Tier 1 of the trust ladder: from a certified anchor to a verified tip, re-verifies every block header and binds every block body, and reports whether any input spent a watched outpoint inside that gap-free window. An unverifiable stretch is reported as stalled, never as unspent. Also carries the self-verified UTxO-set engine and its per-block effects for the reserved Tier 2.",
+      "desc": "Tier 1 of the trust ladder: from a certified anchor to a verified tip, re-verifies every block header and binds every block body, and reports whether any input spent a watched outpoint inside that gap-free window. Creation is read under each block's phase-2 record, which also backs a read of one created output from block bytes bound to an expected block hash. An unverifiable stretch is reported as stalled, never as unspent. Also carries the self-verified UTxO-set engine and its per-block effects for the reserved Tier 2.",
       "kind": "engine",
       "paths": ["src/follow.rs", "src/window.rs", "src/setfollow.rs", "src/utxoset.rs", "src/effects.rs"],
       "consumes": ["praos-header-verifier", "certified-utxo-read", "mithril-certificate-verifier"],
