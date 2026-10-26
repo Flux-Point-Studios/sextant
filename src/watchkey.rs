@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use minicbor::Decoder;
 use minicbor::data::Type;
 
-use crate::hash::blake2b224;
+use crate::hash::{blake2b224, blake2b256};
 use crate::utxo::{
     OutPoint, decode_outpoint, decode_single_output, input_set_len, read_bytes, seq_has_next,
 };
@@ -137,6 +137,86 @@ pub fn input_use<'a>(
         }
         Ok(())
     })
+}
+
+/// The address of the output `outpoint` names in `creating_body`, the body of the
+/// transaction that created it, or `None` when that body binds no single address. The
+/// body must hash (BLAKE2b-256) to the outpoint's tx_id and decode in full. With n
+/// outputs (key 1), an index below n names that output, index n names the collateral
+/// return (key 16), and any other index names none. A body that repeats either key, a
+/// named output that repeats any key, and an address that is neither a Shelley payment
+/// address nor a well-formed Byron address bind none.
+///
+/// This names a candidate from content alone. Whether the output existed is decided by
+/// the creating transaction's phase-2 outcome and the canonical UTxO membership, which
+/// the caller establishes.
+pub fn bound_output_address(outpoint: &OutPoint, creating_body: &[u8]) -> Option<Vec<u8>> {
+    if blake2b256(creating_body) != outpoint.tx_id {
+        return None;
+    }
+    let index = u64::from(outpoint.index);
+    let mut outputs = None;
+    let mut named = None;
+    let mut collateral_return = None;
+    let mut repeated = false;
+    let body = scan_map(creating_body, |key, d, _| {
+        let start = d.position();
+        match key {
+            1 => {
+                let len = d.array().map_err(|_| ())?;
+                let mut i = 0u64;
+                while seq_has_next(d, len, i).map_err(|_| ())? {
+                    let at = d.position();
+                    d.skip().map_err(|_| ())?;
+                    if i == index {
+                        named = Some(&creating_body[at..d.position()]);
+                    }
+                    i += 1;
+                }
+                repeated |= outputs.replace(i).is_some();
+            }
+            16 => {
+                d.skip().map_err(|_| ())?;
+                repeated |= collateral_return
+                    .replace(&creating_body[start..d.position()])
+                    .is_some();
+            }
+            _ => d.skip().map_err(|_| ())?,
+        }
+        Ok(())
+    });
+    if !body.complete || repeated {
+        return None;
+    }
+    let count = outputs?;
+    let output = if index < count {
+        named?
+    } else if index == count {
+        collateral_return?
+    } else {
+        return None;
+    };
+    let address = output_address(output)?;
+    (payment_credential(&address).is_some() || byron_address(&address)).then_some(address)
+}
+
+/// The address of one output, or `None` when the output does not decode or, as a map,
+/// repeats a key.
+fn output_address(output: &[u8]) -> Option<Vec<u8>> {
+    let (address, _, _) = decode_single_output(&mut Decoder::new(output)).ok()?;
+    let mut map = Decoder::new(output);
+    if let Ok(len) = map.map() {
+        let mut keys = BTreeSet::new();
+        let mut i = 0u64;
+        while seq_has_next(&mut map, len, i).ok()? {
+            if !keys.insert(map.u64().ok()?) {
+                return None;
+            }
+            map.skip().ok()?;
+            i += 1;
+        }
+    }
+    Some(address)
 }
 
 /// Hands each key of the CBOR map `data` to `field`. A malformed entry, or bytes

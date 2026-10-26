@@ -10,9 +10,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use pallas_traverse::MultiEraBlock;
+use pallas_traverse::{MultiEraBlock, MultiEraTx};
 use sextant::effects::extract_block_effects;
 use sextant::utxo::OutPoint;
+use sextant::watchkey::bound_output_address;
 
 fn vectors_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -136,4 +137,51 @@ fn block_coordinates_match_pallas() {
             .unwrap_or([0u8; 32]);
         assert_eq!(ours.prev_hash, expected_prev, "{name}: prev_hash");
     }
+}
+
+/// The body bytes pallas kept as they were on the wire.
+fn raw_body<'a>(tx: &'a MultiEraTx<'_>) -> &'a [u8] {
+    match tx {
+        MultiEraTx::AlonzoCompatible(tx, _) => tx.transaction_body.raw_cbor(),
+        MultiEraTx::Babbage(tx) => tx.transaction_body.raw_cbor(),
+        MultiEraTx::Conway(tx) => tx.transaction_body.raw_cbor(),
+        _ => panic!("the committed vectors hold Alonzo-onward blocks only"),
+    }
+}
+
+/// The content-bound selector against pallas over every transaction of every committed
+/// block: index i below the output count names output i, the index after them names the
+/// collateral return, and each binds the address pallas reads there. The selector names
+/// candidates only, so a phase-2-invalid transaction's outputs bind too.
+#[test]
+fn creating_bodies_bind_the_addresses_pallas_reads() {
+    let mut bound = 0;
+    for (name, block) in block_vectors() {
+        let b = MultiEraBlock::decode(&block).expect("pallas decode");
+        for (i, tx) in b.txs().iter().enumerate() {
+            let body = raw_body(tx);
+            let tx_id = h32(&tx.hash());
+            let outputs = tx.outputs();
+            for index in 0..=outputs.len() + 1 {
+                let output = match outputs.get(index) {
+                    Some(output) => Some(output.clone()),
+                    None if index == outputs.len() => tx.collateral_return(),
+                    None => None,
+                };
+                let expected =
+                    output.map(|output| output.address().expect("pallas reads it").to_vec());
+                let spent = OutPoint {
+                    tx_id,
+                    index: u16::try_from(index).expect("u16 index"),
+                };
+                assert_eq!(
+                    bound_output_address(&spent, body),
+                    expected,
+                    "{name} tx {i} index {index}"
+                );
+                bound += usize::from(expected.is_some());
+            }
+        }
+    }
+    assert!(bound > 0, "the vectors bind at least one output");
 }
