@@ -1,26 +1,18 @@
-//! The 21 hand-labelled U1 watched-key vectors replayed through the nine surface
-//! scans and the consumed-input scan. The oracle is r57-live's
-//! `scripts/u1_watched_key_vectors.json`, git blob a32cf41a; its CRLF Windows
-//! working copy hashes to d0c1ea33. Only `target_found`, `complete` and `verdict`
-//! are contract. No production aggregate exists yet, so the envelope split, the
-//! surface union and the verdict rule below stand in for it.
+//! The 21 hand-labelled U1 watched-key vectors replayed through `transaction_use`.
+//! The oracle is r57-live's `scripts/u1_watched_key_vectors.json`, git blob
+//! a32cf41a; its CRLF Windows working copy hashes to d0c1ea33. Only
+//! `target_found`, `complete` and `verdict` are contract. The oracle stores
+//! standalone `[body, witness_set, is_valid, auxiliary_data]` transactions, so
+//! each is split into the spans a block carries.
 
 use minicbor::Decoder;
 use serde_json::Value;
 use sextant::utxo::OutPoint;
-use sextant::watchkey::{
-    Scan, certificate_use, input_use, native_script_use, output_use, proposal_use,
-    required_signer_use, update_use, voting_use, withdrawal_use, witness_use,
-};
+use sextant::watchkey::{Scan, Verdict, transaction_use};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const ORACLE: &str = include_str!("vectors/u1_watched_key_vectors.json");
-
-const GAP: Scan = Scan {
-    found: false,
-    complete: false,
-};
 
 fn vectors() -> Vec<Value> {
     let oracle: Value = serde_json::from_str(ORACLE).expect("oracle is JSON");
@@ -84,24 +76,6 @@ fn expected(vector: &Value, side: &str) -> Scan {
     }
 }
 
-fn union(scans: &[Scan]) -> Scan {
-    Scan {
-        found: scans.iter().any(|scan| scan.found),
-        complete: scans.iter().all(|scan| scan.complete),
-    }
-}
-
-/// A proven use outranks any gap; with no use, any gap refuses a clean NO_USE.
-fn verdict(surfaces: Scan, inputs: Scan) -> &'static str {
-    if surfaces.found || inputs.found {
-        "USE_FOUND"
-    } else if surfaces.complete && inputs.complete {
-        "NO_USE"
-    } else {
-        "INCOMPLETE"
-    }
-}
-
 fn check(name: &str) {
     let vector = vectors()
         .into_iter()
@@ -113,38 +87,28 @@ fn check(name: &str) {
         .expect("28-byte target");
     let watched = BTreeSet::from([target]);
     let resolved = resolutions(&vector);
-    let (surfaces, inputs) = match envelope(&tx) {
-        Some((body, witnesses, is_valid)) => (
-            union(&[
-                required_signer_use(body, &watched),
-                output_use(body, &watched),
-                withdrawal_use(body, &watched),
-                voting_use(body, &watched),
-                proposal_use(body, &watched),
-                certificate_use(body, &watched),
-                update_use(body, &watched),
-                witness_use(witnesses, &watched),
-                native_script_use(witnesses, &watched),
-            ]),
-            input_use(body, is_valid, &watched, |input| {
-                Ok(resolved.get(input).map(Vec::as_slice))
-            }),
-        ),
-        // An envelope that does not decode proves nothing on either side.
-        None => (GAP, GAP),
-    };
+    // A transaction that does not split reaches the scan whole, which must refuse it.
+    let (body, witnesses, is_valid) = envelope(&tx).unwrap_or((tx.as_slice(), tx.as_slice(), true));
+    let scan = transaction_use(body, witnesses, is_valid, &watched, |input| {
+        Ok(resolved.get(input).map(Vec::as_slice))
+    });
     assert_eq!(
-        surfaces,
+        scan.surfaces,
         expected(&vector, "use_surfaces"),
         "{name}: use_surfaces"
     );
     assert_eq!(
-        inputs,
+        scan.inputs,
         expected(&vector, "resolved_input"),
         "{name}: resolved_input"
     );
+    let verdict = match scan.verdict() {
+        Verdict::NoUse => "NO_USE",
+        Verdict::UseFound => "USE_FOUND",
+        Verdict::Incomplete => "INCOMPLETE",
+    };
     assert_eq!(
-        Some(verdict(surfaces, inputs)),
+        Some(verdict),
         vector["expected"]["verdict"].as_str(),
         "{name}: verdict"
     );

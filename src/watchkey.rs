@@ -1,6 +1,7 @@
 //! Watched transaction credentials and fail-closed scan coverage.
 
 use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
 use minicbor::Decoder;
 use minicbor::data::Type;
 
@@ -192,47 +193,93 @@ fn reward_account_watched(d: &mut Decoder<'_>, watched: &BTreeSet<[u8; 28]>) -> 
 }
 
 /// Does a watched key appear in a transaction output -- a body-1 output or the
-/// body-16 collateral return, both decoded by the crate's own decode_single_output
-/// for the output's payment or stake credential. Body-1 is a list of
-/// transaction_outputs; the body-16 collateral return is a single one.
+/// body-16 collateral return -- as the output's payment or stake credential or in
+/// a native reference script it carries. Body-1 is a list of transaction_outputs;
+/// the body-16 collateral return is a single one. Every output's reference script
+/// draws on one walk budget.
 pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
-    scan_map(body, |key, d, scan| {
-        if key == 1 {
-            let out_len = match d.array() {
-                Ok(out_len) => out_len,
-                Err(_) => return Err(()),
-            };
-            let mut j = 0u64;
-            loop {
-                match seq_has_next(d, out_len, j) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
-                }
-                match decode_single_output(d) {
-                    Ok((address, _, _)) => {
-                        if address_watched(&address, watched) {
-                            scan.found = true;
-                        }
-                    }
-                    Err(_) => return Err(()),
-                }
-                j += 1;
+    let mut budget = WALK_BUDGET;
+    scan_map(body, |key, d, scan| match key {
+        1 => {
+            let len = d.array().map_err(|_| ())?;
+            let mut i = 0u64;
+            while seq_has_next(d, len, i).map_err(|_| ())? {
+                output_watched(d, watched, &mut budget, scan)?;
+                i += 1;
             }
-        } else if key == 16 {
-            match decode_single_output(d) {
-                Ok((address, _, _)) => {
-                    if address_watched(&address, watched) {
-                        scan.found = true;
-                    }
-                }
-                Err(_) => return Err(()),
-            }
-        } else if d.skip().is_err() {
-            return Err(());
+            Ok(())
         }
-        Ok(())
+        16 => output_watched(d, watched, &mut budget, scan),
+        _ => d.skip().map_err(|_| ()),
     })
+}
+
+/// One output: its address credentials through the crate's own decode_single_output,
+/// then the reference script at map key 3, which that read-path decoder skips.
+fn output_watched(
+    d: &mut Decoder<'_>,
+    watched: &BTreeSet<[u8; 28]>,
+    budget: &mut u32,
+    scan: &mut Scan,
+) -> Result<(), ()> {
+    let start = d.position();
+    let (address, _, _) = decode_single_output(d).map_err(|_| ())?;
+    scan.found |= address_watched(&address, watched);
+    let mut output = Decoder::new(&d.input()[start..d.position()]);
+    if output.datatype().map_err(|_| ())? != Type::Map {
+        return Ok(());
+    }
+    let len = output.map().map_err(|_| ())?;
+    let mut i = 0u64;
+    while seq_has_next(&mut output, len, i).map_err(|_| ())? {
+        let key = output.u64().map_err(|_| ())?;
+        let value = output.position();
+        output.skip().map_err(|_| ())?;
+        if key == 3
+            && reference_script_watched(
+                &output.input()[value..output.position()],
+                watched,
+                budget,
+                scan,
+            )
+            .is_err()
+        {
+            scan.complete = false;
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+/// A reference script: a tag-24 wrapper over CBOR `[script_type, script]`. A
+/// native script (type 0) carries its sig clauses in clear and is deep-walked on
+/// the caller's budget; Plutus scripts (types 1-3) are bytecode with no credential
+/// in clear. A wrapper that does not unwrap, an unknown type or trailing bytes
+/// return `Err`, which leaves coverage incomplete.
+fn reference_script_watched(
+    wrapped: &[u8],
+    watched: &BTreeSet<[u8; 28]>,
+    budget: &mut u32,
+    scan: &mut Scan,
+) -> Result<(), ()> {
+    let mut d = Decoder::new(wrapped);
+    if d.tag().map_err(|_| ())?.as_u64() != 24 {
+        return Err(());
+    }
+    let mut script = Decoder::new(d.bytes().map_err(|_| ())?);
+    if script.array().map_err(|_| ())? != Some(2) {
+        return Err(());
+    }
+    match script.u64().map_err(|_| ())? {
+        0 => collect_watched(&mut script, watched, budget, scan)?,
+        1..=3 => return Ok(()),
+        _ => return Err(()),
+    }
+    if script.position() == script.input().len() {
+        Ok(())
+    } else {
+        Err(())
+    }
 }
 
 /// Does a watched key appear as a withdrawal reward account -- body key 5, a map
@@ -435,11 +482,11 @@ pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     })
 }
 
-/// Node budget and recursion depth for the deep walk. Real certificates, native
-/// scripts and parameter updates are far smaller; exceeding either leaves coverage
-/// unprovable, so the scan reports incomplete rather than reading absence.
+/// Node budget for the deep walk. Real certificates, native scripts and parameter
+/// updates are far smaller; exhausting it leaves coverage unprovable, so the scan
+/// reports incomplete rather than reading absence. The walk is iterative, so depth
+/// costs only budget.
 const WALK_BUDGET: u32 = 100_000;
-const WALK_DEPTH: u32 = 64;
 
 /// Element count the Conway CDDL fixes for each modelled certificate kind. An
 /// unknown kind, or a known kind of a different arity, marks the scan incomplete;
@@ -455,69 +502,93 @@ fn certificate_arity(kind: u64) -> Option<u64> {
     }
 }
 
-/// Records matches as leaves decode so a later malformed child cannot erase them.
+/// An open container in the deep walk: the items still due in a definite one, or
+/// `None` for an indefinite one, which ends at a break (a map's only between pairs).
+struct Open {
+    left: Option<u64>,
+    map: bool,
+    owes_value: bool,
+}
+
+/// Walks one CBOR item without recursion and records matches as leaves decode, so
+/// a later malformed child cannot erase them. An indefinite byte string counts as
+/// its joined chunks.
 fn collect_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
     budget: &mut u32,
-    depth: u32,
     scan: &mut Scan,
 ) -> Result<(), ()> {
-    if depth == 0 || *budget == 0 {
-        scan.complete = false;
-        d.skip().map_err(|_| ())?;
-        return Ok(());
-    }
-    *budget -= 1;
-    match d.datatype().map_err(|_| ())? {
-        Type::Bytes => {
-            let bytes = read_bytes(d).map_err(|_| ())?;
-            let hit = match bytes.len() {
-                28 => <[u8; 28]>::try_from(bytes.as_slice())
-                    .map(|h| watched.contains(&h))
-                    .unwrap_or(false),
-                29 => reward_credential(&bytes).is_some_and(|c| watched.contains(&c)),
-                _ => false,
-            };
-            scan.found |= hit;
-            Ok(())
-        }
-        Type::Array | Type::ArrayIndef => {
-            let len = d.array().map_err(|_| ())?;
-            let mut i = 0u64;
-            loop {
-                match seq_has_next(d, len, i) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
+    let mut open: Vec<Open> = Vec::new();
+    let mut started = false;
+    loop {
+        match open.last_mut() {
+            None if started => return Ok(()),
+            None => started = true,
+            Some(top) => match top.left.as_mut() {
+                Some(0) => {
+                    open.pop();
+                    continue;
                 }
-                collect_watched(d, watched, budget, depth - 1, scan)?;
-                i += 1;
-            }
-            Ok(())
-        }
-        Type::Map | Type::MapIndef => {
-            let len = d.map().map_err(|_| ())?;
-            let mut i = 0u64;
-            loop {
-                match seq_has_next(d, len, i) {
-                    Ok(true) => {}
-                    Ok(false) => break,
-                    Err(_) => return Err(()),
+                Some(left) => *left -= 1,
+                None => {
+                    if !top.owes_value && d.datatype().map_err(|_| ())? == Type::Break {
+                        d.skip().map_err(|_| ())?;
+                        open.pop();
+                        continue;
+                    }
+                    top.owes_value = top.map && !top.owes_value;
                 }
-                collect_watched(d, watched, budget, depth - 1, scan)?;
-                collect_watched(d, watched, budget, depth - 1, scan)?;
-                i += 1;
-            }
-            Ok(())
+            },
         }
-        Type::Tag => {
-            d.tag().map_err(|_| ())?;
-            collect_watched(d, watched, budget, depth - 1, scan)
-        }
-        _ => {
+        if *budget == 0 {
+            scan.complete = false;
             d.skip().map_err(|_| ())?;
-            Ok(())
+            continue;
+        }
+        *budget -= 1;
+        match d.datatype().map_err(|_| ())? {
+            Type::Bytes | Type::BytesIndef => {
+                let mut leaf = Vec::new();
+                for chunk in d.bytes_iter().map_err(|_| ())? {
+                    leaf.extend_from_slice(chunk.map_err(|_| ())?);
+                }
+                scan.found |= match leaf.len() {
+                    28 => <[u8; 28]>::try_from(leaf.as_slice())
+                        .is_ok_and(|hash| watched.contains(&hash)),
+                    29 => reward_credential(&leaf).is_some_and(|c| watched.contains(&c)),
+                    _ => false,
+                };
+            }
+            Type::Array | Type::ArrayIndef => {
+                let left = d.array().map_err(|_| ())?;
+                open.push(Open {
+                    left,
+                    map: false,
+                    owes_value: false,
+                });
+            }
+            Type::Map | Type::MapIndef => {
+                let left = match d.map().map_err(|_| ())? {
+                    Some(pairs) => Some(pairs.checked_mul(2).ok_or(())?),
+                    None => None,
+                };
+                open.push(Open {
+                    left,
+                    map: true,
+                    owes_value: false,
+                });
+            }
+            Type::Tag => {
+                d.tag().map_err(|_| ())?;
+                open.push(Open {
+                    left: Some(1),
+                    map: false,
+                    owes_value: false,
+                });
+            }
+            Type::Break => return Err(()),
+            _ => d.skip().map_err(|_| ())?,
         }
     }
 }
@@ -565,7 +636,7 @@ pub fn certificate_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
                             Err(_) => return Err(()),
                         };
                     } else {
-                        collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
+                        collect_watched(d, watched, &mut budget, scan)?;
                     }
                     k += 1;
                 }
@@ -604,7 +675,7 @@ pub fn native_script_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan
                     Ok(false) => break,
                     Err(_) => return Err(()),
                 }
-                collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
+                collect_watched(d, watched, &mut budget, scan)?;
                 j += 1;
             }
         } else if d.skip().is_err() {
@@ -621,12 +692,88 @@ pub fn update_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(body, |key, d, scan| {
         if key == 6 {
             let mut budget = WALK_BUDGET;
-            collect_watched(d, watched, &mut budget, WALK_DEPTH, scan)?;
+            collect_watched(d, watched, &mut budget, scan)?;
         } else if d.skip().is_err() {
             return Err(());
         }
         Ok(())
     })
+}
+
+/// Body keys the ledger defines (key 6 is the pre-Conway update). A key outside
+/// this set is a field no surface reads, so coverage cannot be proven.
+const KNOWN_BODY_KEYS: [u64; 21] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+];
+
+/// The watched-key scan of one transaction: its body and witness surfaces folded
+/// into one scan, beside the inputs it consumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionScan {
+    /// Every body and witness surface, plus the check that the body holds no key
+    /// outside the ledger's.
+    pub surfaces: Scan,
+    /// The creating outputs of the inputs the transaction consumes.
+    pub inputs: Scan,
+}
+
+/// What a transaction scan settles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// No watched key appears and every surface was fully read.
+    NoUse,
+    /// A watched key appears.
+    UseFound,
+    /// Nothing was found, but some surface could not be fully read.
+    Incomplete,
+}
+
+impl TransactionScan {
+    /// A proven use outranks any gap; with no use, any gap refuses a clean
+    /// `NoUse`.
+    pub fn verdict(&self) -> Verdict {
+        if self.surfaces.found || self.inputs.found {
+            Verdict::UseFound
+        } else if self.surfaces.complete && self.inputs.complete {
+            Verdict::NoUse
+        } else {
+            Verdict::Incomplete
+        }
+    }
+}
+
+/// Scans one transaction from the spans a block lays out -- its body, its witness
+/// set and its phase-2 validity -- resolving each consumed input's creating output
+/// through `resolve`.
+pub fn transaction_use<'a>(
+    body: &[u8],
+    witnesses: &[u8],
+    is_valid: bool,
+    watched: &BTreeSet<[u8; 28]>,
+    resolve: impl FnMut(&OutPoint) -> Result<Option<&'a [u8]>, ()>,
+) -> TransactionScan {
+    let scans = [
+        scan_map(body, |key, d, scan| {
+            scan.complete &= KNOWN_BODY_KEYS.contains(&key);
+            d.skip().map_err(|_| ())
+        }),
+        required_signer_use(body, watched),
+        output_use(body, watched),
+        withdrawal_use(body, watched),
+        voting_use(body, watched),
+        proposal_use(body, watched),
+        certificate_use(body, watched),
+        update_use(body, watched),
+        witness_use(witnesses, watched),
+        native_script_use(witnesses, watched),
+    ];
+    TransactionScan {
+        surfaces: Scan {
+            found: scans.iter().any(|scan| scan.found),
+            complete: scans.iter().all(|scan| scan.complete),
+        },
+        inputs: input_use(body, is_valid, watched, resolve),
+    }
 }
 
 #[cfg(test)]
