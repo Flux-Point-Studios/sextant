@@ -11,7 +11,7 @@ const ORACLE: &str = include_str!("vectors/u1_closure_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "0b7e8588ffd9618af4f28a3c0c9776bd668422e7c0b83629ea01de986e355ba5";
+    "57d4a1199282097acc9bf35f3516335c9859e1ba6dd895bc31c3b23fa6db1298";
     witness_unknown_key,
     witness_known_keys,
     output_unknown_key,
@@ -23,8 +23,13 @@ oracle_tests!(
     plutus_refscript_valid,
     refscript_without_tag24,
     refscript_foreign_tag,
+    refscript_arity_three,
     proposal_two_elements,
     proposal_three_elements,
     proposal_five_elements,
     proposal_four_elements,
+    body_key_10,
+    body_key_12,
+    certificate_wrong_arity,
+    blob_after_empty_map,
 );

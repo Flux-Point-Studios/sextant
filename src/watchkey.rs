@@ -95,6 +95,8 @@ pub fn input_use<'a>(
     })
 }
 
+/// Hands each key of the CBOR map `data` to `field`. A malformed entry, or bytes
+/// left after the map, leaves coverage incomplete.
 fn scan_map(
     data: &[u8],
     mut field: impl FnMut(u64, &mut Decoder<'_>, &mut Scan) -> Result<(), ()>,
@@ -114,7 +116,7 @@ fn scan_map(
         }
         Ok::<(), ()>(())
     })();
-    if result.is_err() {
+    if result.is_err() || d.position() != data.len() {
         scan.complete = false;
     }
     scan
@@ -216,8 +218,9 @@ pub fn output_use(body: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
 
 /// One output: its address credentials through the crate's own decode_single_output,
 /// then the reference script at map key 3, which that read-path decoder skips. A
-/// map key outside 0-3 (address, value, datum_option, script_ref) is an unmodelled
-/// field and leaves coverage incomplete.
+/// map key outside 0-3 (address, value, datum_option, script_ref), or a repeated
+/// key, leaves coverage incomplete. decode_single_output keeps only the last
+/// address, so every address a repeated key 0 carries is read here too.
 fn output_watched(
     d: &mut Decoder<'_>,
     watched: &BTreeSet<[u8; 28]>,
@@ -232,23 +235,27 @@ fn output_watched(
         return Ok(());
     }
     let len = output.map().map_err(|_| ())?;
+    let mut seen = [false; 4];
     let mut i = 0u64;
     while seq_has_next(&mut output, len, i).map_err(|_| ())? {
         let key = output.u64().map_err(|_| ())?;
         let value = output.position();
         output.skip().map_err(|_| ())?;
-        let closed = match key {
-            0..=2 => true,
-            3 => reference_script_watched(
-                &output.input()[value..output.position()],
-                watched,
-                budget,
-                scan,
-            )
-            .is_ok(),
+        let item = &output.input()[value..output.position()];
+        let repeated = key <= 3 && core::mem::replace(&mut seen[key as usize], true);
+        let read = match key {
+            0 => match Decoder::new(item).bytes() {
+                Ok(address) => {
+                    scan.found |= address_watched(address, watched);
+                    true
+                }
+                Err(_) => false,
+            },
+            1 | 2 => true,
+            3 => reference_script_watched(item, watched, budget, scan).is_ok(),
             _ => false,
         };
-        scan.complete &= closed;
+        scan.complete &= read && !repeated;
         i += 1;
     }
     Ok(())
@@ -860,7 +867,9 @@ impl TransactionScan {
 
 /// Scans one transaction from the spans a block lays out -- its body, its witness
 /// set and its phase-2 validity -- resolving each consumed input's creating output
-/// through `resolve`.
+/// through `resolve`. The spans must come from a hash-verified block: some CBOR no
+/// ledger accepts (a stray break, a mistyped known field, an odd-length credential)
+/// can still read complete.
 pub fn transaction_use<'a>(
     body: &[u8],
     witnesses: &[u8],
