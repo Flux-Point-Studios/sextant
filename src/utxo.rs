@@ -293,7 +293,7 @@ pub fn decode_spends(tx_bytes: &[u8]) -> Result<SpendSet, UtxoError> {
             0 | 13 => decode_input_set(&mut d, &mut spends)?,
             // key 18 = reference inputs (read, not consumed) and every other
             // field are skipped.
-            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
+            _ => skip_item(&mut d)?,
         }
         i += 1;
     }
@@ -337,7 +337,7 @@ pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> 
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return decode_input_vec(&mut d);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Ok(Vec::new())
@@ -382,7 +382,7 @@ pub fn has_body_key(tx_bytes: &[u8], key: u64) -> Result<bool, UtxoError> {
         if d.u64().map_err(|_| UtxoError::MalformedTx)? == key {
             return Ok(true);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Ok(false)
@@ -412,7 +412,7 @@ pub fn output_count(tx_bytes: &[u8]) -> Result<usize, UtxoError> {
                 }
             };
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Err(UtxoError::MalformedTx)
@@ -449,6 +449,16 @@ fn expect_end(d: &mut Decoder<'_>, len: Option<u64>, read: u64) -> Result<(), Ut
     Ok(())
 }
 
+/// Skip one item where the shape requires one. minicbor's `skip` reads a break as an item,
+/// which would let a container short of an item end on the break of the container around
+/// it and read on into that container.
+fn skip_item(d: &mut Decoder<'_>) -> Result<(), UtxoError> {
+    if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Break {
+        return Err(UtxoError::MalformedTx);
+    }
+    d.skip().map_err(|_| UtxoError::MalformedTx)
+}
+
 /// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
 /// index : uint .size 2 ]`, in either length form. An index wider than `u16` is out of
 /// protocol range.
@@ -476,8 +486,8 @@ pub fn output_exists(tx_bytes: &[u8], out_index: usize) -> Result<bool, UtxoErro
 }
 
 /// Decode output `out_index` from a Conway transaction-body CBOR map (key 1 =
-/// outputs). Untrusted CBOR: every container is read in either length form, as the
-/// ledger reads it, and every other deviation fails closed.
+/// outputs). Every container is read in either length form, as the ledger reads it,
+/// and the output's fields as [`decode_single_output`] reads them.
 fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError> {
     let mut d = Decoder::new(tx_bytes);
     let len = d.map().map_err(|_| UtxoError::MalformedTx)?;
@@ -487,7 +497,7 @@ fn decode_output(tx_bytes: &[u8], out_index: usize) -> Result<Output, UtxoError>
         if key == 1 {
             return decode_output_at(&mut d, out_index);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(&mut d)?;
         i += 1;
     }
     Err(UtxoError::MalformedTx)
@@ -506,7 +516,7 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
         if i as usize == out_index {
             return decode_single_output(d);
         }
-        d.skip().map_err(|_| UtxoError::MalformedTx)?;
+        skip_item(d)?;
         i += 1;
     }
     Err(UtxoError::OutputIndexOutOfRange)
@@ -514,7 +524,9 @@ fn decode_output_at(d: &mut Decoder<'_>, out_index: usize) -> Result<Output, Utx
 
 /// A Conway output is a post-Alonzo map (`{0: address, 1: value, 2?: datum_option,
 /// 3?: script_ref}`) or a legacy array (`[address, value]` or
-/// `[address, value, datum_hash]`).
+/// `[address, value, datum_hash]`). The address, coin and datum must decode; a map
+/// key outside 0-2 is skipped unread, and a repeated key keeps its last value. This
+/// reads the output's read-path fields and validates nothing else in it.
 pub(crate) fn decode_single_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
     match d.datatype().map_err(|_| UtxoError::MalformedTx)? {
         Type::Map | Type::MapIndef => decode_map_output(d),
@@ -535,7 +547,7 @@ fn decode_map_output(d: &mut Decoder<'_>) -> Result<Output, UtxoError> {
             1 => lovelace = Some(decode_value(d)?),
             2 => datum = Some(decode_datum_option(d)?),
             // 3 = script_ref (not part of the read-path verdict), or a future key.
-            _ => d.skip().map_err(|_| UtxoError::MalformedTx)?,
+            _ => skip_item(d)?,
         }
         i += 1;
     }
@@ -570,7 +582,7 @@ fn decode_value(d: &mut Decoder<'_>) -> Result<u64, UtxoError> {
         Type::Array | Type::ArrayIndef => {
             let len = array_of(d, 2)?;
             let coin = d.u64().map_err(|_| UtxoError::MalformedTx)?;
-            d.skip().map_err(|_| UtxoError::MalformedTx)?; // multiasset map
+            skip_item(d)?; // multiasset map
             expect_end(d, len, 2)?;
             Ok(coin)
         }
@@ -826,6 +838,63 @@ mod tests {
                 &[0x00, 0xff],
             ]
             .concat(),
+        ] {
+            assert_eq!(
+                decode_output(&body_with_output(&output), 0),
+                Err(UtxoError::MalformedTx),
+                "{output:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_item_cannot_borrow_the_enclosing_break() {
+        // Each output lacks a required item and sits in an indefinite outputs array. A decoder
+        // that read a break as the item would close the output on the next break up or, in
+        // the first case, read on into the array and take h'bb' as the address.
+        for outputs in [
+            // [_ {_ 0: h'aa', 1: 7, 3: }, 0, h'bb']: key 3 without its value.
+            vec![
+                0x9f, 0xbf, 0x00, 0x41, 0xaa, 0x01, 0x07, 0x03, 0xff, 0x00, 0x41, 0xbb, 0xff,
+            ],
+            vec![0x9f, 0xbf, 0x00, 0x41, 0x00, 0x01, 0x07, 0x03, 0xff, 0xff],
+            // [_ {_ 0: h'00', 1: [_ 7]}]: a value without its multiasset.
+            vec![
+                0x9f, 0xbf, 0x00, 0x41, 0x00, 0x01, 0x9f, 0x07, 0xff, 0xff, 0xff,
+            ],
+        ] {
+            let body = [&[0xa1, 0x01][..], &outputs].concat();
+            assert_eq!(
+                decode_output(&body, 0),
+                Err(UtxoError::MalformedTx),
+                "{body:02x?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_break_is_no_item_where_one_is_due() {
+        // {5: break}: a definite body map whose value is a stray break.
+        let stray = [0xa1, 0x05, 0xff];
+        assert_eq!(decode_spends(&stray), Err(UtxoError::MalformedTx));
+        assert_eq!(inputs_at(&stray, 0), Err(UtxoError::MalformedTx));
+        assert_eq!(has_body_key(&stray, 16), Err(UtxoError::MalformedTx));
+        // {5: break, 1: [[h'00', 7]]}
+        let before_outputs = [0xa2, 0x05, 0xff, 0x01, 0x81, 0x82, 0x41, 0x00, 0x07];
+        assert_eq!(output_count(&before_outputs), Err(UtxoError::MalformedTx));
+        assert_eq!(
+            decode_output(&before_outputs, 0),
+            Err(UtxoError::MalformedTx)
+        );
+        // {1: [break, [h'00', 7]]}: a stray break before the output read.
+        assert_eq!(
+            decode_output(&[0xa1, 0x01, 0x82, 0xff, 0x82, 0x41, 0x00, 0x07], 1),
+            Err(UtxoError::MalformedTx)
+        );
+        // {0: h'00', 1: 7, 3: break} and {0: h'00', 1: [7, break]}
+        for output in [
+            vec![0xa3, 0x00, 0x41, 0x00, 0x01, 0x07, 0x03, 0xff],
+            vec![0xa2, 0x00, 0x41, 0x00, 0x01, 0x82, 0x07, 0xff],
         ] {
             assert_eq!(
                 decode_output(&body_with_output(&output), 0),
