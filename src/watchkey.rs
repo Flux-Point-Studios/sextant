@@ -67,10 +67,10 @@ pub struct Scan {
 
 /// Whether `address` is a well-formed Byron address: exactly the CBOR item
 /// `[#6.24(bytes payload), crc]`, the array definite, the payload a definite byte
-/// string, `crc` its CRC-32, and the payload exactly `[bytes .size 28, attributes
-/// map, uint]` with that array definite. A Byron address carries no VKH: the key
-/// behind it can spend only through a bootstrap witness, which [`witness_use`]
-/// hashes.
+/// string, `crc` its CRC-32, and the payload exactly `[bytes .size 28, attributes,
+/// uint]` with that array definite and the attributes the ledger's
+/// `Map Word8 ByteString`. A Byron address carries no VKH: the key behind it can
+/// spend only through a bootstrap witness, which [`witness_use`] hashes.
 fn byron_address(address: &[u8]) -> bool {
     let mut d = Decoder::new(address);
     let payload = (|| {
@@ -83,17 +83,21 @@ fn byron_address(address: &[u8]) -> bool {
     payload.is_some_and(|payload| d.position() == address.len() && byron_payload(payload))
 }
 
-/// Whether a Byron address payload is exactly `[bytes .size 28, attributes map, uint]`.
+/// Whether a Byron address payload is exactly `[bytes .size 28, attributes, uint]`, the
+/// attributes a map in either length form from uints below 256 to definite byte strings.
 fn byron_payload(payload: &[u8]) -> bool {
     let mut d = Decoder::new(payload);
     let read = (|| {
         if d.array().ok()? != Some(3) || d.bytes().ok()?.len() != 28 {
             return None;
         }
-        if !matches!(d.datatype().ok()?, Type::Map | Type::MapIndef) {
-            return None;
+        let attributes = d.map().ok()?;
+        let mut i = 0;
+        while seq_has_next(&mut d, attributes, i).ok()? {
+            d.u8().ok()?;
+            d.bytes().ok()?;
+            i += 1;
         }
-        d.skip().ok()?;
         d.u64().ok()
     })();
     read.is_some() && d.position() == payload.len()
@@ -701,21 +705,36 @@ fn array_count(d: &mut Decoder<'_>) -> Result<u64, ()> {
     Ok(count)
 }
 
-/// The verification key of one witness row, read only in its CDDL shape: an array of
-/// `arity` elements in either length form (2 for a vkeywitness, 4 for a
-/// bootstrap_witness), the first a definite 32-byte byte string. Any other row is
-/// `None`.
-fn witness_vkey(row: &[u8], arity: u64) -> Option<&[u8]> {
+/// The byte-string sizes of a vkey witness row and a bootstrap witness row (Conway
+/// CDDL), `None` for any length: `[vkey, signature]` and `[vkey, signature,
+/// chain_code, attributes]`.
+const VKEY_WITNESS: [Option<usize>; 2] = [Some(32), Some(64)];
+const BOOTSTRAP_WITNESS: [Option<usize>; 4] = [Some(32), Some(64), Some(32), None];
+
+/// The verification key of one witness row, read only in its CDDL shape: one definite
+/// byte string per `shape` size, in either length form, the first the vkey. Any other
+/// row, a break where an element is due included, is `None`.
+fn witness_vkey<'b>(row: &'b [u8], shape: &[Option<usize>]) -> Option<&'b [u8]> {
     let mut d = Decoder::new(row);
     let len = d.array().ok()?;
-    let vkey = d.bytes().ok()?;
-    for k in 1..arity {
+    let mut vkey = None;
+    for (k, size) in (0u64..).zip(shape) {
         if !seq_has_next(&mut d, len, k).ok()? {
             return None;
         }
-        d.skip().ok()?;
+        let element = d.bytes().ok()?;
+        if size.is_some_and(|size| element.len() != size) {
+            return None;
+        }
+        if k == 0 {
+            vkey = Some(element);
+        }
     }
-    (vkey.len() == 32 && !seq_has_next(&mut d, len, arity).ok()?).then_some(vkey)
+    let end = u64::try_from(shape.len()).ok()?;
+    if seq_has_next(&mut d, len, end).ok()? {
+        return None;
+    }
+    vkey
 }
 
 /// Does a watched key appear as a verification-key witness -- witness-set key 0
@@ -726,9 +745,9 @@ fn witness_vkey(row: &[u8], arity: u64) -> Option<&[u8]> {
 /// after it are still read: a proven use dominates a malformed row.
 pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
     scan_map(witnesses, |key, d, scan| {
-        let arity = match key {
-            0 => 2,
-            2 => 4,
+        let shape: &[Option<usize>] = match key {
+            0 => &VKEY_WITNESS,
+            2 => &BOOTSTRAP_WITNESS,
             _ => return d.skip().map_err(|_| ()),
         };
         let set_len = input_set_len(d).map_err(|_| ())?;
@@ -736,7 +755,7 @@ pub fn witness_use(witnesses: &[u8], watched: &BTreeSet<[u8; 28]>) -> Scan {
         while seq_has_next(d, set_len, j).map_err(|_| ())? {
             let start = d.position();
             d.skip().map_err(|_| ())?;
-            match witness_vkey(&d.input()[start..d.position()], arity) {
+            match witness_vkey(&d.input()[start..d.position()], shape) {
                 Some(vkey) => scan.found |= watched.contains(&blake2b224(vkey)),
                 None => scan.complete = false,
             }
@@ -1331,16 +1350,18 @@ mod tests {
 
     #[test]
     fn a_witness_row_holds_its_own_arity() {
-        // [vkey, sig, h''] and one more item after it: a bootstrap row of three elements
-        // stays short of four whatever follows it.
+        // [vkey, sig, chain code] and one more item after it: a bootstrap row of three
+        // elements stays short of four whatever follows it.
         let mut row = vec![0x83, 0x58, 0x20];
         row.extend_from_slice(&VK);
         row.extend_from_slice(&[0x58, 0x40]);
         row.extend_from_slice(&SIG);
-        row.extend_from_slice(&[0x40, 0x40]);
-        assert_eq!(witness_vkey(&row, 4), None);
+        row.extend_from_slice(&[0x58, 0x20]);
+        row.extend_from_slice(&[0u8; 32]);
+        row.push(0x40);
+        assert_eq!(witness_vkey(&row, &BOOTSTRAP_WITNESS), None);
         row[0] = 0x84;
-        assert_eq!(witness_vkey(&row, 4), Some(&VK[..]));
+        assert_eq!(witness_vkey(&row, &BOOTSTRAP_WITNESS), Some(&VK[..]));
     }
 
     #[test]
