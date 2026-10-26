@@ -1,8 +1,9 @@
 //! Output addresses and body walks the transaction scan must read exactly: every Shelley
-//! payment header, a break inside an indefinite array, an indefinite Byron attribute map,
-//! and a map output or collateral return whose address yields no payment credential.
+//! payment header, a long pointer address, a break inside an indefinite array, an indefinite
+//! Byron attribute map, and a map output or collateral return whose address yields no payment
+//! credential.
 
-use sextant::watchkey::{Verdict, payment_credential, transaction_use};
+use sextant::watchkey::{Verdict, payment_credential, stake_credential, transaction_use};
 use std::collections::BTreeSet;
 
 const UNWATCHED: [u8; 28] = [0xee; 28];
@@ -95,6 +96,24 @@ fn every_shelley_payment_header_reads_complete_when_unwatched() {
             "{header:02x}"
         );
     }
+}
+
+/// A pointer address 58 bytes long: bytes 29 to 57 are pointer varints, no stake credential.
+#[test]
+fn a_long_pointer_address_carries_no_stake_credential() {
+    let address = [&[0x41u8][..], &[0xa1; 28], &[0x81; 26], &[0x00, 0x00, 0x00]].concat();
+    assert_eq!(payment_credential(&address), Some([0xa1; 28]));
+    assert_eq!(stake_credential(&address), None);
+    let varints: [u8; 28] = address[29..57].try_into().expect("28 bytes");
+    let resolved = [&[0x61u8][..], &[0xd7; 28]].concat();
+    let scan = transaction_use(
+        &body(&legacy(&address), &[], 3),
+        &[0xa0],
+        true,
+        &BTreeSet::from([varints]),
+        |_| Ok(Some(resolved.as_slice())),
+    );
+    assert_eq!(scan.verdict(), Verdict::NoUse);
 }
 
 /// Body key 8 as `[_ [1, break]]`: the break ends the inner definite array early.

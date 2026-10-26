@@ -1,5 +1,5 @@
 {
-  "note": "Hand-labelled from the U1 contract and U1RT-03: a certificate is read by its arity in either length form, a voter is [kind 0-4, hash] in either length form, nesting has no limit short of the transaction size, deep auxiliary and Plutus data are mentions, a break a repeated key would hide leaves the transaction open, and only an exactly framed envelope is a transaction. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
+  "note": "Hand-labelled from the U1 contract and U1RT-03: a certificate is read by its arity in either length form, a voter is [kind 0-4, hash] in either length form, nesting has no limit short of the transaction size, deep auxiliary and Plutus data are mentions, a break a repeated key would hide leaves the transaction open, only an exactly framed envelope is a transaction, and text is UTF-8 whole and in each chunk. Independent of the Python reference (r57_first_use.py) and the Sextant predicate. Only target_found, complete and verdict are contract.",
   "vectors": [
     {
       "name": "cert_indefinite_vote_deleg",
@@ -965,6 +965,186 @@
       "name": "framing_flag_not_a_bool",
       "description": "[body, {}, 0, null], the validity flag a uint",
       "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a000f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_flag_self_described",
+      "description": "[body, {}, 55799(true), null], the flag a tagged bool",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a0d9d9f7f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_body_self_described",
+      "description": "[55799(body), {}, true, null], the body a tagged map",
+      "raw_tx_hex": "84d9d9f7a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_witness_set_self_described",
+      "description": "[body, 55799({}), true, null], the witness set a tagged map",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40d9d9f7a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_witness_set_null",
+      "description": "[body, null, true, null], no witness set",
+      "raw_tx_hex": "84a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40f6f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_five_items",
+      "description": "[body, {}, true, null, null], a fifth item",
+      "raw_tx_hex": "85a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a0f5f6f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "framing_five_declared_four_present",
+      "description": "five items declared and four present",
+      "raw_tx_hex": "85a30081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40a0f5f6",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "aux_text_utf8_control",
+      "description": "metadata text \u00e9, whole and in two chunks",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d400758202fcbd910b81530076b3bd58d50efc4c61c0a85b6a90f2ae9b7a5bb771f8f30f6a0f5a21902a262c3a91902a37f62c3a96161ff",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
+      "name": "aux_text_invalid_utf8",
+      "description": "metadata text c3 28, which is no UTF-8",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40075820122950deb987cbcb8bb73cf9fbca23949c48866f2c2f933857d0a5a7d7d0d8a1a0f5a11902a262c328",
+      "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "aux_text_chunk_splits_a_character",
+      "description": "metadata text \u00e9 chunked through its middle",
+      "raw_tx_hex": "84a40081825820888888888888888888888888888888888888888888888888888888888888888800018182581d61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d71a000f4240021a00030d40075820e248b565b2bfb97c24c359a5a0274cea90b7a0fe6d9e2d1a3890588ccb1bff0aa0f5a11902a27f61c361a9ff",
       "target_vkh": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "resolve": {
         "8888888888888888888888888888888888888888888888888888888888888888#0": "61d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7"

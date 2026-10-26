@@ -969,6 +969,16 @@ mod tests {
     }
 
     #[test]
+    fn item_end_refuses_text_that_is_no_utf8_whole_or_per_chunk() {
+        // "é", whole and as one chunk of an indefinite string.
+        assert_eq!(item_end(&[0x62, 0xc3, 0xa9], 0), Some(3));
+        assert_eq!(item_end(&[0x7f, 0x62, 0xc3, 0xa9, 0xff], 0), Some(5));
+        // c3 28 is no UTF-8; neither is either half of "é" alone.
+        assert_eq!(item_end(&[0x62, 0xc3, 0x28], 0), None);
+        assert_eq!(item_end(&[0x7f, 0x61, 0xc3, 0x61, 0xa9, 0xff], 0), None);
+    }
+
+    #[test]
     fn a_body_without_outputs_has_no_count() {
         // {0: []}: the ledger requires key 1.
         assert_eq!(

@@ -12,7 +12,7 @@ const ORACLE: &str = include_str!("vectors/u1_shape_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "09a2bf7e48c82ba930e10cbe07b070f8adbe9e2602621b3a82f4ee1643321958";
+    "54d67bc7ac099dc82482e47d0f95c76732ea15c6a3397cbabb4173d0957ffb47";
     cert_indefinite_vote_deleg,
     cert_indefinite_vote_deleg_watched,
     cert_definite_vote_deleg,
@@ -62,4 +62,13 @@ oracle_tests!(
     framing_two_items,
     framing_two_items_then_flag_and_aux,
     framing_flag_not_a_bool,
+    framing_flag_self_described,
+    framing_body_self_described,
+    framing_witness_set_self_described,
+    framing_witness_set_null,
+    framing_five_items,
+    framing_five_declared_four_present,
+    aux_text_utf8_control,
+    aux_text_invalid_utf8,
+    aux_text_chunk_splits_a_character,
 );
