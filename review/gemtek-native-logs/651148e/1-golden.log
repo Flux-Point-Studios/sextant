@@ -1,0 +1,197 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded ckb-merkle-mountain-range v0.5.2
+  Downloaded base64ct v1.7.3
+  Downloaded chacha20 v0.10.1
+  Downloaded pallas-addresses v1.1.1
+  Downloaded darling_macro v0.23.0
+  Downloaded time-core v0.1.8
+  Downloaded darling v0.23.0
+  Downloaded ripemd v0.1.3
+  Downloaded time-macros v0.2.27
+  Downloaded rand_core v0.5.1
+  Downloaded pallas-codec v1.1.1
+  Downloaded rand_chacha v0.10.0
+  Downloaded quote v1.0.46
+  Downloaded serde_with_macros v3.21.0
+  Downloaded blake2 v0.9.2
+  Downloaded minicbor-derive v0.16.2
+  Downloaded deranged v0.5.8
+  Downloaded tinyvec v1.12.0
+  Downloaded darling_core v0.23.0
+  Downloaded schemars v1.2.1
+  Downloaded zerocopy-derive v0.8.54
+  Downloaded schemars v0.9.0
+  Downloaded rand v0.10.2
+  Downloaded cardano-crypto v1.0.8
+  Downloaded serde_json v1.0.150
+  Downloaded pallas-primitives v1.1.1
+  Downloaded serde_with v3.21.0
+  Downloaded time v0.3.47
+  Downloaded pallas-crypto v1.1.1
+  Downloaded zerocopy v0.8.54
+  Downloaded curve25519-elligator2 v0.1.0-alpha.2
+  Downloaded minicbor v2.2.2
+  Downloaded syn v2.0.118
+  Downloaded minicbor v0.26.5
+  Downloaded either v1.16.0
+  Downloaded pallas-traverse v1.1.1
+  Downloaded amaru-curve25519-dalek v3.2.0
+  Downloaded fiat-crypto v0.3.0
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling version_check v0.9.5
+   Compiling typenum v1.20.1
+   Compiling cfg-if v1.0.4
+   Compiling subtle v2.6.1
+   Compiling serde_core v1.0.228
+   Compiling semver v1.0.28
+   Compiling generic-array v0.14.7
+   Compiling serde v1.0.228
+   Compiling rustc_version v0.4.1
+   Compiling zerocopy v0.8.54
+   Compiling cpufeatures v0.2.17
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling curve25519-dalek v4.1.3
+   Compiling libc v0.2.186
+   Compiling rand_core v0.10.1
+   Compiling syn v2.0.118
+   Compiling minicbor v0.26.5
+   Compiling getrandom v0.4.3
+   Compiling thiserror v2.0.18
+   Compiling signature v2.2.0
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling zmij v1.0.21
+   Compiling cpufeatures v0.3.0
+   Compiling chacha20 v0.10.1
+   Compiling sha2 v0.10.9
+   Compiling hex v0.4.3
+   Compiling serde_json v1.0.150
+   Compiling digest v0.9.0
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling cryptoxide v0.4.4
+   Compiling curve25519-elligator2 v0.1.0-alpha.2
+   Compiling opaque-debug v0.3.1
+   Compiling crc-catalog v2.5.0
+   Compiling paste v1.0.15
+   Compiling rand v0.10.2
+   Compiling thiserror v1.0.69
+   Compiling crc v3.4.0
+   Compiling crypto-mac v0.8.0
+   Compiling block-buffer v0.9.0
+   Compiling bech32 v0.11.1
+   Compiling rand_core v0.5.1
+   Compiling either v1.16.0
+   Compiling keccak v0.1.6
+   Compiling byteorder v1.5.0
+   Compiling base58 v0.2.0
+   Compiling itertools v0.14.0
+   Compiling sha3 v0.10.9
+   Compiling sha2 v0.9.9
+   Compiling blake2 v0.9.2
+   Compiling blake2 v0.10.6
+   Compiling ripemd v0.1.3
+   Compiling base64ct v1.7.3
+   Compiling darling_core v0.23.0
+   Compiling fiat-crypto v0.3.0
+   Compiling minicbor v2.2.2
+   Compiling ckb-merkle-mountain-range v0.5.2
+   Compiling zerocopy-derive v0.8.54
+   Compiling serde_derive v1.0.228
+   Compiling zeroize_derive v1.5.0
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling zeroize v1.9.0
+   Compiling thiserror-impl v2.0.18
+   Compiling minicbor-derive v0.16.2
+   Compiling darling_macro v0.23.0
+   Compiling darling v0.23.0
+   Compiling serde_with_macros v3.21.0
+   Compiling thiserror-impl v1.0.69
+   Compiling serde_with v3.21.0
+   Compiling amaru-curve25519-dalek v3.2.0
+   Compiling ed25519 v2.2.3
+   Compiling ed25519-dalek v2.2.0
+   Compiling sextant v0.1.0 (/home/deci/work/wt-sextant-u1-golden-651148e)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling cardano-crypto v1.0.8
+   Compiling rand_chacha v0.10.0
+   Compiling pallas-codec v1.1.1
+   Compiling pallas-crypto v1.1.1
+   Compiling pallas-primitives v1.1.1
+   Compiling pallas-addresses v1.1.1
+   Compiling pallas-traverse v1.1.1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.27s
+     Running tests/watchkey_golden.rs (target/debug/deps/watchkey_golden-9cfe8716135db373)
+
+running 23 tests
+test native_script_sig ... ok
+test oracle_is_the_pinned_hand_labelled_file ... ok
+test every_oracle_vector_has_a_golden_test ... ok
+test collateral_return_refscript ... FAILED
+test output_stake ... ok
+test native_script_deep70 ... FAILED
+test phase2_collateral_input ... ok
+test output_payment ... ok
+test pool_owner_tagged_set ... ok
+test proposal_reward_tagged_set ... ok
+test reference_script_native ... FAILED
+test proposal_reward_array ... ok
+test pool_reward_account ... ok
+test required_signer_array ... ok
+test required_signer_tagged_set ... ok
+test spent_input_payment ... ok
+test supported_era_no_use ... ok
+test undecodable ... ok
+test unresolved_spent_input ... ok
+test unknown_cert_kind ... ok
+test vkey_witness_c_control ... ok
+test withdrawal ... ok
+test unsupported_era_body_key ... FAILED
+
+failures:
+
+---- collateral_return_refscript stdout ----
+
+thread 'collateral_return_refscript' (3920839) panicked at tests/watchkey_golden.rs:136:5:
+assertion `left == right` failed: collateral_return_refscript: use_surfaces
+  left: Scan { found: false, complete: true }
+ right: Scan { found: true, complete: true }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- native_script_deep70 stdout ----
+
+thread 'native_script_deep70' (3920841) panicked at tests/watchkey_golden.rs:136:5:
+assertion `left == right` failed: native_script_deep70: use_surfaces
+  left: Scan { found: false, complete: false }
+ right: Scan { found: true, complete: true }
+
+---- reference_script_native stdout ----
+
+thread 'reference_script_native' (3920851) panicked at tests/watchkey_golden.rs:136:5:
+assertion `left == right` failed: reference_script_native: use_surfaces
+  left: Scan { found: false, complete: true }
+ right: Scan { found: true, complete: true }
+
+---- unsupported_era_body_key stdout ----
+
+thread 'unsupported_era_body_key' (3920859) panicked at tests/watchkey_golden.rs:136:5:
+assertion `left == right` failed: unsupported_era_body_key: use_surfaces
+  left: Scan { found: false, complete: true }
+ right: Scan { found: false, complete: false }
+
+
+failures:
+    collateral_return_refscript
+    native_script_deep70
+    reference_script_native
+    unsupported_era_body_key
+
+test result: FAILED. 19 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test watchkey_golden`

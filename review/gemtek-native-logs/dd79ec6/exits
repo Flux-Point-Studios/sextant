@@ -1,0 +1,8 @@
+checked out dd79ec688162d83ceb05323993627b9726e8764a tree 07c809c41026246936ec7d5055b114bb95fc507b
+57d4a1199282097acc9bf35f3516335c9859e1ba6dd895bc31c3b23fa6db1298  /home/deci/work/wt-sextant-u1-golden-651148e/tests/vectors/u1_closure_vectors.json
+python exit=0
+test exit=0
+all-features exit=0
+clippy exit=0
+fmt exit=0
+no_std exit=0

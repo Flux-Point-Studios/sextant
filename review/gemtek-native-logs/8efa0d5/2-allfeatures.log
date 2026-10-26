@@ -1,0 +1,512 @@
+   Compiling sextant v0.1.0 (/home/deci/work/wt-sextant-u1-golden-651148e)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.64s
+     Running unittests src/lib.rs (target/debug/deps/sextant-9f35c95687b4a8b9)
+
+running 107 tests
+test ancillary::tests::malformed_inputs_fail_closed ... ok
+test effects::tests::decodes_invalid_transaction_indices_bare_and_tagged ... ok
+test effects::tests::empty_invalid_transactions_is_an_empty_set ... ok
+test effects::tests::indefinite_invalid_transactions_array_decodes ... ok
+test effects::tests::invalid_tx_dedups_duplicate_collateral ... ok
+test ffi::tests::guard_passes_through_the_ok_code ... ok
+test ffi::tests::guard_converts_panic_to_err_panic ... ok
+test ancillary::tests::a_tampered_digest_fails_the_signature ... ok
+test ffi::tests::project_header_genesis_has_no_prev_hash ... ok
+test ffi::tests::project_watch_verdict_maps_the_spend_region ... ok
+test ancillary::tests::the_real_manifest_is_rejected_under_the_mainnet_key ... ok
+test ancillary::tests::the_real_preprod_manifest_verifies_under_the_pinned_key ... ok
+test ffi::tests::refusal_code_agrees_with_the_batch_equivalence_map ... ok
+test ffi::tests::spend_status_projects_into_distinct_abi_bands ... ok
+test ffi::tests::status_message_is_defined_for_every_code_and_unknowns ... ok
+test follow::tests::slot_schedule_maps_slots_to_epochs ... ok
+test mithril::tests::phi_f_fixed_point_golden ... ok
+test mithril::tests::certificate_metadata_hash_matches_mithril_golden ... ok
+test mithril::tests::protocol_parameters_hash_matches_mithril_golden ... ok
+test inclusion::tests::a_mutated_ckb_proof_item_diverges_from_the_true_root ... ok
+test mithril::tests::protocol_message_part_keys_are_canonical_and_ordered ... ok
+test utxo::tests::collateral_key13_is_a_spend ... ok
+test follow::tests::re_anchor_with_a_matching_proof_certifies_the_spend_region ... ok
+test mithril::tests::certificate_genesis_hash_matches_mithril_golden ... ok
+test utxo::tests::decodes_a_map_output_with_a_datum_hash_option ... ok
+test utxo::tests::malformed_input_body_is_malformed_tx ... ok
+test utxo::tests::decodes_a_legacy_output_with_a_datum_hash ... ok
+test utxo::tests::reference_input_key18_is_not_a_spend ... ok
+test utxo::tests::overwide_index_is_malformed_tx ... ok
+test utxo::tests::rejects_a_non_map_transaction_body ... ok
+test utxo::tests::rejects_an_out_of_range_index ... ok
+test utxo::tests::rejects_an_output_that_is_neither_map_nor_array ... ok
+test utxo::tests::rejects_a_map_output_missing_its_address ... ok
+test utxo::tests::rejects_a_body_with_no_outputs_field ... ok
+test utxo::tests::spend_status_tiers_are_exhaustively_wired ... ok
+test utxoset::tests::anchor_basis_classes_are_distinct_and_ride_the_snapshot ... ok
+test utxoset::tests::apply_at_max_block_number_fails_closed_not_overflow ... ok
+test utxoset::tests::apply_creates_and_spends_membership ... ok
+test utxo::tests::tag258_and_bare_array_decode_to_the_same_outpoint ... ok
+test utxoset::tests::apply_is_atomic_under_a_store_failure ... ok
+test utxoset::tests::certified_spend_status_fails_closed_without_a_bound_anchor ... ok
+test utxoset::tests::certified_spend_status_grades_membership_with_the_bound_basis_and_recency ... ok
+test utxoset::tests::duplicate_output_fails_closed ... ok
+test utxoset::tests::from_snapshot_seeds_membership_and_extends ... ok
+test utxoset::tests::fingerprint_is_the_ordered_sha256_over_outpoint_keys ... ok
+test utxoset::tests::in_block_chain_creates_then_spends_to_net_absent ... ok
+test utxoset::tests::rollback_across_multiple_blocks_to_a_retained_ancestor ... ok
+test utxoset::tests::rollback_beyond_retained_history_is_unreachable ... ok
+test utxoset::tests::rollback_is_atomic_under_a_store_failure ... ok
+test utxoset::tests::rollback_reverses_a_block_exactly ... ok
+test utxoset::tests::rollback_reverses_an_in_block_chain ... ok
+test utxoset::tests::spend_of_unknown_output_fails_closed ... ok
+test utxoset::tests::non_contiguous_block_is_refused ... ok
+test watchkey::tests::base_address_has_payment_and_stake ... ok
+test watchkey::tests::byron_address_yields_nothing ... ok
+test watchkey::tests::enterprise_address_has_payment_only ... ok
+test watchkey::tests::malformed_certificates_is_incomplete ... ok
+test watchkey::tests::absent_required_signer_is_not_found_but_complete ... ok
+test watchkey::tests::malformed_body_is_incomplete_never_a_clean_no_use ... ok
+test watchkey::tests::malformed_collateral_return_is_incomplete ... ok
+test watchkey::tests::malformed_output_is_incomplete ... ok
+test watchkey::tests::malformed_proposal_is_incomplete ... ok
+test watchkey::tests::malformed_voter_is_incomplete ... ok
+test watchkey::tests::malformed_withdrawal_is_incomplete ... ok
+test watchkey::tests::malformed_witness_is_incomplete ... ok
+test watchkey::tests::short_slices_never_panic_and_yield_none ... ok
+test watchkey::tests::reward_address_has_no_payment_but_a_reward_credential ... ok
+test watchkey::tests::unwatched_native_script_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_certificate_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_output_is_not_found_but_complete ... ok
+test watchkey::tests::unknown_certificate_kind_is_incomplete ... ok
+test watchkey::tests::unwatched_proposal_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_update_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_withdrawal_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_vkey_witness_is_not_found_but_complete ... ok
+test watchkey::tests::unwatched_voter_is_not_found_but_complete ... ok
+test watchkey::tests::watched_bootstrap_witness_is_found ... ok
+test watchkey::tests::watched_certificate_credential_is_found ... ok
+test watchkey::tests::watched_collateral_return_credential_is_found ... ok
+test watchkey::tests::watched_native_script_sig_is_found ... ok
+test watchkey::tests::watched_output_payment_credential_is_found ... ok
+test watchkey::tests::watched_output_stake_credential_is_found ... ok
+test watchkey::tests::watched_proposal_reward_account_is_found ... ok
+test watchkey::tests::watched_required_signer_is_found_bare_and_tagged ... ok
+test watchkey::tests::watched_update_genesis_hash_is_found ... ok
+test watchkey::tests::watched_vkey_witness_is_found ... ok
+test watchkey::tests::watched_voter_credential_is_found ... ok
+test window::tests::tx_body_spans_rejects_a_non_array_region ... ok
+test watchkey::tests::watched_withdrawal_credential_is_found ... ok
+test window::tests::tx_body_spans_rejects_an_indefinite_array_without_a_closing_break ... ok
+test window::tests::tx_body_spans_rejects_bytes_after_an_indefinite_break ... ok
+test window::tests::tx_body_spans_splits_an_indefinite_array ... ok
+test window::tests::tx_body_spans_rejects_trailing_bytes_in_the_region ... ok
+test window::tests::tx_body_spans_splits_a_definite_array_into_element_spans ... ok
+test inclusion::tests::calculate_root_matches_ckb_across_shapes ... ok
+test effects::tests::extracts_a_block_with_indefinite_length_tx_bodies ... ok
+test window::tests::indefinite_tx_bodies_split_is_byte_exact_vs_pallas ... ok
+test follow::tests::number_skipping_block_is_refused_not_contiguous ... ok
+test setfollow::tests::a_non_contiguous_block_fails_closed_at_apply ... ok
+test follow::tests::tip_at_u64_max_refuses_the_next_append_without_panicking ... ok
+test follow::tests::rollback_below_the_turn_re_appends_without_re_staging ... ok
+test setfollow::tests::rollback_restores_the_tip_and_membership ... ok
+test setfollow::tests::a_wrong_epoch_nonce_fails_closed_at_the_header ... ok
+test setfollow::tests::an_omitted_pre_s_outpoint_is_caught_by_the_follow ... ok
+test setfollow::tests::a_phantom_outpoint_is_caught_when_the_window_re_creates_it ... ok
+test setfollow::tests::follows_a_real_preprod_run_advancing_the_set ... ok
+test follow::tests::eviction_finalizes_a_spend_that_survives_the_ring_cap ... ok
+
+test result: ok. 107 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/boundary.rs (target/debug/deps/boundary-578d6fd9d6bd5c50)
+
+running 2 tests
+test each_side_rejects_the_other_epochs_nonce ... ok
+test boundary_run_crosses_epoch_299_to_300_and_the_nonce_evolved ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/chain.rs (target/debug/deps/chain-8a6fb91ec4ee9efb)
+
+running 7 tests
+test reordered_segment_is_rejected ... ok
+test malformed_block_is_reported_at_its_index ... ok
+test wrong_epoch_nonce_rejects_the_segment ... ok
+test block_hash_and_prev_hash_match_pallas ... ok
+test dropped_block_breaks_the_chain ... ok
+test preprod_run_is_a_contiguous_verified_chain ... ok
+test tampered_block_in_segment_is_rejected ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/compose.rs (target/debug/deps/compose-083ced60e7e30690)
+
+running 1 test
+test extract_apply_pipeline_over_the_contiguous_preprod_segment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/consumer.rs (target/debug/deps/consumer-6aa5b2c299c8476a)
+
+running 4 tests
+test consumer_refuses_an_unanchored_cert_chain ... ok
+test consumer_proceeds_on_the_authentic_certified_order ... ok
+test consumer_refuses_a_spoofed_tampered_utxo ... ok
+test the_example_runs_both_paths_and_exits_zero ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.17s
+
+     Running tests/effects.rs (target/debug/deps/effects-3c8580f4446b61c5)
+
+running 2 tests
+test block_coordinates_match_pallas ... ok
+test extraction_matches_pallas_consumes_and_produces_on_every_committed_block ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/ffi.rs (target/debug/deps/ffi-4e3e382fa53ae010)
+
+running 23 tests
+test abi_version_is_five ... ok
+test mithril_ffi::anchored_bad_json_reports_index ... ok
+test status_message_sizes_then_copies ... ok
+test utxo_ffi::null_and_empty_guards ... ok
+test verify_segment_empty_is_rejected ... ok
+test utxo_ffi::good_read_fills_struct_and_buffers ... ok
+test utxo_ffi::out_of_range_index ... ok
+test mithril_ffi::anchored_broken_link_reports_index ... ok
+test utxo_ffi::tampered_bytes_not_included ... ok
+test utxo_ffi::sizing_query_null_bufs ... ok
+test mithril_ffi::anchored_wrong_vkey_rejects_at_genesis ... ok
+test utxo_ffi::buffer_too_small_reports_true_lengths ... ok
+test utxo_ffi::spend_status_constant_is_zero ... ok
+test mithril_ffi::anchored_tampered_authority_reports_index ... ok
+test mithril_ffi::anchored_good_names_root_and_tip ... ok
+test verify_segment_null_eta0_is_rejected ... ok
+test header_decode_rejects_malformed_and_unsupported_era ... ok
+test header_decode_matches_rust_path ... ok
+test verify_segment_broken_link_reports_index ... ok
+test verify_segment_tampered_vrf_reports_index_and_detail ... ok
+test verify_segment_good ... ok
+test mithril_ffi::anchored_root_feeds_a_verified_utxo_read ... ok
+test mithril_ffi::anchored_surfaces_the_certified_transaction_root ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+     Running tests/follow.rs (target/debug/deps/follow-f4a25e79a864ccc8)
+
+running 17 tests
+test missing_staged_nonce_at_the_turn_refuses_then_supplied_nonce_is_accepted ... ok
+test follower_crosses_the_epoch_boundary_selecting_each_side_nonce ... ok
+test recorded_spend_survives_a_refused_append ... ok
+test rollback_beyond_the_window_poisons_the_follower ... ok
+test refused_append_leaves_the_follower_able_to_resume ... ok
+test wrong_staged_nonce_refuses_crypto_then_corrected_nonce_is_accepted ... ok
+test wrong_epoch_nonce_refuses_the_first_block_crypto ... ok
+test dropped_block_successor_is_refused_broken_link ... ok
+test re_anchor_is_monotone_and_never_upgrades_a_spend_on_a_wrong_proof ... ok
+test rollback_to_the_follow_base_stalls_creation_not_observed_then_re_appends ... ok
+test truncated_block_is_refused_decode ... ok
+test tampered_header_block_is_refused_crypto ... ok
+test spliced_body_block_is_refused_body_commitment_mismatch ... ok
+test follower_above_anchor_is_unspent_with_mithril_quorum_false ... ok
+test rollback_reorgs_a_spend_out_and_re_append_re_observes_it ... ok
+test in_ring_rollback_truncates_and_reconverges_with_the_batch ... ok
+test follower_matches_batch_per_prefix_over_the_full_window ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+     Running tests/follower_ffi.rs (target/debug/deps/follower_ffi-9eb0999db64ada83)
+
+running 9 tests
+test abi_version_is_five ... ok
+test null_guards ... ok
+test append_without_a_staged_nonce_refuses_epoch_nonce_unavailable ... ok
+test appending_out_of_order_refuses_broken_segment ... ok
+test rollback_before_the_spend_truncates_to_window_too_short ... ok
+test re_anchor_is_monotone_and_a_wrong_tx_proof_does_not_certify ... ok
+test rollback_beyond_window_poisons_the_follower ... ok
+test never_spent_outpoint_yields_no_spend_observed ... ok
+test replaying_the_window_yields_spend_observed_header_vouched ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/header_decode.rs (target/debug/deps/header_decode-64383f5db2537808)
+
+running 13 tests
+test rejects_bad_issuer_len ... ok
+test rejects_indefinite_outer_array ... ok
+test rejects_non_praos_era ... ok
+test rejects_bad_opcert_shape ... ok
+test rejects_bad_vrf_result_shape ... ok
+test rejects_short_prev_hash ... ok
+test decodes_conway_header_fields ... ok
+test decodes_babbage_header_era ... ok
+test rejects_wrong_header_body_count ... ok
+test rejects_non_canonical_era_encoding ... ok
+test rejects_truncated_input ... ok
+test rejects_trailing_bytes ... ok
+test every_vector_matches_pallas_and_is_praos ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/inclusion.rs (target/debug/deps/inclusion-267f5eb24e5faf8c)
+
+running 9 tests
+test malformed_proof_bytes_are_rejected_without_panicking ... ok
+test a_transaction_not_in_the_proof_is_not_included ... ok
+test the_wrong_certified_root_is_rejected ... ok
+test real_preprod_proof_recomputes_the_certified_root_and_includes_the_tx ... ok
+test a_residual_leaf_at_a_peak_return_is_rejected ... ok
+test a_mutated_master_path_node_is_rejected_as_root_mismatch ... ok
+test a_mutated_sub_tree_path_node_is_rejected ... ok
+test a_smuggled_tx_in_a_single_tx_block_range_is_rejected ... ok
+test the_certified_root_is_stm_authenticated_and_the_proof_binds_to_it ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/kes.rs (target/debug/deps/kes-cc3322a251e2627b)
+
+running 5 tests
+test kes_period_out_of_range_is_rejected ... ok
+test tampered_kes_body_sig_is_rejected ... ok
+test real_preprod_kes_body_sigs_verify ... ok
+test real_mainnet_kes_body_sigs_verify ... ok
+test kes_verdict_matches_independent_oracle ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/mithril.rs (target/debug/deps/mithril-b9c1c199acd2b75c)
+
+running 14 tests
+test real_preprod_genesis_certificate_verifies ... ok
+test genesis_anchors_its_child ... ok
+test tampered_genesis_certificate_is_rejected ... ok
+test tampered_certificate_breaks_the_hash ... ok
+test genesis_verdict_matches_independent_oracle ... ok
+test previous_hash_links_to_parent_content ... ok
+test certificate_hash_matches_aggregator ... ok
+test verify_standard_rejects_weak_parameters ... ok
+test real_preprod_genesis_anchored_chain_verifies ... ok
+test chain_anchored_rejects_forgeries ... ok
+test tampered_standard_certificate_is_rejected ... ok
+test multi_signature_binds_message_and_avk ... ok
+test real_preprod_multi_signatures_verify ... ok
+test verify_standard_rejects_hostile_stm_inputs ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/mithril_anchor.rs (target/debug/deps/mithril_anchor-fe89f08763bf6b13)
+
+running 2 tests
+test committed_chain_certifies_the_signed_block ... ok
+test certified_block_number_ignores_a_forged_signed_entity_type ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s
+
+     Running tests/mithril_chain.rs (target/debug/deps/mithril_chain-816ed5446678e6db)
+
+running 10 tests
+test empty_segment_is_rejected ... ok
+test stake_distribution_certificate_surfaces_no_transaction_root ... ok
+test plain_verify_chain_does_not_genesis_authenticate_the_surfaced_root ... ok
+test broken_link_is_rejected ... ok
+test tampered_certificate_body_is_rejected ... ok
+test surfaced_root_comes_from_the_tip_certificates_hashed_content ... ok
+test transition_avk_substitution_is_rejected ... ok
+test same_epoch_avk_substitution_is_rejected ... ok
+test harvested_segment_is_an_avk_bound_chain ... ok
+test verified_chain_surfaces_the_certified_transaction_root ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/nonce.rs (target/debug/deps/nonce-61d767262d66e42d)
+
+running 5 tests
+test combine_is_order_sensitive_and_extra_entropy_is_optional ... ok
+test block_contribution_is_praos_double_hash_with_tag ... ok
+test epoch_nonce_matches_pallas_test_epoch_nonce ... ok
+test combine_and_fold_match_pallas_test_rolling_nonce ... ok
+test praos_evolve_matches_pallas_rolling_on_real_preprod_vectors ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/opcert.rs (target/debug/deps/opcert-a1b652c13295febb)
+
+running 5 tests
+test opcert_rejects_non_canonical_scalar ... ok
+test tampered_opcert_is_rejected ... ok
+test real_mainnet_opcerts_verify ... ok
+test real_preprod_opcerts_verify ... ok
+test opcert_verdict_matches_independent_oracle ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/utxo.rs (target/debug/deps/utxo-a15c39ff14979aa1)
+
+running 8 tests
+test decode_spends_matches_pallas_inputs_on_the_golden_tx ... ok
+test tampered_utxo_claim_is_rejected ... ok
+test an_output_index_past_the_end_is_rejected ... ok
+test the_verdict_never_claims_liveness ... ok
+test a_different_transactions_bytes_are_rejected_under_this_proof ... ok
+test utxo_output_decode_matches_pallas_on_every_output ... ok
+test verify_utxo_read_yields_the_certified_output_bytes ... ok
+test the_output_is_read_against_an_stm_authenticated_certified_root ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/vrf.rs (target/debug/deps/vrf-4793357753b65077)
+
+running 11 tests
+test decodes_conway_vrf_fields ... ok
+test non_canonical_point_is_rejected ... ok
+test off_curve_gamma_is_rejected ... ok
+test proof_to_hash_matches_onchain_output_conway1 ... ok
+test tampered_gamma_breaks_output ... ok
+test non_canonical_scalar_is_rejected ... ok
+test real_preprod_leader_proofs_verify ... ok
+test tampered_leader_proof_is_rejected ... ok
+test every_vector_output_equals_proof_to_hash ... ok
+test verdict_matches_independent_oracle ... ok
+test real_mainnet_leader_proofs_verify ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running tests/watchkey_coverage.rs (target/debug/deps/watchkey_coverage-921c9082de3f6806)
+
+running 7 tests
+test certificate_match_survives_a_later_malformed_child ... ok
+test native_script_match_survives_a_later_malformed_child ... ok
+test proposal_without_reward_account_is_incomplete ... ok
+test update_match_survives_a_later_malformed_child ... ok
+test voter_without_credential_is_incomplete ... ok
+test withdrawal_without_reward_account_is_incomplete ... ok
+test witness_without_verification_key_is_incomplete ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_golden.rs (target/debug/deps/watchkey_golden-1292f7395c1e9c54)
+
+running 23 tests
+test every_oracle_vector_has_a_test ... ok
+test collateral_return_refscript ... ok
+test oracle_is_the_pinned_hand_labelled_file ... ok
+test native_script_sig ... ok
+test output_payment ... ok
+test native_script_deep70 ... ok
+test output_stake ... ok
+test proposal_reward_array ... ok
+test proposal_reward_tagged_set ... ok
+test pool_owner_tagged_set ... ok
+test pool_reward_account ... ok
+test reference_script_native ... ok
+test phase2_collateral_input ... ok
+test undecodable ... ok
+test supported_era_no_use ... ok
+test required_signer_tagged_set ... ok
+test required_signer_array ... ok
+test spent_input_payment ... ok
+test unknown_cert_kind ... ok
+test unsupported_era_body_key ... ok
+test unresolved_spent_input ... ok
+test withdrawal ... ok
+test vkey_witness_c_control ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_governance.rs (target/debug/deps/watchkey_governance-70b9c06b3d5bd4c2)
+
+running 19 tests
+test every_oracle_vector_has_a_test ... ok
+test gov_committee_removed_tagged_sets ... ok
+test gov_committee_removed ... ok
+test gov_committee_added ... ok
+test gov_constitution_script ... ok
+test gov_control_info ... ok
+test gov_control_hard_fork ... ok
+test gov_control_new_constitution ... ok
+test gov_control_no_confidence ... ok
+test gov_control_parameter_change ... ok
+test gov_control_update_committee ... ok
+test gov_control_treasury ... ok
+test gov_treasury_policy ... ok
+test gov_parameter_change_policy ... ok
+test gov_treasury_recipient ... ok
+test gov_unknown_action_kind ... ok
+test gov_unexpected_set_tag ... ok
+test gov_wrong_arity ... ok
+test oracle_is_the_pinned_hand_labelled_file ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_inputs.rs (target/debug/deps/watchkey_inputs-56f82c50d0a06964)
+
+running 14 tests
+test absent_input_set_is_complete_and_does_not_resolve ... ok
+test indefinite_input_set_resolves_its_payment_credential ... ok
+test invalid_transaction_resolves_only_collateral_inputs ... ok
+test malformed_input_set_is_incomplete ... ok
+test proven_input_match_survives_a_later_malformed_input ... ok
+test resolver_error_leaves_a_gap_beside_a_proven_match ... ok
+test reward_address_cannot_prove_a_spent_payment_credential ... ok
+test short_resolved_address_is_incomplete ... ok
+test spent_input_does_not_count_the_stake_credential ... ok
+test tagged_input_set_resolves_its_payment_credential ... ok
+test unresolved_input_leaves_a_gap_beside_a_proven_match ... ok
+test unwatched_spent_payment_is_complete ... ok
+test valid_transaction_resolves_only_regular_inputs ... ok
+test watched_spent_payment_is_found ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/watchkey_scripts.rs (target/debug/deps/watchkey_scripts-a7d032f282cac264)
+
+running 6 tests
+test chunked_key_hash_counts_as_its_joined_bytes ... ok
+test plutus_reference_script_bytes_are_not_credentials ... ok
+test reference_script_without_its_tag_24_wrapper_is_incomplete ... ok
+test unknown_reference_script_type_is_incomplete ... ok
+test deep_native_script_is_walked_without_a_depth_cap ... ok
+test reference_scripts_share_one_walk_budget ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/window.rs (target/debug/deps/window-43dcf5a27a5d2063)
+
+running 20 tests
+test empty_window_yields_stalled ... ok
+test certify_spend_region_upgrades_only_on_a_matching_inclusion_proof ... ok
+test ffi_boundary::null_and_empty_guards ... ok
+test ffi_boundary::truncated_window_stalls_window_too_short_never_no_spend ... ok
+test dropped_spending_block_yields_stalled_never_unspent ... ok
+test ffi_boundary::dropped_block_stalls_broken_segment ... ok
+test truncated_window_before_the_spend_yields_stalled_never_unspent ... ok
+test malformed_block_fails_closed_to_decode ... ok
+test swapped_body_fails_the_bind ... ok
+test ffi_boundary::spend_observed_marshals_with_spending_txid ... ok
+test tampered_commitment_fails_the_bind ... ok
+test phantom_output_index_yields_stalled_never_unspent ... ok
+test spending_block_in_window_yields_spent_observed_at_block ... ok
+test ffi_boundary::no_spend_observed_marshals_with_basis_and_assumptions ... ok
+test stale_tip_yields_stalled_tip_too_old ... ok
+test swapped_body_in_window_yields_stalled_never_unspent ... ok
+test unspent_outpoint_in_verified_window_yields_unspent_as_of_tip ... ok
+test window_tip_above_certified_anchor_yields_stalled ... ok
+test window_that_misses_creation_yields_stalled_never_unspent ... ok
+test authentic_block_body_binds_to_its_header_commitment ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/windowed_consumer.rs (target/debug/deps/windowed_consumer-2441a75e3ea113d5)
+
+running 5 tests
+test consumer_refuses_an_unanchored_cert_chain ... ok
+test consumer_refuses_a_truncated_window_never_proceeds ... ok
+test consumer_refuses_a_spent_outpoint ... ok
+test consumer_proceeds_on_a_no_spend_observed_window ... ok
+test the_example_runs_all_legs_and_exits_zero ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.23s
+
+   Doc-tests sextant
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

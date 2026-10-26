@@ -1,0 +1,6 @@
+checked out f928b457bfd7774551ace34aafb0b9d06b4ff950
+test exit=0
+clippy exit=0
+fmt exit=0
+no-default-features check exit=0
+all-features test exit=0

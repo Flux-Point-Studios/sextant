@@ -1,0 +1,4 @@
+golden exit=101
+all exit=101
+clippy exit=0
+fmt exit=0

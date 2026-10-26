@@ -1,0 +1,340 @@
+[
+ [
+  "M01",
+  "budget exhaustion keeps complete=true",
+  "KILLED",
+  [
+   "reference_scripts_share_one_walk_budget"
+  ],
+  null
+ ],
+ [
+  "M02",
+  "drop native ref-script trailing-bytes check",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "exploit_plutus_script_ref_trailing_bytes_unchecked"
+   ]
+  ]
+ ],
+ [
+  "M03",
+  "accept indefinite bytes inside tag 24",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_tag24_variants"
+   ]
+  ]
+ ],
+ [
+  "M04",
+  "per-output budget instead of shared",
+  "KILLED",
+  [
+   "reference_scripts_share_one_walk_budget"
+  ],
+  null
+ ],
+ [
+  "M05",
+  "drop tag-24 check",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_tag24_variants"
+   ]
+  ]
+ ],
+ [
+  "M06",
+  "unknown script type accepted",
+  "KILLED",
+  [
+   "unknown_reference_script_type_is_incomplete"
+  ],
+  null
+ ],
+ [
+  "M07",
+  "drop [type, script] arity check",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_tag24_variants"
+   ]
+  ]
+ ],
+ [
+  "M08",
+  "never inspect key 3",
+  "KILLED",
+  [
+   "collateral_return_refscript",
+   "reference_script_native",
+   "reference_script_without_its_tag_24_wrapper_is_incomplete",
+   "reference_scripts_share_one_walk_budget",
+   "unknown_reference_script_type_is_incomplete"
+  ],
+  null
+ ],
+ [
+  "M09",
+  "ref-script error does not mark incomplete",
+  "KILLED",
+  [
+   "reference_script_without_its_tag_24_wrapper_is_incomplete",
+   "unknown_reference_script_type_is_incomplete"
+  ],
+  null
+ ],
+ [
+  "M10",
+  "misplaced break skipped instead of Err",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_indefinite_abuse_in_deep_walk"
+   ]
+  ]
+ ],
+ [
+  "M11",
+  "indefinite map accepts break while a value is owed",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_indefinite_abuse_in_deep_walk"
+   ]
+  ]
+ ],
+ [
+  "M12",
+  "indefinite bytes not joined (skipped)",
+  "KILLED",
+  [
+   "chunked_key_hash_counts_as_its_joined_bytes"
+  ],
+  null
+ ],
+ [
+  "M13",
+  "29-byte reward credential not matched",
+  "KILLED",
+  [
+   "pool_reward_account"
+  ],
+  null
+ ],
+ [
+  "M14",
+  "budget never decremented",
+  "KILLED",
+  [
+   "reference_scripts_share_one_walk_budget"
+  ],
+  null
+ ],
+ [
+  "M15",
+  "definite map counts pairs not items",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_budget_counts_every_node_kind"
+   ]
+  ]
+ ],
+ [
+  "M16",
+  "drop KNOWN_BODY_KEYS check",
+  "KILLED",
+  [
+   "unsupported_era_body_key"
+  ],
+  null
+ ],
+ [
+  "M17",
+  "KNOWN_BODY_KEYS widened to 0..=22",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_body_key_shapes"
+   ]
+  ]
+ ],
+ [
+  "M18",
+  "drop native_script_use from transaction_use",
+  "KILLED",
+  [
+   "native_script_deep70",
+   "native_script_sig"
+  ],
+  null
+ ],
+ [
+  "M19",
+  "drop witness_use from transaction_use",
+  "KILLED",
+  [
+   "vkey_witness_c_control"
+  ],
+  null
+ ],
+ [
+  "M20",
+  "drop output_use from transaction_use",
+  "KILLED",
+  [
+   "collateral_return_refscript",
+   "output_payment",
+   "output_stake",
+   "reference_script_native"
+  ],
+  null
+ ],
+ [
+  "M21",
+  "verdict: gap outranks use",
+  "KILLED",
+  [
+   "collateral_return_refscript",
+   "pool_owner_tagged_set",
+   "pool_reward_account"
+  ],
+  null
+ ],
+ [
+  "M22",
+  "surfaces complete = any instead of all",
+  "KILLED",
+  [
+   "unknown_cert_kind",
+   "unsupported_era_body_key"
+  ],
+  null
+ ],
+ [
+  "M23",
+  "input_use ignores is_valid",
+  "KILLED",
+  [
+   "invalid_transaction_resolves_only_collateral_inputs",
+   "phase2_collateral_input"
+  ],
+  null
+ ],
+ [
+  "M24",
+  "witness_use drops bootstrap",
+  "KILLED",
+  [
+   "watchkey::tests::watched_bootstrap_witness_is_found"
+  ],
+  null
+ ],
+ [
+  "M25",
+  "output_use skips collateral return",
+  "KILLED",
+  [
+   "collateral_return_refscript",
+   "watchkey::tests::malformed_collateral_return_is_incomplete",
+   "watchkey::tests::watched_collateral_return_credential_is_found"
+  ],
+  null
+ ],
+ [
+  "M26",
+  "native ref script not walked",
+  "KILLED",
+  [
+   "collateral_return_refscript",
+   "reference_script_native",
+   "reference_scripts_share_one_walk_budget"
+  ],
+  null
+ ],
+ [
+  "M27",
+  "certificate arity check dropped",
+  "SURVIVED",
+  [],
+  [
+   "SURVIVED",
+   []
+  ]
+ ],
+ [
+  "M28",
+  "transaction_use passes is_valid=true",
+  "KILLED",
+  [
+   "phase2_collateral_input"
+  ],
+  null
+ ],
+ [
+  "M29",
+  "exhaustion stops the walk early (Ok) but marks gap",
+  "SURVIVED",
+  [],
+  [
+   "SURVIVED",
+   []
+  ]
+ ],
+ [
+  "M30",
+  "budget limit 100_000 -> 1_000",
+  "KILLED",
+  [
+   "deep_native_script_is_walked_without_a_depth_cap",
+   "reference_scripts_share_one_walk_budget"
+  ],
+  null
+ ],
+ [
+  "M31",
+  "map output: legacy outputs refused",
+  "KILLED",
+  [
+   "output_payment",
+   "output_stake",
+   "supported_era_no_use",
+   "watchkey::tests::unwatched_output_is_not_found_but_complete"
+  ],
+  null
+ ],
+ [
+  "M32",
+  "required signer of wrong length accepted",
+  "SURVIVED",
+  [],
+  [
+   "KILLED",
+   [
+    "defended_credential_encodings"
+   ]
+  ]
+ ]
+]

@@ -1,0 +1,34 @@
+CONTROL (unmutated) -> SURVIVED in 22s
+M01 KILLED           1s  budget exhaustion keeps complete=true  kills=['reference_scripts_share_one_walk_budget']  redteam=None
+M02 SURVIVED         1s  drop native ref-script trailing-bytes check  kills=[]  redteam=('KILLED', ['exploit_plutus_script_ref_trailing_bytes_unchecked'])
+M03 SURVIVED         1s  accept indefinite bytes inside tag 24  kills=[]  redteam=('KILLED', ['defended_tag24_variants'])
+M04 KILLED           1s  per-output budget instead of shared  kills=['reference_scripts_share_one_walk_budget']  redteam=None
+M05 SURVIVED         1s  drop tag-24 check  kills=[]  redteam=('KILLED', ['defended_tag24_variants'])
+M06 KILLED           1s  unknown script type accepted  kills=['unknown_reference_script_type_is_incomplete']  redteam=None
+M07 SURVIVED         1s  drop [type, script] arity check  kills=[]  redteam=('KILLED', ['defended_tag24_variants'])
+M08 KILLED           1s  never inspect key 3  kills=['collateral_return_refscript', 'reference_script_native', 'reference_script_without_its_tag_24_wrapper_is_incomplete', 'reference_scripts_share_one_walk_budget', 'unknown_reference_script_type_is_incomplete']  redteam=None
+M09 KILLED           1s  ref-script error does not mark incomplete  kills=['reference_script_without_its_tag_24_wrapper_is_incomplete', 'unknown_reference_script_type_is_incomplete']  redteam=None
+M10 SURVIVED         1s  misplaced break skipped instead of Err  kills=[]  redteam=('KILLED', ['defended_indefinite_abuse_in_deep_walk'])
+M11 SURVIVED         1s  indefinite map accepts break while a value is owed  kills=[]  redteam=('KILLED', ['defended_indefinite_abuse_in_deep_walk'])
+M12 KILLED           1s  indefinite bytes not joined (skipped)  kills=['chunked_key_hash_counts_as_its_joined_bytes']  redteam=None
+M13 KILLED           1s  29-byte reward credential not matched  kills=['pool_reward_account']  redteam=None
+M14 KILLED           1s  budget never decremented  kills=['reference_scripts_share_one_walk_budget']  redteam=None
+M15 SURVIVED         1s  definite map counts pairs not items  kills=[]  redteam=('KILLED', ['defended_budget_counts_every_node_kind'])
+M16 KILLED           1s  drop KNOWN_BODY_KEYS check  kills=['unsupported_era_body_key']  redteam=None
+M17 SURVIVED         1s  KNOWN_BODY_KEYS widened to 0..=22  kills=[]  redteam=('KILLED', ['defended_body_key_shapes'])
+M18 KILLED           1s  drop native_script_use from transaction_use  kills=['native_script_deep70', 'native_script_sig']  redteam=None
+M19 KILLED           1s  drop witness_use from transaction_use  kills=['vkey_witness_c_control']  redteam=None
+M20 KILLED           1s  drop output_use from transaction_use  kills=['collateral_return_refscript', 'output_payment', 'output_stake', 'reference_script_native']  redteam=None
+M21 KILLED           1s  verdict: gap outranks use  kills=['collateral_return_refscript', 'pool_owner_tagged_set', 'pool_reward_account']  redteam=None
+M22 KILLED           1s  surfaces complete = any instead of all  kills=['unknown_cert_kind', 'unsupported_era_body_key']  redteam=None
+M23 KILLED           1s  input_use ignores is_valid  kills=['invalid_transaction_resolves_only_collateral_inputs', 'phase2_collateral_input']  redteam=None
+M24 KILLED           1s  witness_use drops bootstrap  kills=['watchkey::tests::watched_bootstrap_witness_is_found']  redteam=None
+M25 KILLED           1s  output_use skips collateral return  kills=['collateral_return_refscript', 'watchkey::tests::malformed_collateral_return_is_incomplete', 'watchkey::tests::watched_collateral_return_credential_is_found']  redteam=None
+M26 KILLED           1s  native ref script not walked  kills=['collateral_return_refscript', 'reference_script_native', 'reference_scripts_share_one_walk_budget']  redteam=None
+M27 SURVIVED         1s  certificate arity check dropped  kills=[]  redteam=('SURVIVED', [])
+M28 KILLED           1s  transaction_use passes is_valid=true  kills=['phase2_collateral_input']  redteam=None
+M29 SURVIVED         1s  exhaustion stops the walk early (Ok) but marks gap  kills=[]  redteam=('SURVIVED', [])
+M30 KILLED           1s  budget limit 100_000 -> 1_000  kills=['deep_native_script_is_walked_without_a_depth_cap', 'reference_scripts_share_one_walk_budget']  redteam=None
+M31 KILLED           1s  map output: legacy outputs refused  kills=['output_payment', 'output_stake', 'supported_era_no_use', 'watchkey::tests::unwatched_output_is_not_found_but_complete']  redteam=None
+M32 SURVIVED         1s  required signer of wrong length accepted  kills=[]  redteam=('KILLED', ['defended_credential_encodings'])
+exit=0

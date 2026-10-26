@@ -1,0 +1,7 @@
+checked out 8efa0d59ddf5df2ad096bd1564ccf4e0dc14ad5c
+python test exit=0
+test exit=0
+all-features exit=0
+clippy exit=0
+fmt exit=0
+no_std exit=0

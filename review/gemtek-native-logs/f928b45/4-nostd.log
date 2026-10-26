@@ -1,0 +1,18 @@
+   Compiling generic-array v0.14.7
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+    Checking zeroize v1.9.0
+    Checking memchr v2.8.3
+    Checking digest v0.9.0
+    Checking crypto-mac v0.8.0
+    Checking block-buffer v0.9.0
+    Checking blake2 v0.9.2
+    Checking amaru-curve25519-dalek v3.2.0
+    Checking sha2 v0.9.9
+   Compiling syn v2.0.118
+   Compiling serde_derive v1.0.228
+    Checking sextant v0.1.0 (/home/deci/work/wt-sextant-u1-golden-651148e)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.97s
