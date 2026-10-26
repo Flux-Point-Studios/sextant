@@ -12,7 +12,7 @@ const ORACLE: &str = include_str!("vectors/u1_byron_vectors.json");
 
 oracle_tests!(
     ORACLE,
-    "4da9be0637bfee61a21267f2022a982f7da40a2c4b92a22cd2cb2ce4f07ec102";
+    "a12c95834736d1b070d076ddf34740b26c6e5738680bcd70499c5635181680ca";
     byron_icarus_unwatched,
     byron_daedalus_unwatched,
     byron_watched_bootstrap,
@@ -28,6 +28,11 @@ oracle_tests!(
     byron_payload_arity_2,
     byron_root_27_bytes,
     byron_attributes_not_a_map,
+    byron_attributes_value_not_bytes,
+    byron_attributes_key_not_uint,
+    byron_attributes_key_over_255,
+    byron_attributes_chunked_value,
+    byron_attributes_indefinite_map,
     byron_payload_trailing_byte,
     byron_foreign_tag,
     byron_chunked_payload,
@@ -43,8 +48,16 @@ oracle_tests!(
     witness_vkey_arity_4,
     witness_bootstrap_row_not_array,
     witness_bootstrap_slot_map,
+    witness_bootstrap_signature_63,
+    witness_bootstrap_chain_code_31,
+    witness_bootstrap_attributes_not_bytes,
+    witness_vkey_signature_not_bytes,
+    witness_vkey_signature_63,
+    witness_vkey_signature_is_break,
     dominance_malformed_row_then_watched,
     dominance_number_row_then_watched,
     dominance_bad_byron_watched_vkey,
     dominance_reward_input_then_watched_input,
+    required_bootstrap_attributes_is_break,
+    byron_attribute_map_value_is_break,
 );

@@ -303,6 +303,106 @@
       }
     },
     {
+      "name": "byron_attributes_value_not_bytes",
+      "description": "an attribute whose value is a number, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582383581c00000000000000000000000000000000000000000000000000000000a10105001a3be190de"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_key_not_uint",
+      "description": "an attribute keyed by a byte string, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582483581c00000000000000000000000000000000000000000000000000000000a1410140001adf364e2a"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_key_over_255",
+      "description": "an attribute keyed 256, past Word8, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000a119010040001a81e656da"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_chunked_value",
+      "description": "an attribute value as an indefinite byte string, under a matching CRC",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582883581c00000000000000000000000000000000000000000000000000000000a1015f41004101ff001a2bda4503"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attributes_indefinite_map",
+      "description": "the attributes as an indefinite map {_ 1: h'00'}, which the ledger reads",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582583581c00000000000000000000000000000000000000000000000000000000bf014100ff001a10e30338"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "NO_USE"
+      }
+    },
+    {
       "name": "byron_payload_trailing_byte",
       "description": "a payload with a byte after its item, under a matching CRC",
       "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
@@ -603,6 +703,126 @@
       }
     },
     {
+      "name": "witness_bootstrap_signature_63",
+      "description": "a bootstrap row whose signature is 63 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2583f5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_chain_code_31",
+      "description": "a bootstrap row whose chain code is 31 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a581fcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_bootstrap_attributes_not_bytes",
+      "description": "a bootstrap row whose attributes are a number",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10281845820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc05f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_vkey_signature_not_bytes",
+      "description": "a vkey witness row whose signature is a number",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081825820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b205f5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_vkey_signature_63",
+      "description": "a vkey witness row whose signature is 63 bytes",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081825820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2583f5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5af5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "witness_vkey_signature_is_break",
+      "description": "a definite vkey witness row whose signature is a break",
+      "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a10081825820b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2fff5f6",
+      "target_vkh": "7c064ef98abeb5c3ca85fad6256127b2c9ddae79e232e4f27c455f41",
+      "resolve": {
+        "8888888888888888888888888888888888888888888888888888888888888888#0": "82d818582183581cf195a03699f48d9660d7159f66bf0b0c3eda9e454e526242dfc8ced4a0001a1648e9b2"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
       "name": "dominance_malformed_row_then_watched",
       "description": "a 31-byte-vkey bootstrap row, then the watched key's row",
       "raw_tx_hex": "84a10081825820888888888888888888888888888888888888888888888888888888888888888800a1028284581fb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b258405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0845820b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b158405a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc41a0f5f6",
@@ -681,6 +901,46 @@
           "complete": false
         },
         "verdict": "USE_FOUND"
+      }
+    },
+    {
+      "name": "required_bootstrap_attributes_is_break",
+      "description": "a definite bootstrap row whose attributes are a break",
+      "raw_tx_hex": "84a3008182582055555555555555555555555555555555555555555555555555555555555555550001800201a10281845820020202020202020202020202020202020202020202020202020202020202020258400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000058200000000000000000000000000000000000000000000000000000000000000000fff5f6",
+      "target_vkh": "fabf2715078ff3134bfb19a9d28f46c47c6147b9dc1dc6edbf7bd61b",
+      "resolve": {
+        "5555555555555555555555555555555555555555555555555555555555555555#0": "6006a33bda74565981b26cd62208cbcc87bcf860cb874e1c69fb533147"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": false
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": true
+        },
+        "verdict": "INCOMPLETE"
+      }
+    },
+    {
+      "name": "byron_attribute_map_value_is_break",
+      "description": "a checksum-correct Byron payload [root, {0: break}, 0]",
+      "raw_tx_hex": "84a3008182582055555555555555555555555555555555555555555555555555555555555555550001800201a0f5f6",
+      "target_vkh": "fabf2715078ff3134bfb19a9d28f46c47c6147b9dc1dc6edbf7bd61b",
+      "resolve": {
+        "5555555555555555555555555555555555555555555555555555555555555555#0": "82d818582383581c00000000000000000000000000000000000000000000000000000000a100ff001ad470f3de"
+      },
+      "expected": {
+        "use_surfaces": {
+          "target_found": false,
+          "complete": true
+        },
+        "resolved_input": {
+          "target_found": false,
+          "complete": false
+        },
+        "verdict": "INCOMPLETE"
       }
     }
   ]
