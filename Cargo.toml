@@ -11,6 +11,7 @@ license = "Apache-2.0"
 # build. Harness commands operate on the `sextant` package only.
 [workspace]
 members = ["tools/harvest", "tools/sentry", "tools/utxo-store", "tools/snapshot", "tools/guest-canary"]
+exclude = ["heliograph"]
 resolver = "3"
 
 # rlib only in the manifest: a multi-crate-type lib is built with ALL its

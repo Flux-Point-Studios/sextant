@@ -1,0 +1,26 @@
+# Agent tooling (never committed)
+.claude/
+
+# Local loop plan (session-local, never committed — mirrors the Sextant convention)
+LOOP.md
+
+# Rust
+/target
+**/target
+Cargo.lock.orig
+
+# Node / TS SDK
+node_modules/
+dist/
+
+# Foundry
+/contracts/out
+/contracts/cache
+/contracts/broadcast
+
+# Local scratch
+/scratch
+*.log
+
+# Audit/download working area (never committed)
+.scratch/

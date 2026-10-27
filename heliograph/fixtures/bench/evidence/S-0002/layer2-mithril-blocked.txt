@@ -1,0 +1,132 @@
+cargo:warning=rustc +succinct --version: "rustc 1.94.0-dev\n"
+[sp1]   Downloading crates ...
+[sp1]    Downloaded crossbeam-epoch v0.9.20
+[sp1]    Downloaded anyhow v1.0.103
+[sp1]    Downloaded ciborium-io v0.2.2
+[sp1]    Downloaded ciborium-ll v0.2.2
+[sp1]    Downloaded num_cpus v1.17.0
+[sp1]    Downloaded zeroize_derive v1.5.0
+[sp1]    Downloaded threadpool v1.8.1
+[sp1]    Downloaded blake2 v0.10.6
+[sp1]    Downloaded thiserror-impl v2.0.18
+[sp1]    Downloaded crossbeam-deque v0.8.7
+[sp1]    Downloaded thiserror v2.0.18
+[sp1]    Downloaded num-rational v0.4.2
+[sp1]    Downloaded ciborium v0.2.2
+[sp1]    Downloaded crossbeam-utils v0.8.22
+[sp1]    Downloaded half v2.7.1
+[sp1]    Downloaded chrono v0.4.45
+[sp1]    Downloaded blst v0.3.16
+[sp1]    Downloaded rayon-core v1.13.0
+[sp1]    Downloaded rayon v1.12.0
+[sp1]    Downloaded mithril-stm v0.10.5
+[sp1]     Compiling zerocopy v0.8.54
+[sp1]     Compiling serde_core v1.0.228
+[sp1]     Compiling serde v1.0.228
+[sp1]     Compiling syn v2.0.118
+[sp1]     Compiling num-traits v0.2.19
+[sp1]     Compiling subtle v2.6.1
+[sp1]     Compiling crossbeam-utils v0.8.22
+[sp1]     Compiling digest v0.10.7
+[sp1]     Compiling crossbeam-epoch v0.9.20
+[sp1]     Compiling libc v0.2.186
+[sp1]     Compiling num-integer v0.1.46
+[sp1]     Compiling num-bigint v0.4.8
+[sp1]     Compiling crossbeam-deque v0.8.7
+[sp1]     Compiling ff v0.13.1
+[sp1]     Compiling rayon-core v1.13.0
+[sp1]     Compiling num_cpus v1.17.0
+[sp1]     Compiling blst v0.3.16
+[sp1]     Compiling ciborium-io v0.2.2
+[sp1]     Compiling anyhow v1.0.103
+[sp1]     Compiling thiserror v2.0.18
+[sp1]  warning: blst@0.3.16: cc: error: unrecognized argument in option '-mabi=lp64'
+[sp1]  warning: blst@0.3.16: cc: note: valid arguments to '-mabi=' are: ms sysv
+[sp1]  error: failed to run custom build command for `blst v0.3.16`
+[sp1]  
+[sp1]  Caused by:
+[sp1]    process didn't exit successfully: `/var/target/elf-compilation/release/build/blst-ecba6cd217351ea7/build-script-build` (exit status: 1)
+[sp1]    --- stdout
+[sp1]    cargo:rustc-cfg=feature="std"
+[sp1]    cargo:rerun-if-env-changed=BLST_TEST_NO_STD
+[sp1]    Using blst source directory /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blst-0.3.16/blst
+[sp1]    cargo:rerun-if-changed=/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blst-0.3.16/blst/src
+[sp1]    Compiling in portable mode without ISA extensions
+[sp1]    cargo:rerun-if-env-changed=CC_FORCE_DISABLE
+[sp1]    CC_FORCE_DISABLE = None
+[sp1]    cargo:rerun-if-env-changed=CC_riscv64im-succinct-zkvm-elf
+[sp1]    CC_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:rerun-if-env-changed=CC_riscv64im_succinct_zkvm_elf
+[sp1]    CC_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CC
+[sp1]    TARGET_CC = None
+[sp1]    cargo:rerun-if-env-changed=CC
+[sp1]    CC = None
+[sp1]    cargo:rerun-if-env-changed=CROSS_COMPILE
+[sp1]    CROSS_COMPILE = None
+[sp1]    cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+[sp1]    cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+[sp1]    CRATE_CC_NO_DEFAULTS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS
+[sp1]    CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CFLAGS
+[sp1]    TARGET_CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im_succinct_zkvm_elf
+[sp1]    CFLAGS_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im-succinct-zkvm-elf
+[sp1]    CFLAGS_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+[sp1]    cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+[sp1]    CRATE_CC_NO_DEFAULTS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS
+[sp1]    CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CFLAGS
+[sp1]    TARGET_CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im_succinct_zkvm_elf
+[sp1]    CFLAGS_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im-succinct-zkvm-elf
+[sp1]    CFLAGS_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+[sp1]    cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+[sp1]    CRATE_CC_NO_DEFAULTS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS
+[sp1]    CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CFLAGS
+[sp1]    TARGET_CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im_succinct_zkvm_elf
+[sp1]    CFLAGS_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im-succinct-zkvm-elf
+[sp1]    CFLAGS_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+[sp1]    cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+[sp1]    CRATE_CC_NO_DEFAULTS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS
+[sp1]    CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CFLAGS
+[sp1]    TARGET_CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im_succinct_zkvm_elf
+[sp1]    CFLAGS_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im-succinct-zkvm-elf
+[sp1]    CFLAGS_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+[sp1]    cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+[sp1]    CRATE_CC_NO_DEFAULTS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS
+[sp1]    CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=TARGET_CFLAGS
+[sp1]    TARGET_CFLAGS = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im_succinct_zkvm_elf
+[sp1]    CFLAGS_riscv64im_succinct_zkvm_elf = None
+[sp1]    cargo:rerun-if-env-changed=CFLAGS_riscv64im-succinct-zkvm-elf
+[sp1]    CFLAGS_riscv64im-succinct-zkvm-elf = None
+[sp1]    cargo:warning=cc: error: unrecognized argument in option '-mabi=lp64'
+[sp1]    cargo:warning=cc: note: valid arguments to '-mabi=' are: ms sysv
+[sp1]  
+[sp1]    --- stderr
+[sp1]  
+[sp1]  
+[sp1]    error occurred in cc-rs: command did not execute successfully (status code exit status: 1): LC_ALL="C" "cc" "-O2" "-ffunction-sections" "-fdata-sections" "-fPIC" "-march=rv64im" "-mabi=lp64" "-Wall" "-Wextra" "-ffreestanding" "-D__BLST_NO_ASM__" "-D__BLST_PORTABLE__" "-o" "/var/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/build/blst-eae857f0e558d409/out/3ce72ea41a6346fd-server.o" "-c" "/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blst-0.3.16/blst/src/server.c"
+[sp1]  
+[sp1]  
+[sp1]  warning: build failed, waiting for other jobs to finish...
+EXIT=101

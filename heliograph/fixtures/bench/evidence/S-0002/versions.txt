@@ -1,0 +1,29 @@
+S-0002 — SP1 guest compile bisect (Sextant mithril leg), run 2026-07-14 (UTC)
+
+Host
+  Windows 11 Pro 10.0.26200, Docker Desktop (server 29.1.3), Git Bash driver
+Container (named: hg-sp1-spike; volumes: hg-sp1-cargo-registry, hg-sp1-home)
+  rust:1.93-bookworm @ sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
+  host-side rustc 1.93.1 (01f6ddf75 2026-02-11), cargo 1.93.1, x86_64 linux
+SP1 toolchain (installed via `curl -sL https://sp1.succinct.xyz | bash` + sp1up)
+  cargo-prove sp1 (8252c29 2026-06-25T11:50:01.543258355Z)   [v6.3.1 line]
+  succinct rustup toolchain: rustc 1.94.0-dev
+  guest target: riscv64im-succinct-zkvm-elf
+C cross-compiler (layer 3 only; Debian bookworm package)
+  riscv64-unknown-elf-gcc (12.2.0-14+deb12u1+11+b2) 12.2.0
+  wired via CC_riscv64im_succinct_zkvm_elf=riscv64-unknown-elf-gcc
+
+Resolved guest crate pins (spikes/sp1-mithril/Cargo.lock)
+  sp1-zkvm 6.3.1, sp1-lib 6.3.1
+  sextant 0.1.0 @ git 90b2672aa3ee7a957ecaee0e33026337825efafa (pinned dep, not forked)
+  mithril-stm 0.10.5, blst 0.3.16 (features=["portable"]), chrono 0.4.45
+  rayon 1.12.0, rayon-core 1.13.0, subtle 2.6.1, getrandom 0.2.17 (via rand_core 0.6.4)
+
+Artifacts (built in-container at /var/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/sp1-mithril-guest)
+  layer-1 ELF (default graph)  sha256 0db3a6e3c141a5eb60a5245010c1666951f00083105ea923861fc24817435977  (230,824 B)
+  layer-3 ELF (+mithril)       sha256 6aae24ad3eb296a94e94c0579f68f3f91a2722bcb4b9639f1e765befd6a0a671  (1,414,672 B)
+    39 blst_* text symbols linked (blst_aggregated_in_g1/g2, blst_fp12_one, ...)
+    rebuild after blst cache purge reproduced the identical sha256 (in-container stability;
+    NOT the ADR-004 two-independent-builds check)
+  layer-3 vkey (cargo prove vkey) 0x004c3360d58ac7e46b33b44095f81524c3aada3eb4433235dc8b693cd98f5f7d
+    non-canonical: container build, not `cargo prove build --docker` (ADR-004 D1)

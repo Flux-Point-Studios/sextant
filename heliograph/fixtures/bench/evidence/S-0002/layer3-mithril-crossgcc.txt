@@ -1,0 +1,60 @@
+cargo:warning=rustc +succinct --version: "rustc 1.94.0-dev\n"
+[sp1]     Compiling zerocopy-derive v0.8.54
+[sp1]     Compiling serde_derive v1.0.228
+[sp1]     Compiling tracing-attributes v0.1.31
+[sp1]     Compiling futures-macro v0.3.32
+[sp1]     Compiling futures-util v0.3.32
+[sp1]     Compiling tracing v0.1.44
+[sp1]     Compiling zeroize_derive v1.5.0
+[sp1]     Compiling zerocopy v0.8.54
+[sp1]     Compiling zeroize v1.9.0
+[sp1]     Compiling blst v0.3.16
+[sp1]     Compiling serde v1.0.228
+[sp1]     Compiling p3-util v0.4.3-succinct
+[sp1]     Compiling futures-executor v0.3.32
+[sp1]     Compiling bincode v1.3.3
+[sp1]     Compiling futures v0.3.32
+[sp1]     Compiling threadpool v1.8.1
+[sp1]     Compiling sha2 v0.10.9
+[sp1]     Compiling thiserror-impl v2.0.18
+[sp1]     Compiling rayon v1.12.0
+[sp1]     Compiling thiserror v2.0.18
+[sp1]     Compiling ppv-lite86 v0.2.21
+[sp1]     Compiling half v2.7.1
+[sp1]     Compiling rand_chacha v0.3.1
+[sp1]     Compiling ciborium-ll v0.2.2
+[sp1]     Compiling rand v0.8.7
+[sp1]     Compiling p3-field v0.4.3-succinct
+[sp1]     Compiling ciborium v0.2.2
+[sp1]     Compiling p3-symmetric v0.4.3-succinct
+[sp1]     Compiling p3-matrix v0.4.3-succinct
+[sp1]     Compiling slop-algebra v6.3.1
+[sp1]     Compiling p3-dft v0.4.3-succinct
+[sp1]     Compiling slop-symmetric v6.3.1
+[sp1]     Compiling p3-challenger v0.4.3-succinct
+[sp1]     Compiling slop-primitives v6.3.1
+[sp1]     Compiling anyhow v1.0.103
+[sp1]     Compiling p3-mds v0.4.3-succinct
+[sp1]     Compiling p3-poseidon2 v0.4.3-succinct
+[sp1]     Compiling slop-challenger v6.3.1
+[sp1]     Compiling blake2 v0.10.6
+[sp1]     Compiling crypto-mac v0.8.0
+[sp1]     Compiling num-rational v0.4.2
+[sp1]     Compiling slop-poseidon2 v6.3.1
+[sp1]     Compiling p3-koala-bear v0.4.3-succinct
+[sp1]     Compiling p3-bn254-fr v0.4.3-succinct
+[sp1]     Compiling slop-koala-bear v6.3.1
+[sp1]     Compiling amaru-curve25519-dalek v3.2.0
+[sp1]     Compiling mithril-stm v0.10.5
+[sp1]     Compiling serde_json v1.0.150
+[sp1]     Compiling slop-bn254 v6.3.1
+[sp1]     Compiling sp1-primitives v6.3.1
+[sp1]     Compiling sp1-lib v6.3.1
+[sp1]     Compiling blake2 v0.9.2
+[sp1]     Compiling chrono v0.4.45
+[sp1]     Compiling sp1-zkvm v6.3.1
+[sp1]     Compiling sextant v0.1.0 (https://github.com/Flux-Point-Studios/sextant?rev=90b2672aa3ee7a957ecaee0e33026337825efafa#90b2672a)
+[sp1]     Compiling sp1-mithril-guest v0.1.0 (/work)
+[sp1]      Finished `release` profile [optimized] target(s) in 23.10s
+cargo:rustc-env=SP1_ELF_sp1-mithril-guest=/var/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/sp1-mithril-guest
+EXIT=0

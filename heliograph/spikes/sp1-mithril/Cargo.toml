@@ -1,0 +1,23 @@
+# S-0002 — SP1 arm of the M0 compile bisect (BENCH.md §6.1, ADR-001).
+# Standalone workspace: the spike never joins the heliograph root workspace.
+[package]
+name = "sp1-mithril-guest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+# Layer 2 of the bisect: pulls chrono + mithril-stm 0.10.5 -> blst 0.3.16 (C,
+# non-optional) + rayon (non-optional) into the guest graph.
+mithril = ["sextant/mithril", "dep:blst"]
+
+[dependencies]
+sp1-zkvm = "6.1.0"
+sextant = { git = "https://github.com/Flux-Point-Studios/sextant", rev = "90b2672aa3ee7a957ecaee0e33026337825efafa", default-features = false }
+# Feature-unification seam, no direct use: SP1 std thread spawn returns
+# Unsupported, and blst's da_pool() ThreadPool otherwise panics inside
+# verify_standard. no-threads makes blst single-threaded in-guest.
+blst = { version = "0.3.16", features = ["no-threads"], optional = true }

@@ -1,0 +1,27 @@
+# M0 host-side executor runner (x86, in-container): local execution of the
+# mithril guest over fixture bytes — NO proving. Records user/total cycles,
+# segment count, wall time, and the journaled verdict (BENCH.md §4.1 "execute").
+[package]
+name = "hg-m0-runner"
+version = "0.1.0"
+edition = "2021"
+# Same MSRV guard as the guest: keep fresh resolution inside rustc 1.88.
+rust-version = "1.88.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+# `prove` selects the in-process local executor; execution-only, no proving is
+# invoked. `default_executor()`'s LocalProver wraps the same ExecutorImpl but
+# its SessionInfo drops total_cycles, so the runner calls ExecutorImpl direct.
+risc0-zkvm = { version = "=3.0.5", features = ["prove"] }
+# Combine the user ELF with the v1compat kernel exactly as risc0-build v3.0.5
+# does (same pins as ../imageid).
+risc0-binfmt = "=3.0.4"
+risc0-zkos-v1compat = "=2.2.2"
+sha2 = "0.10"
+hex = "0.4"
+anyhow = "1"
+serde_json = "1"

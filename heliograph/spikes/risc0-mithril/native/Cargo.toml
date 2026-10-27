@@ -1,0 +1,17 @@
+# M0 native differential baseline (BENCH.md §2.2, §4.3): the same
+# parse → content-hash → verify_standard pipeline as the guest, on native
+# Sextant (mithril-stm 0.10.5 + crates.io blst), same verdict mapping.
+[package]
+name = "hg-m0-native"
+version = "0.1.0"
+edition = "2021"
+# Same MSRV guard as the guest: keep fresh resolution inside rustc 1.88.
+rust-version = "1.88.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+sextant = { git = "https://github.com/Flux-Point-Studios/sextant", rev = "90b2672aa3ee7a957ecaee0e33026337825efafa", default-features = false, features = ["mithril"] }
+anyhow = "1"

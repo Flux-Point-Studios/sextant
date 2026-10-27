@@ -1,0 +1,5 @@
+# cargo tree --features mithril -e normal -i blst  (sole path to BLS; no pure-Rust fallback exists in mithril-stm 0.10.5: blst is a non-optional dependency per the crates.io index)
+blst v0.3.16
+└── mithril-stm v0.10.5
+    └── sextant v0.1.0 (https://github.com/Flux-Point-Studios/sextant?rev=90b2672aa3ee7a957ecaee0e33026337825efafa#90b2672a)
+        └── sp1-mithril-guest v0.1.0 (/work)

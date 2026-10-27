@@ -47,6 +47,24 @@
       "status": "live"
     },
     {
+      "id": "heliograph-claims",
+      "name": "Heliograph canonical journal codec",
+      "desc": "Canonical no_std journal types and codec for portable Sextant verdicts, with 61 tests and a coverage ledger. Parked as of 2026-10-27; resume for the first consumer needing a Cardano fact verified on a chain that cannot run Sextant natively, such as an EVM state oracle or a bridge to a chain without a Cardano client.",
+      "kind": "toolkit",
+      "paths": ["heliograph/crates/hg-claims"],
+      "consumes": [],
+      "status": "experimental"
+    },
+    {
+      "id": "heliograph-zk-verdicts",
+      "name": "Heliograph portable ZK verdict design and experiments",
+      "desc": "Guest/prover design for CLAIMS checkpoint, extension, header-segment, inclusion and UTxO-read claims, plus deferred window/set claims and frozen SP1/RISC Zero Mithril spikes pinned before C-1. Parked as of 2026-10-27; resume for the first consumer needing a Cardano fact verified on a chain that cannot run Sextant natively, such as an EVM state oracle or a bridge to a chain without a Cardano client. Revived guests must use the in-repo Sextant by path.",
+      "kind": "toolkit",
+      "paths": ["heliograph/docs", "heliograph/spikes"],
+      "consumes": ["heliograph-claims", "mithril-certificate-verifier", "praos-header-verifier", "certified-utxo-read", "windowed-unspent"],
+      "status": "experimental"
+    },
+    {
       "id": "sextant-watchd",
       "name": "Windowed-unspent watch daemon",
       "desc": "An HTTP service: POST an outpoint, and it follows the chain from the creating block to the live tip over a node-to-node relay, re-verifies every block through the windowed follower, re-anchors to fresh Mithril certificates, and serves no_spend_observed, spend_observed or stalled as JSON. Wired for preprod only today, and it locates creating transactions through Koios.",
