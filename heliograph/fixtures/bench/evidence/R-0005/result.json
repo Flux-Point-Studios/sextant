@@ -1,0 +1,17 @@
+{
+  "elf": "/tmp/out/guest-vanilla.elf",
+  "exec_wall_s": 45.156884996,
+  "exit_code": "Halted(0)",
+  "fixture": "/repo/fixtures/bench/m0/F-MN1.json",
+  "fixture_sha256": "2b00e86a10affd1f8092bf307c9f3cfef533772d2ac3b60bb8adffd2c360922e",
+  "image_id": "68251e01d83f49194fbf4582db32f6217b9ceb661e6834febc7142b6082b3324",
+  "journal_hex": "00000000",
+  "paging_cycles": 66728259,
+  "reserved_cycles": 74590721,
+  "segments": 2551,
+  "status": "ok",
+  "total_cycles": 2674917376,
+  "user_cycles": 2533598396,
+  "user_elf_sha256": "fffac3a1df1cde68a03101ac558ddc5fc353d7a53cecc1a56e8861c5470cbe8e",
+  "verdict": 0
+}

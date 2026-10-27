@@ -1,0 +1,20 @@
+# Host-side image-ID derivation, byte-identical to risc0-build v3.0.5
+# (GuestListEntry::build, lib.rs:181-188): combine the user ELF with the
+# v1compat kernel ELF and compute the SHA-256-based image ID.
+[package]
+name = "imageid"
+version = "0.1.0"
+edition = "2021"
+# Same MSRV guard as the guest: keep fresh resolution inside rustc 1.88.
+rust-version = "1.88.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+risc0-binfmt = "=3.0.4"
+risc0-zkos-v1compat = "=2.2.2"
+sha2 = "0.10"
+hex = "0.4"
+anyhow = "1"

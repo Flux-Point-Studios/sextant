@@ -1,0 +1,11 @@
+[package]
+name = "hg-claims"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Canonical journal codec for heliograph claims (ADR-003): the buffer is the ABI."
+
+[dependencies]
+
+[dev-dependencies]
+hex = "0.4"

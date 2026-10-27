@@ -1,0 +1,17 @@
+{
+  "elf": "/tmp/out/guest-vanilla.elf",
+  "exec_wall_s": 0.036600726,
+  "exit_code": "Halted(0)",
+  "fixture": "/repo/fixtures/bench/m0/F-PP1.tampered.json",
+  "fixture_sha256": "2865b996b34e3234eea0805b31b8c2530dcfcbb684dc7c1f967659f2179ee251",
+  "image_id": "68251e01d83f49194fbf4582db32f6217b9ceb661e6834febc7142b6082b3324",
+  "journal_hex": "09000000",
+  "paging_cycles": 94713,
+  "reserved_cycles": 219631,
+  "segments": 2,
+  "status": "ok",
+  "total_cycles": 1572864,
+  "user_cycles": 1258520,
+  "user_elf_sha256": "fffac3a1df1cde68a03101ac558ddc5fc353d7a53cecc1a56e8861c5470cbe8e",
+  "verdict": 9
+}

@@ -1,0 +1,6 @@
+# Bisect layer 3: RISC Zero's accelerated blst fork at the tag matching
+# mithril-stm 0.10.5's exact `blst = 0.3.16` pin (BENCH.md §6.2; risc0.md §2).
+# Applied via `cargo --config <this file>` so layers 1-2 stay reproducible from
+# the unpatched manifest.
+[patch.crates-io]
+blst = { git = "https://github.com/risc0/blst", tag = "v0.3.16-risczero.0" }

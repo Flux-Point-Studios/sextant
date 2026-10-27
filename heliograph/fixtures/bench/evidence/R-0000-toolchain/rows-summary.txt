@@ -1,0 +1,48 @@
+M0 RISC Zero executor-tier rows (no proving) — 2026-07-15, container per versions.txt
+Runner: ExecutorImpl (risc0-zkvm =3.0.5 local executor, the engine default_executor()'s
+LocalProver wraps; SessionInfo drops total_cycles, hence the direct call).
+Verdict mapping: 0 accept / 9 content-hash mismatch (see R-0000-toolchain/README.md).
+Guest ELFs: vanilla fffac3a1…70cbe8e (image_id 68251e01…082b3324),
+            accel   563d55fc…a0ded07 (image_id dab6d60d…777021f0).
+
+row     fixture  backend             variant   guest  native  match  user_cycles    total_cycles   segments  exec_s  stage_split(read/parse/hash/verify)
+R-0001  F-PP1    blst-vanilla        golden    0      0       yes    197,220,545    207,093,760    198       3.322   758,099/80,470/413,671/195,961,469
+R-0002  F-PP1    blst-vanilla        tampered  9      9       yes    1,258,520      1,572,864      2         0.037   758,099/80,470/413,226/— (hash gate)
+R-0003  F-PP1    blst-risczero-fork  golden    0      0       yes    51,717,002     56,098,816     54        1.241   758,099/80,470/413,671/50,457,942
+R-0004  F-PP1    blst-risczero-fork  tampered  9      9       yes    1,258,520      1,572,864      2         0.040   758,099/80,470/413,226/— (hash gate)
+R-0005  F-MN1    blst-vanilla        golden    0      0       yes    2,533,598,396  2,674,917,376  2,551     45.157  16,692,605/1,137,529/8,244,323/2,507,515,790
+R-0006  F-MN1    blst-vanilla        tampered  9      9       yes    26,082,075     27,394,048     27        0.766   16,692,605/1,137,529/8,243,878/— (hash gate)
+R-0007  F-MN1    blst-risczero-fork  golden    0      0       yes    930,175,201    1,011,875,840  965       22.630  16,692,605/1,137,529/8,244,323/904,092,623
+R-0008  F-MN1    blst-risczero-fork  tampered  9      9       yes    26,082,075     27,394,048     27        0.876   16,692,605/1,137,529/8,243,878/— (hash gate)
+
+Native context (same container, x86, sextant 90b2672 mithril / crates.io blst):
+F-PP1 golden accept, verify_standard 4.9–13.8 ms across runs; F-MN1 golden accept,
+verify_standard 75–177 ms across runs (first-touch/cache variance; per-row native.log
+carries the row-paired measurement). Tampered: verdict 9 in <1 ms (hash gate).
+
+Acceleration delta (risc0/blst bigint2 fork vs vanilla portable C, verify stage):
+F-PP1 195.96M -> 50.46M user cycles (3.88x); F-MN1 2,507.5M -> 904.1M (2.77x).
+
+Tamper rows reject at the BENCH.md §2.1 step-2 content-hash gate (verdict 9), never
+reaching verify_standard — Certificate::compute_hash covers multi_signature for
+standard certificates, so a one-byte signature tamper flips the content hash first.
+Native rejects identically on the same bytes; differential green on all 8 rows.
+
+Determinism observation: repeated runs of the identical (ELF, input) pair reproduce
+journal bytes exactly, but user_cycles varies by ~155 cycles run-to-run on the golden
+paths (e.g. R-0001 197,220,545 vs probe 197,220,700). The verify stage consumes host
+entropy (getrandom -> sys_random; blst uses random blinding scalars in aggregate
+verification), so cycle counts are entropy-dependent at the margin. Journals are
+unaffected. BENCH.md §2.4's run-twice determinism check must compare journals, not
+cycle counts, and proving-tier rows should record this variance.
+
+Runtime-features finding (the "rayon question", full narrative in spike README):
+mithril-stm 0.10.5 never calls rayon in library code (doc-comment examples only) —
+rayon-core never initializes in-guest. The actual thread user on the verify path is
+blst's Rust-binding worker pool: std::thread spawn is Unsupported on riscv32im-
+risc0-zkvm-elf, first surfacing as a disabled sys_getenv (RUST_MIN_STACK read inside
+std::thread::Builder::spawn), then as threadpool-1.8.1's unwrap panic. Fixed with
+two additive guest-side Cargo features, zero Sextant/mithril-stm changes:
+  risc0-zkvm-platform =2.2.2 features=["sys-getenv"]
+  blst 0.3.16 features=["no-threads"]   (blst's documented wasm/serial path)
+No upstream ask is needed for the RISC Zero arm.

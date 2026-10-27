@@ -1,0 +1,33 @@
+BENCH.md §2.4 tamper-control fixtures — derivation manifest
+(script: fixtures/bench/m0/make-tampered.py, run 2026-07-14, Python 3.11.0)
+
+Both tampers flip exactly ONE byte of the fixture file, inside the
+multi_signature hex value, targeting the last ASCII digit of the first number
+of the first "sigma" byte array in the hex-decoded STM signature JSON (the
+first single signature's BLS sigma point). ASCII digits share the high nibble
+0x3, so decrementing the digit flips only the low-nibble hex character: the
+string stays valid hex, the inner JSON stays valid JSON, the byte value stays
+<= 255 — the tamper reaches the cryptographic payload, not the encoding.
+
+F-PP1.tampered.json
+  src sha256  e181255a5721a0d5e7005109aabefe47000f838492d36b746b52e2c3e2a116b0
+  dst sha256  2865b996b34e3234eea0805b31b8c2530dcfcbb684dc7c1f967659f2179ee251
+  file offset 2479 (0-based), hex char '4' -> '3'
+  multi_signature hex value spans file bytes [2422, 5130)
+  decoded signature-JSON byte 28 (last digit of first sigma number): '4' -> '3'
+  effect: first sigma byte 134 -> 133
+
+F-MN1.tampered.json
+  src sha256  2b00e86a10affd1f8092bf307c9f3cfef533772d2ac3b60bb8adffd2c360922e
+  dst sha256  c9b04c51596a703c54fb9f5d6f36cf394700f984636162b4bc0e0485a579ac73
+  file offset 13765 (0-based), hex char '1' -> '0'
+  multi_signature hex value spans file bytes [13708, 113528)
+  decoded signature-JSON byte 28 (last digit of first sigma number): '1' -> '0'
+  effect: first sigma byte 131 -> 130
+
+Expected rejection path (BENCH.md §2.1 pipeline order): Sextant's
+Certificate::compute_hash covers the multi_signature string for standard
+certificates (mithril.rs, standard branch feeds signed_entity_type +
+multi_signature), so the single-byte tamper is caught at step 2
+(content-hash integrity, verdict code 9) before verify_standard runs —
+in BOTH the guest and the native differential binary, which must agree.

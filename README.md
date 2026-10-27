@@ -135,7 +135,10 @@ tests/          integration + differential test suites and the real block/cert v
 examples/       runnable consumer gates
 docs/           the Mithril UTxO-set commitment proposal note
 tools/harvest/  a workspace member that fetches real vectors (not part of the trust core)
+heliograph/     parked portable ZK verdicts; isolated workspace and frozen zkVM spikes
 ```
+
+See [Heliograph](heliograph/README.md) for its status and resume trigger.
 
 ---
 

@@ -1,0 +1,77 @@
+M0 executor stage — SP1 arm (execution only, NO proving). Applies to runs
+R-SP1-E1..E4 (this file is duplicated into each run dir).
+
+date (UTC):        2026-07-15
+vendor:            SP1 (Succinct) v6 "Hypercube" line
+host container:    hg-sp1-spike, image rust:1.93-bookworm
+                   rust@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31
+                   recreated 2026-07-15 with --shm-size=8g (see quirks below)
+host hardware:     Windows 11 workstation, Docker Desktop WSL2 VM: 4 CPUs,
+                   11.68 GiB RAM (NOT BENCH_HARDWARE; executor-stage context
+                   only — wall times here are not threshold-bearing)
+guest toolchain:   cargo-prove sp1 (8252c29 2026-06-25, v6.3.1), succinct
+                   rustc 1.94.0-dev, target riscv64im-succinct-zkvm-elf
+C cross-compiler:  riscv64-unknown-elf-gcc (Debian 12.2.0-14+deb12u1+11+b2)
+                   via CC_riscv64im_succinct_zkvm_elf (blst portable C,
+                   no-asm; NON-CANONICAL build per ADR-004 D1 — the pinned
+                   --docker image lacks a cross-gcc)
+guest crates:      sp1-zkvm 6.3.1; sextant @ 90b2672aa3ee7a957ecaee0e33026337825efafa
+                   (default-features off + mithril); mithril-stm 0.10.5;
+                   blst 0.3.16 with features ["no-threads"] (REQUIRED — see
+                   rayon/threads note); rayon 1.12.0 / rayon-core 1.13.0
+                   in-graph, unused at runtime; threadpool 1.8.1 in-graph
+                   (blst binding dep), neutralized by no-threads
+BLS/STM backend:   blst 0.3.16 C cross-compiled by gcc ("blst-gcc") — zero
+                   SP1 syscall acceleration; software pairing
+guest ELF sha256:  739216d2f6a794210e4fb85d2f2388acc34c933a092b895383f62562c1975685
+vkey (bytes32):    0x009bda9348ed08236d1ed3bffcf59edf9bc1b3c576bd6212c136d68eaccd4aca
+host runner:       spikes/sp1-mithril/runner @ sp1-sdk 6.3.1 (features
+                   ["blocking"]), SP1_PROVER=cpu, client.execute() only;
+                   native differential = sextant verify_standard (mithril-stm
+                   0.10.5 + blst native x86) in the same process, same verdict
+                   mapping: 0 accept / 1 parse / 2 content-hash / 3
+                   verify_standard
+stage-split runner: same crate built with --features profiling
+                   (= sp1-sdk/profiling -> sp1-core-executor{,-runner}/
+                   profiling + sp1-prover/profiling: flips the build-time cfg
+                   to the portable executor AND enables the tracker plumbing;
+                   the default native child executor forwards
+                   cycle-tracker-report marker lines to debug logs and drops
+                   them from the report, and sp1-prover only propagates
+                   tracker totals under its profiling feature).
+                   Instruction counts and public values were IDENTICAL across
+                   the native-child and portable executors on both fixtures —
+                   each threshold-relevant workload was thereby executed
+                   twice with byte-identical journal output (§2.4 determinism
+                   check, cross-executor variant).
+
+verdict mapping (committed as u32 LE via sp1_zkvm::io::commit):
+  0 = accepted; 1 = Certificate::from_json error; 2 = content-hash mismatch;
+  3 = verify_standard rejection
+
+tamper rule (control rows): one byte inside the multi_signature hex value,
+  16 bytes past its opening quote, remapped '7'->'0' (offset recorded per
+  run in summary.json). Sextant compute_hash covers the multi_signature
+  string (mithril.rs:184), so the expected rejection code is 2 on guest and
+  native alike — confirmed by both control rows.
+
+runtime quirks discovered (in order):
+  1. SP1 v6's native child executor allocates guest memory + trace ring in
+     /dev/shm; Docker's default 64 MB shm made it crash with SIGBUS
+     (CrashDetails { signal: 7 }). Fix: --shm-size=8g.
+  2. First execution attempt panicked in-guest: threadpool-1.8.1
+     (blst bindings' da_pool()) called std::thread::spawn, which returns
+     io::ErrorKind::Unsupported on SP1's std target -> unwrap panic ->
+     execution completes with exit_code=1 and EMPTY public values (SP1 v6
+     does not fail the execute() call on guest panic — check exit_code).
+     Evidence: R-SP1-E1/first-attempt-panic.log. Fix: blst feature
+     "no-threads" via guest-graph feature unification (spike Cargo.toml).
+  3. rayon (mithril-stm's unconditional dep) never spawned at runtime:
+     mithril-stm 0.10.5 references rayon only in doc comments; the verify
+     path is sequential. rayon-core 1.13.0's current-thread fallback for
+     Unsupported spawn errors was therefore never exercised.
+
+instruction-count semantics: total_instruction_count is the executor's
+opcode-count sum (RV64IM; user code — total_syscall_count=0 on all runs);
+SP1 has no risc0-style user/total cycle split at the execute stage. "gas" is
+SP1's normalized prover-gas estimate, recorded verbatim in summary.json.

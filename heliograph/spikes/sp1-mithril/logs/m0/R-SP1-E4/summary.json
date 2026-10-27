@@ -1,0 +1,25 @@
+{
+  "cycle_tracker": {},
+  "elf": "/var/target/elf-compilation/riscv64im-succinct-zkvm-elf/release/sp1-mithril-guest",
+  "elf_sha256": "739216d2f6a794210e4fb85d2f2388acc34c933a092b895383f62562c1975685",
+  "exec_wall_seconds": 0.438462601,
+  "exit_code": 0,
+  "fixture": "/fx/F-MN1.json",
+  "fixture_sha256": "2b00e86a10affd1f8092bf307c9f3cfef533772d2ac3b60bb8adffd2c360922e",
+  "gas": 9143797,
+  "guest_verdict": 2,
+  "invocation_tracker": {},
+  "native_verdict": 2,
+  "native_wall_seconds": 0.000282991,
+  "public_values_hex": "02000000",
+  "tamper": {
+    "new": "0",
+    "offset": 13724,
+    "old": "7",
+    "tampered_input_sha256": "492471afc6d7c757595d3906ad5c3651eb979e1383090aafc42410ded51f0bb5"
+  },
+  "total_instruction_count": 8860600,
+  "total_syscall_count": 0,
+  "variant": "tampered",
+  "verdicts_match": true
+}

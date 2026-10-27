@@ -1,0 +1,70 @@
+   Compiling sp1-core-executor-runner v6.3.1
+   Compiling sp1-prover-types v6.3.1
+   Compiling sp1-verifier v6.3.1
+   Compiling portable-atomic v1.13.1
+   Compiling dirs v5.0.1
+   Compiling threadpool v1.8.1
+   Compiling sp1-core-machine v6.3.1
+   Compiling async-scoped v0.9.0
+   Compiling cargo-platform v0.1.9
+   Compiling semver v1.0.28
+   Compiling serial_test_derive v3.5.0
+   Compiling number_prefix v0.4.0
+   Compiling symlink v0.1.0
+   Compiling opaque-debug v0.3.1
+   Compiling minimal-lexical v0.2.1
+   Compiling serial_test v3.5.0
+   Compiling nom v7.1.3
+   Compiling tracing-appender v0.2.5
+   Compiling indicatif v0.17.11
+   Compiling cargo_metadata v0.18.1
+   Compiling blst v0.3.16
+   Compiling reqwest v0.12.28
+   Compiling ciborium v0.2.2
+   Compiling sp1-recursion-compiler v6.3.1
+   Compiling sp1-recursion-gnark-ffi v6.3.1
+   Compiling sp1-recursion-circuit v6.3.1
+   Compiling lru v0.12.5
+   Compiling opentelemetry v0.23.0
+   Compiling blake2 v0.10.6
+   Compiling block-buffer v0.9.0
+   Compiling crypto-mac v0.8.0
+   Compiling rand_core v0.5.1
+   Compiling amaru-curve25519-dalek v3.2.0
+   Compiling blake2 v0.9.2
+   Compiling sha2 v0.9.9
+   Compiling mithril-stm v0.10.5
+   Compiling sp1-build v6.3.1
+   Compiling eventsource-stream v0.2.3
+   Compiling minicbor v2.2.2
+   Compiling sextant v0.1.0 (https://github.com/Flux-Point-Studios/sextant?rev=90b2672aa3ee7a957ecaee0e33026337825efafa#90b2672a)
+   Compiling sp1-prover v6.3.1
+   Compiling sp1-sdk v6.3.1
+   Compiling sp1-mithril-runner v0.1.0 (/work/runner)
+error[E0599]: no method named `execute` found for opaque type `impl Future<Output = EnvProver>` in the current scope
+  --> src/main.rs:71:42
+   |
+71 |     let (public_values, report) = client.execute(&elf, &stdin).run().expect("guest execution");
+   |                                          ^^^^^^^ method not found in `impl Future<Output = EnvProver>`
+
+error[E0282]: type annotations needed
+  --> src/main.rs:74:20
+   |
+74 |     let pv_bytes = public_values.as_slice().to_vec();
+   |                    ^^^^^^^^^^^^^ cannot infer type
+
+error[E0282]: type annotations needed for `(_, _)`
+  --> src/main.rs:81:15
+   |
+81 |         .map(|(k, v)| (k.clone(), serde_json::json!(v)))
+   |               ^^^^^^   - type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type, where the placeholders `_` are specified
+   |
+81 |         .map(|(k, v): (_, _)| (k.clone(), serde_json::json!(v)))
+   |                     ++++++++
+
+Some errors have detailed explanations: E0282, E0599.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `sp1-mithril-runner` (bin "sp1-mithril-runner") due to 3 previous errors
+EXIT=101

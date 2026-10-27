@@ -1,0 +1,8 @@
+container: risczero/risc0-guest-builder:r0.1.88.0@sha256:3e12f71bacd27527a61dea96fa0e53e468c99aa261d3a1019b593f6dbd943eb3
+docker server: 29.1.3 linux/amd64 (Docker Desktop, Windows 11 host)
+vm: 4 vCPU, 11 GiB
+host rustc: rustc 1.88.0 (6b00bc388 2025-06-23)
+host cargo: cargo 1.88.0 (873a06493 2025-05-10)
+guest rustc (risc0): rustc 1.88.0-dev (de85b1d3d 2025-06-26)
+guest cc: riscv32-unknown-elf-gcc (gc891d8dc23e) 13.2.0
+host cc: gcc (Ubuntu 9.4.0-1ubuntu1~20.04.2) 9.4.0

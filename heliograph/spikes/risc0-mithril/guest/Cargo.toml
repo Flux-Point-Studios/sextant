@@ -1,0 +1,35 @@
+# S-0001 spike guest (BENCH.md §6.2, §8.6): does Sextant's `mithril` leg compile
+# for the RISC Zero guest target? Compile-only — no proving, no host run.
+#
+# Bisect layers (see ../build.sh):
+#   1. default graph only:        cargo +risc0 build --release --target riscv32im-risc0-zkvm-elf
+#   2. + mithril (vanilla blst):  ... --features mithril
+#   3. + risc0 accelerated blst:  ... --features mithril --config ../risc0-blst-patch.toml
+[package]
+name = "risc0-mithril-guest"
+version = "0.1.0"
+edition = "2021"
+# The risc0 r0.1.88.0 toolchain is rustc 1.88.0; with resolver "3" this keeps
+# fresh resolution from picking transitives whose MSRV outruns the pinned
+# toolchain (enum-ordinalize 4.4.1 -> 1.89, ruint 1.19.0 -> 1.90).
+rust-version = "1.88.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[features]
+mithril = ["sextant/mithril"]
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+# std::thread::Builder::spawn reads RUST_MIN_STACK via std::env::var, and the
+# guest's sys_getenv syscall is feature-gated off by default — without this the
+# mithril-stm verify path panics at runtime (M0 finding; S-0001 was compile-only).
+risc0-zkvm-platform = { version = "=2.2.2", features = ["sys-getenv"] }
+# blst's Rust bindings lazily build their own `threadpool` worker pool at first
+# verify; guest thread spawn is Unsupported and threadpool unwraps it. blst's
+# documented `no-threads` feature (its wasm path) runs the same code serially.
+# Additive via feature unification — mithril-stm's `blst` dep is untouched.
+blst = { version = "0.3.16", features = ["no-threads"] }
+sextant = { git = "https://github.com/Flux-Point-Studios/sextant", rev = "90b2672aa3ee7a957ecaee0e33026337825efafa", default-features = false }

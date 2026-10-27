@@ -1,0 +1,17 @@
+{
+  "elf": "/tmp/out/guest-accel.elf",
+  "exec_wall_s": 1.241164419,
+  "exit_code": "Halted(0)",
+  "fixture": "/repo/fixtures/bench/m0/F-PP1.json",
+  "fixture_sha256": "e181255a5721a0d5e7005109aabefe47000f838492d36b746b52e2c3e2a116b0",
+  "image_id": "dab6d60dd398ea5c12cee09fb860ba6a22138810e52d574abedf605d777021f0",
+  "journal_hex": "00000000",
+  "paging_cycles": 2596433,
+  "reserved_cycles": 1785381,
+  "segments": 54,
+  "status": "ok",
+  "total_cycles": 56098816,
+  "user_cycles": 51717002,
+  "user_elf_sha256": "563d55fcb778ead24d86e79091913ec4c26bef2251e8bc10862730226a0ded07",
+  "verdict": 0
+}
