@@ -13,6 +13,17 @@ pub(crate) fn blake2b256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// Blake2b with a 28-byte digest — Cardano's `Blake2b_224`, the hash of a
+/// verification key to its key hash (the credential form used in addresses,
+/// certificates and required signers). Option A for the U1 witness surface.
+pub(crate) fn blake2b224(data: &[u8]) -> [u8; 28] {
+    let mut h = VarBlake2b::new(28).expect("28 is a valid Blake2b output length");
+    h.update(data);
+    let mut out = [0u8; 28];
+    h.finalize_variable(|res| out.copy_from_slice(res));
+    out
+}
+
 /// Blake2s with a 32-byte digest — the node/leaf merge of mithril's Cardano-
 /// transactions Merkle-Mountain-Range (`MergeMKTreeNode`). Used by the inclusion
 /// verifier to recompute a certified transaction root.

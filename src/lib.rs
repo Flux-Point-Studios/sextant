@@ -29,4 +29,5 @@ pub mod setfollow;
 pub mod utxo;
 pub mod utxoset;
 pub mod vrf;
+pub mod watchkey;
 pub mod window;

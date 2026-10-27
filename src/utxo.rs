@@ -347,7 +347,7 @@ pub fn inputs_at(tx_bytes: &[u8], key: u64) -> Result<Vec<OutPoint>, UtxoError> 
 
 /// Read the header of a `set<transaction_input>` (bare array or tag-258 wrapped), returning its
 /// definite length or `None` for the indefinite form.
-fn input_set_len(d: &mut Decoder<'_>) -> Result<Option<u64>, UtxoError> {
+pub(crate) fn input_set_len(d: &mut Decoder<'_>) -> Result<Option<u64>, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? == Type::Tag {
         let tag = d.tag().map_err(|_| UtxoError::MalformedTx)?;
         if tag.as_u64() != 258 {
@@ -457,7 +457,7 @@ fn decode_input_set(d: &mut Decoder<'_>, spends: &mut SpendSet) -> Result<(), Ut
 
 /// Decode one Conway `transaction_input` = `[ transaction_id : $hash32,
 /// index : uint .size 2 ]`. An index wider than `u16` is out of protocol range.
-fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
+pub(crate) fn decode_outpoint(d: &mut Decoder<'_>) -> Result<OutPoint, UtxoError> {
     if d.array()
         .map_err(|_| UtxoError::MalformedTx)?
         .ok_or(UtxoError::MalformedTx)?
@@ -605,7 +605,7 @@ fn decode_datum_option(d: &mut Decoder<'_>) -> Result<Datum, UtxoError> {
 }
 
 /// Read a definite byte string.
-fn read_bytes(d: &mut Decoder<'_>) -> Result<Vec<u8>, UtxoError> {
+pub(crate) fn read_bytes(d: &mut Decoder<'_>) -> Result<Vec<u8>, UtxoError> {
     if d.datatype().map_err(|_| UtxoError::MalformedTx)? != Type::Bytes {
         return Err(UtxoError::MalformedTx);
     }
