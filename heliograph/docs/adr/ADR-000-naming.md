@@ -80,7 +80,7 @@ check *returned*, per the HANDOFF §8 discipline (primary sources, not memory).
 | GitHub `heliograph cardano` | **1 repo: ours only.** |
 | GitHub `heliograph zk` | **1 repo: ours only.** |
 | `eryxcoop/zk-bridge` (recon: the only Cardano ZK bridge, docs/notes/lightclient-patterns.md) | real (3★, active 2026-06), named "zk-bridge" — **no "heliograph" clash**; and it is a *bridge* (inbound-verification consumer), a different product category from heliograph's outbound state-oracle layer (HANDOFF §2 non-goals). |
-| Web search "heliograph Cardano zero-knowledge" | **no project named Heliograph.** Named Cardano ZK efforts — the [Halo2-Plutus verifier](https://iohk.io/en/blog/posts/2025/08/26/unlocking-zero-knowledge-proofs-for-cardano-the-halo2-plutus-verifier/), a [Semaphore privacy-layer port](https://projectcatalyst.io/funds/11/cardano-use-cases-concept/cardano-privacy-layer-zero-knowledge-proof-based-membership-verification-and-anonymous-voting-and-signaling-poc), Proof-of-Innocence — **none named Heliograph, none a naming clash.** The Halo2-Plutus verifier is exactly the CIP-381 inbound-leg primitive HANDOFF §2 defers, so it is a future *consumer*, not a competitor for the name. |
+| Web search "heliograph Cardano zero-knowledge" | **no project named Heliograph.** Named Cardano ZK efforts — the [Halo2-Plutus verifier](https://iohk.io/en/blog/posts/2025/08/26/unlocking-zero-knowledge-proofs-for-cardano-the-halo2-plutus-verifier/), a [Hydra+ZK-SNARK framework](https://projectcatalyst.io/funds/10/development-and-infrastructure/a-zero-knowledge-proof-framework-for-cardano-based-on-hydra-and-zk-snarks), a [Semaphore privacy-layer port](https://projectcatalyst.io/funds/11/cardano-use-cases-concept/cardano-privacy-layer-zero-knowledge-proof-based-membership-verification-and-anonymous-voting-and-signaling-poc), Proof-of-Innocence — **none named Heliograph, none a naming clash.** The Halo2-Plutus verifier is exactly the CIP-381 inbound-leg primitive HANDOFF §2 defers, so it is a future *consumer*, not a competitor for the name. |
 
 ---
 
@@ -207,6 +207,7 @@ sibling.
   — a scope matches a user/org name; only its owner publishes into it.
 - **Cardano ZK ecosystem (no name clash):**
   [Halo2-Plutus verifier | IOG](https://iohk.io/en/blog/posts/2025/08/26/unlocking-zero-knowledge-proofs-for-cardano-the-halo2-plutus-verifier/),
+  [Hydra + ZK-SNARK framework | Catalyst](https://projectcatalyst.io/funds/10/development-and-infrastructure/a-zero-knowledge-proof-framework-for-cardano-based-on-hydra-and-zk-snarks),
   [Cardano Semaphore privacy-layer port | Catalyst](https://projectcatalyst.io/funds/11/cardano-use-cases-concept/cardano-privacy-layer-zero-knowledge-proof-based-membership-verification-and-anonymous-voting-and-signaling-poc).
 
 ---
